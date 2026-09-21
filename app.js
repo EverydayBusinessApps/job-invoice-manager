@@ -64,7 +64,7 @@ window.Alpine = {
       if (!match || !tpl.parentNode) return;
       const itemName = match[1];
       const list = this.getPath(state, match[2].trim());
-      const items = Array.isArray(list) ? list : [];
+      const items = Array.isArray(list) ? Array.from(list) : [];
 
       Array.from(tpl.parentNode.children).forEach(child => {
         if (child === tpl) return;
@@ -114,7 +114,9 @@ window.Alpine = {
         return new Proxy(target, {
           get: (obj, prop) => {
             const val = obj[prop];
-            if (typeof val === 'function') return val.bind(proxyState);
+            if (typeof val === 'function') {
+              return val.bind(Array.isArray(obj) ? obj : proxyState);
+            }
             if (val && typeof val === 'object') return binder(val);
             return val;
           },
