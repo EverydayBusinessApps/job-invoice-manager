@@ -31,13 +31,15 @@ window.Alpine = {
       const textExpr = el.getAttribute('x-text');
       if (textExpr) {
         const val = this.scopedGet(state, itemName, item, textExpr);
-        el.textContent = val == null ? '' : val;
+        el.textContent = val == null ? '' : String(val);
         el.removeAttribute('x-text');
       }
       const bindValue = el.getAttribute(':value') || el.getAttribute('x-bind:value');
       if (bindValue) {
         const val = this.scopedGet(state, itemName, item, bindValue);
-        el.setAttribute('value', val == null ? '' : String(val));
+        const str = val == null ? '' : String(val);
+        el.setAttribute('value', str);
+        el.value = str;
         el.removeAttribute(':value');
         el.removeAttribute('x-bind:value');
       }
@@ -46,24 +48,46 @@ window.Alpine = {
     if (node.nodeType === 11) Array.from(node.children).forEach(visit);
     else visit(node);
   },
+  optionFromItem(item) {
+    const name = item == null
+      ? ''
+      : (typeof item === 'string' ? item : (item.name || item.Name || item.clientName || ''));
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    return opt;
+  },
   renderFor(root, state) {
     root.querySelectorAll('template[x-for]').forEach(tpl => {
       const expr = (tpl.getAttribute('x-for') || '').trim();
       const match = expr.match(/^(\w+)\s+in\s+(.+)$/);
-      if (!match) return;
+      if (!match || !tpl.parentNode) return;
       const itemName = match[1];
       const list = this.getPath(state, match[2].trim());
       const items = Array.isArray(list) ? list : [];
 
       Array.from(tpl.parentNode.children).forEach(child => {
-        if (child !== tpl && child.getAttribute('data-x-for') === expr) child.remove();
+        if (child === tpl) return;
+        const generated = child.getAttribute('data-x-for') === expr;
+        const hoistedLoopOption = child.tagName === 'OPTION' && (
+          child.hasAttribute(':value') || child.hasAttribute('x-bind:value')
+        );
+        if (generated || hoistedLoopOption) child.remove();
       });
 
       items.forEach(item => {
         const frag = tpl.content.cloneNode(true);
+        const hasElements = frag.querySelector('*') || frag.children.length;
+        if (!hasElements) {
+          const opt = this.optionFromItem(item);
+          opt.setAttribute('data-x-for', expr);
+          tpl.parentNode.insertBefore(opt, tpl);
+          return;
+        }
         this.applyLoopBindings(frag, state, itemName, item);
         Array.from(frag.childNodes).forEach(child => {
-          if (child.nodeType === 1) child.setAttribute('data-x-for', expr);
+          if (child.nodeType !== 1) return;
+          child.setAttribute('data-x-for', expr);
           tpl.parentNode.insertBefore(child, tpl);
         });
       });
@@ -73,7 +97,8 @@ window.Alpine = {
     root.querySelectorAll('select[x-model], input[x-model], textarea[x-model]').forEach(input => {
       const model = input.getAttribute('x-model');
       const current = this.getPath(state, model);
-      if (current != null && input.value !== String(current)) input.value = current;
+      const next = current == null ? '' : String(current);
+      if (input.value !== next) input.value = next;
     });
   },
   start() {
@@ -201,10 +226,14 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api('getInitialAppData');
       if (res && res.success) {
-        this.clients = (Array.isArray(res.clients) ? res.clients : []).map(c => ({
-          name: c.name || c.Name || c.clientName || '',
-          rate: c.rate || c.Rate || 0
-        })).filter(c => c.name);
+        this.clients = (Array.isArray(res.clients) ? res.clients : []).map(c => {
+          if (typeof c === 'string') return { name: c, rate: 0 };
+          if (!c || typeof c !== 'object') return { name: '', rate: 0 };
+          return {
+            name: c.name || c.Name || c.clientName || '',
+            rate: c.rate || c.Rate || 0
+          };
+        }).filter(c => c.name);
         this.setFeedback("Everyday Job & Invoice Manager Active.", false);
       }
     } catch (err) {
