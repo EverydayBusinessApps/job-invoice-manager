@@ -81,7 +81,7 @@ window.Alpine.data('appState', () => ({
   feedback: { text: '', isError: false },
   clients: [],
   
-  apiUrl: "https://google.com",
+  apiUrl: "https://script.google.com/macros/s/AKfycbzM1KFqXeRKFyE6Cx0Ov0moPMzLdrnjmseu-tC3kMaibM_oYuOEgfWNcDK3R55-aiQ/exec",
 
   invoiceForm: { clientName: '' },
   unbilledData: { totalHours: 0, totalAmount: 0 },
