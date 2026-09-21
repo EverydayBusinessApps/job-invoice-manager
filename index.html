@@ -44,7 +44,7 @@
 
           <div class="form-group">
             <label>Date</label>
-            <input type="date" x-model="form.date">
+            <input type="date" x-model="form.date" @change="syncOvernight">
           </div>
 
           <div class="form-group">
@@ -52,25 +52,27 @@
             <textarea x-model="form.jobDetails" rows="2" placeholder="Describe tactical service delivery..."></textarea>
           </div>
 
-          <div class="grid-3">
+          <div class="grid-2">
             <div class="form-group">
-              <label>Start (HH:MM)</label>
-              <input type="text" x-model="form.start">
+              <label>Start</label>
+              <input type="time" x-model="form.start" @change="syncOvernight" @input="syncOvernight" step="60">
             </div>
             <div class="form-group">
-              <label>Break Deduct</label>
-              <select x-model="form.lunch">
-                <option value="na">None</option>
-                <option value="half hour">30 mins</option>
-                <option value="hour">1 hr</option>
-                <option value="hour and half">1.5 hrs</option>
-                <option value="two hours">2 hrs</option>
-              </select>
+              <label>Finish</label>
+              <input type="time" x-model="form.finish" @change="syncOvernight" @input="syncOvernight" step="60">
             </div>
-            <div class="form-group">
-              <label>Finish (HH:MM)</label>
-              <input type="text" x-model="form.finish">
-            </div>
+          </div>
+          <p class="shift-note" x-show="overnight" x-text="overnightLabel"></p>
+
+          <div class="form-group">
+            <label>Break Deduct</label>
+            <select x-model="form.lunch">
+              <option value="na">None</option>
+              <option value="half hour">30 mins</option>
+              <option value="hour">1 hr</option>
+              <option value="hour and half">1.5 hrs</option>
+              <option value="two hours">2 hrs</option>
+            </select>
           </div>
 
           <button @click="submitForm">Commit Event to Spreadsheet</button>

@@ -60,6 +60,39 @@ function fetchClientRecords() {
 }
 
 /**
+ * Combine YYYY-MM-DD + HH:MM into a spreadsheet datetime.
+ * addDays=1 is used when a shift finishes after midnight.
+ */
+function sheetDateTime(dateStr, timeStr, addDays) {
+  const ds = String(dateStr || "").trim();
+  const ts = String(timeStr || "").trim();
+  if (!ds || !ts) return ts;
+  const dp = ds.split("-");
+  const tp = ts.split(":");
+  if (dp.length < 3 || tp.length < 2) return ts;
+  return new Date(
+    Number(dp[0]),
+    Number(dp[1]) - 1,
+    Number(dp[2]) + (addDays ? 1 : 0),
+    Number(tp[0]),
+    Number(tp[1] || 0),
+    0
+  );
+}
+
+function isOvernightTime(start, finish) {
+  const parseMins = (value) => {
+    const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    return (Number(match[1]) * 60) + Number(match[2]);
+  };
+  const startMins = parseMins(start);
+  const finishMins = parseMins(finish);
+  if (startMins == null || finishMins == null) return false;
+  return finishMins <= startMins;
+}
+
+/**
  * 2. Commit Service Inputs (Inserts only to inputs, letting ARRAYFORMULAs compute the rest)
  */
 function executeTimeLog(payload) {
@@ -74,16 +107,18 @@ function executeTimeLog(payload) {
     nextRow++;
   }
 
+  const overnight = payload.overnight === true || isOvernightTime(payload.start, payload.finish);
+
   // Insert exactly into raw input cells matching your column layout coordinates
   timeSheet.getRange(nextRow, 4).setValue(payload.clientName); // Col D: ClientID
-  timeSheet.getRange(nextRow, 5).setValue(payload.date);       // Col E: Date
+  timeSheet.getRange(nextRow, 5).setValue(payload.date);       // Col E: Date (shift start date)
   timeSheet.getRange(nextRow, 6).setValue(payload.jobDetails); // Col F: Job Details
-  timeSheet.getRange(nextRow, 7).setValue(payload.start);      // Col G: Start
+  timeSheet.getRange(nextRow, 7).setValue(sheetDateTime(payload.date, payload.start, false)); // Col G: Start
   timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
-  timeSheet.getRange(nextRow, 9).setValue(payload.finish);     // Col I: Finish
+  timeSheet.getRange(nextRow, 9).setValue(sheetDateTime(payload.date, payload.finish, overnight)); // Col I: Finish (next calendar day when overnight)
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
-  return { success: true, message: "Shift records submitted to ledger!" };
+  return { success: true, message: overnight ? "Overnight shift submitted to ledger!" : "Shift records submitted to ledger!" };
 }
 
 /**
