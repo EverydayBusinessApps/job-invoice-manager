@@ -18,6 +18,89 @@ window.Alpine = {
     if (target == null || last === undefined) return;
     target[last] = value;
   },
+  scopedGet(state, itemName, item, expr) {
+    if (!expr) return undefined;
+    const path = String(expr).trim();
+    if (path === itemName) return item;
+    if (path.startsWith(itemName + '.')) return this.getPath(item, path.slice(itemName.length + 1));
+    return this.getPath(state, path);
+  },
+  applyLoopBindings(node, state, itemName, item) {
+    const visit = (el) => {
+      if (!el || el.nodeType !== 1) return;
+      const textExpr = el.getAttribute('x-text');
+      if (textExpr) {
+        const val = this.scopedGet(state, itemName, item, textExpr);
+        el.textContent = val == null ? '' : String(val);
+        el.removeAttribute('x-text');
+      }
+      const bindValue = el.getAttribute(':value') || el.getAttribute('x-bind:value');
+      if (bindValue) {
+        const val = this.scopedGet(state, itemName, item, bindValue);
+        const str = val == null ? '' : String(val);
+        el.setAttribute('value', str);
+        el.value = str;
+        el.removeAttribute(':value');
+        el.removeAttribute('x-bind:value');
+      }
+      Array.from(el.children).forEach(visit);
+    };
+    if (node.nodeType === 11) Array.from(node.children).forEach(visit);
+    else visit(node);
+  },
+  optionFromItem(item) {
+    const name = item == null
+      ? ''
+      : (typeof item === 'string' ? item : (item.name || item.Name || item.clientName || ''));
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    return opt;
+  },
+  renderFor(root, state) {
+    root.querySelectorAll('template[x-for]').forEach(tpl => {
+      const expr = (tpl.getAttribute('x-for') || '').trim();
+      const match = expr.match(/^(\w+)\s+in\s+(.+)$/);
+      if (!match || !tpl.parentNode) return;
+      const itemName = match[1];
+      const list = this.getPath(state, match[2].trim());
+      const items = Array.isArray(list) ? Array.from(list) : [];
+
+      Array.from(tpl.parentNode.children).forEach(child => {
+        if (child === tpl) return;
+        const generated = child.getAttribute('data-x-for') === expr;
+        const hoistedLoopOption = child.tagName === 'OPTION' && (
+          child.hasAttribute(':value') || child.hasAttribute('x-bind:value')
+        );
+        if (generated || hoistedLoopOption) child.remove();
+      });
+
+      items.forEach(item => {
+        const frag = tpl.content.cloneNode(true);
+        const hasElements = frag.querySelector('*') || frag.children.length;
+        if (!hasElements) {
+          const opt = this.optionFromItem(item);
+          opt.setAttribute('data-x-for', expr);
+          tpl.parentNode.insertBefore(opt, tpl);
+          return;
+        }
+        this.applyLoopBindings(frag, state, itemName, item);
+        Array.from(frag.childNodes).forEach(child => {
+          if (child.nodeType !== 1) return;
+          child.setAttribute('data-x-for', expr);
+          tpl.parentNode.insertBefore(child, tpl);
+        });
+      });
+    });
+  },
+  syncModels(root, state) {
+    root.querySelectorAll('select[x-model], input[x-model], textarea[x-model]').forEach(input => {
+      const model = input.getAttribute('x-model');
+      const current = this.getPath(state, model);
+      const next = current == null ? '' : String(current);
+      if (input.value !== next) input.value = next;
+    });
+  },
   start() {
     document.querySelectorAll('[x-data]').forEach(el => {
       const expr = el.getAttribute('x-data');
@@ -28,10 +111,13 @@ window.Alpine = {
       const render = () => this.renderDOM(el, proxyState);
       const binder = (target) => {
         if (target === null || typeof target !== 'object') return target;
+        if (Array.isArray(target)) return target;
         return new Proxy(target, {
           get: (obj, prop) => {
             const val = obj[prop];
-            if (typeof val === 'function') return val.bind(proxyState);
+            if (typeof val === 'function') {
+              return val.bind(Array.isArray(obj) ? obj : proxyState);
+            }
             if (val && typeof val === 'object') return binder(val);
             return val;
           },
@@ -52,6 +138,11 @@ window.Alpine = {
           input.addEventListener('input', (e) => {
             this.setPath(proxyState, model, e.target.value);
           });
+          if (input.tagName === 'SELECT') {
+            input.addEventListener('change', (e) => {
+              this.setPath(proxyState, model, e.target.value);
+            });
+          }
         }
       });
 
@@ -79,6 +170,7 @@ window.Alpine = {
   },
   renderDOM(root, state) {
     if (!root || !state) return;
+    this.renderFor(root, state);
     root.querySelectorAll('[x-text]').forEach(el => {
       const expr = el.getAttribute('x-text');
       const val = this.getPath(state, expr);
@@ -94,6 +186,7 @@ window.Alpine = {
         item.style.display = this.getPath(state, showExpr) ? 'block' : 'none';
       }
     });
+    this.syncModels(root, state);
     root.removeAttribute('x-cloak');
   }
 };
@@ -136,7 +229,14 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api('getInitialAppData');
       if (res && res.success) {
-        this.clients = Array.isArray(res.clients) ? res.clients : [];
+        this.clients = (Array.isArray(res.clients) ? res.clients : []).map(c => {
+          if (typeof c === 'string') return { name: c, rate: 0 };
+          if (!c || typeof c !== 'object') return { name: '', rate: 0 };
+          return {
+            name: c.name || c.Name || c.clientName || '',
+            rate: c.rate || c.Rate || 0
+          };
+        }).filter(c => c.name);
         this.setFeedback("Everyday Job & Invoice Manager Active.", false);
       }
     } catch (err) {

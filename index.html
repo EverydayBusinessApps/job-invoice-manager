@@ -34,7 +34,7 @@
           
           <div class="form-group">
             <label>Client Account</label>
-            <select x-model="form.clientName">
+            <select x-model="form.clientName" @change="onClientSelect">
               <option value="">-- Choose Account --</option>
               <template x-for="client in clients">
                 <option :value="client.name" x-text="client.name"></option>
