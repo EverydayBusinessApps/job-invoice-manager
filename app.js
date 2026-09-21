@@ -7,23 +7,50 @@ window.Alpine = {
   directives: {}, dataStore: {},
   directive(name, callback) { this.directives[name] = callback; },
   data(name, callback) { this.dataStore[name] = callback; },
+  getPath(obj, path) {
+    if (obj == null || path == null || path === '') return undefined;
+    return String(path).split('.').reduce((curr, key) => (curr == null ? undefined : curr[key]), obj);
+  },
+  setPath(obj, path, value) {
+    const parts = String(path).split('.');
+    const last = parts.pop();
+    const target = parts.length ? this.getPath(obj, parts.join('.')) : obj;
+    if (target == null || last === undefined) return;
+    target[last] = value;
+  },
   start() {
     document.querySelectorAll('[x-data]').forEach(el => {
       const expr = el.getAttribute('x-data');
-      const state = this.dataStore[expr]();
-      const binder = (target) => new Proxy(target, {
-        set: (obj, prop, val) => { obj[prop] = val; this.renderDOM(el, binder(obj)); return true; }
-      });
-      const proxyState = binder(state);
-      
+      const factory = this.dataStore[expr];
+      if (typeof factory !== 'function') return;
+      const state = factory();
+      let proxyState;
+      const render = () => this.renderDOM(el, proxyState);
+      const binder = (target) => {
+        if (target === null || typeof target !== 'object') return target;
+        return new Proxy(target, {
+          get: (obj, prop) => {
+            const val = obj[prop];
+            if (typeof val === 'function') return val.bind(proxyState);
+            if (val && typeof val === 'object') return binder(val);
+            return val;
+          },
+          set: (obj, prop, val) => {
+            obj[prop] = val;
+            render();
+            return true;
+          }
+        });
+      };
+      proxyState = binder(state);
+
       el.querySelectorAll('select, input, textarea').forEach(input => {
         const model = input.getAttribute('x-model');
         if (model) {
-          const parts = model.split('.');
-          input.value = parts.length > 1 ? proxyState[parts][parts] : proxyState[model];
+          const current = this.getPath(proxyState, model);
+          input.value = current == null ? '' : current;
           input.addEventListener('input', (e) => {
-            if (parts.length > 1) proxyState[parts][parts] = e.target.value;
-            else proxyState[model] = e.target.value;
+            this.setPath(proxyState, model, e.target.value);
           });
         }
       });
@@ -46,24 +73,25 @@ window.Alpine = {
           });
         }
       });
-      proxyState.init();
+      render();
+      if (typeof proxyState.init === 'function') proxyState.init();
     });
   },
   renderDOM(root, state) {
+    if (!root || !state) return;
     root.querySelectorAll('[x-text]').forEach(el => {
       const expr = el.getAttribute('x-text');
-      const parts = expr.split('.');
-      const val = parts.length > 1 ? state[parts][parts] : state[expr];
-      el.innerText = typeof val === 'number' && expr.includes('Amount') ? "€" + val.toFixed(2) : val;
+      const val = this.getPath(state, expr);
+      el.innerText = typeof val === 'number' && expr.includes('Amount') ? "€" + val.toFixed(2) : (val == null ? '' : val);
     });
     root.querySelectorAll('[x-show]').forEach(item => {
       const showExpr = item.getAttribute('x-show');
       const showParts = showExpr.split('===');
       if(showParts.length > 1) {
         const targetVal = showParts[1].replace(/['"]/g, "").trim();
-        item.style.display = state[showParts[0].trim()] === targetVal ? 'block' : 'none';
+        item.style.display = this.getPath(state, showParts[0].trim()) === targetVal ? 'block' : 'none';
       } else {
-        item.style.display = state[showExpr] ? 'block' : 'none';
+        item.style.display = this.getPath(state, showExpr) ? 'block' : 'none';
       }
     });
     root.removeAttribute('x-cloak');
