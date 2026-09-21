@@ -314,6 +314,7 @@ window.Alpine.data('appState', () => ({
     if (this.form.invoiceMode !== 'existing') this.form.invoiceId = '';
     this.syncInvoiceHint();
   },
+  failMessage(res, fallback) {
     if (res && res.error) return String(res.error);
     return fallback;
   },
