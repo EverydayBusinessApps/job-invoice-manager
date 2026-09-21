@@ -111,6 +111,7 @@ window.Alpine = {
       const render = () => this.renderDOM(el, proxyState);
       const binder = (target) => {
         if (target === null || typeof target !== 'object') return target;
+        if (Array.isArray(target)) return target;
         return new Proxy(target, {
           get: (obj, prop) => {
             const val = obj[prop];
