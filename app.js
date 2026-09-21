@@ -228,6 +228,10 @@ window.Alpine.data('appState', () => ({
 
   invoiceForm: { clientName: '' },
   unbilledData: { totalHours: 0, totalAmount: 0 },
+  invoices: [],
+  clientInvoices: [],
+  showExistingInvoices: false,
+  invoiceHint: 'This shift will open a new draft invoice.',
   overnight: false,
   overnightLabel: '',
   form: { clientName: '', date: (() => {
@@ -235,7 +239,7 @@ window.Alpine.data('appState', () => ({
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
     return now.getFullYear() + '-' + mm + '-' + dd;
-  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30' },
+  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '' },
 
   timeToMinutes(value) {
     if (value == null || value === '') return null;
@@ -264,6 +268,52 @@ window.Alpine.data('appState', () => ({
       : '';
   },
 
+  mapInvoices(list) {
+    return (Array.isArray(list) ? list : []).map((inv) => {
+      if (inv == null || typeof inv !== 'object') return null;
+      const id = String(inv.id || inv.invoiceId || '').trim();
+      if (!id) return null;
+      const status = String(inv.status || 'Draft').trim();
+      const date = String(inv.date || '').trim();
+      const label = inv.label || ('Invoice ' + id + (status ? ' · ' + status : '') + (date ? ' · ' + date : ''));
+      return { id: id, clientName: String(inv.clientName || inv.client || '').trim(), status: status, date: date, label: label };
+    }).filter(Boolean);
+  },
+  refreshClientInvoices() {
+    const name = this.form.clientName;
+    this.clientInvoices = (this.invoices || []).filter((inv) => !name || !inv.clientName || inv.clientName === name);
+    if (this.form.invoiceId && !this.clientInvoices.some((inv) => inv.id === this.form.invoiceId)) {
+      this.form.invoiceId = '';
+    }
+    this.syncInvoiceHint();
+  },
+  syncInvoiceHint() {
+    const existing = this.form.invoiceMode === 'existing';
+    this.showExistingInvoices = existing;
+    if (!existing) {
+      this.invoiceHint = 'This shift will open a new draft invoice.';
+      return;
+    }
+    if (!this.form.clientName) {
+      this.invoiceHint = 'Choose a client to see their invoices.';
+      return;
+    }
+    if (!this.clientInvoices.length) {
+      this.invoiceHint = 'No invoices yet for this client. Create a new one instead.';
+      return;
+    }
+    this.invoiceHint = this.form.invoiceId
+      ? ('This shift will be added to invoice ' + this.form.invoiceId + '.')
+      : 'Choose which invoice should receive this shift.';
+  },
+  onClientChange() {
+    this.form.invoiceId = '';
+    this.refreshClientInvoices();
+  },
+  onInvoiceModeChange() {
+    if (this.form.invoiceMode !== 'existing') this.form.invoiceId = '';
+    this.syncInvoiceHint();
+  },
   failMessage(res, fallback) {
     if (res && res.error) return String(res.error);
     return fallback;
@@ -293,6 +343,8 @@ window.Alpine.data('appState', () => ({
           if (typeof c === 'string') return { name: c };
           return { name: (c && (c.name || c.Name || c.clientName)) || '' };
         }).filter(c => c.name);
+        this.invoices = this.mapInvoices(res.invoices);
+        this.refreshClientInvoices();
         this.setFeedback("Everyday Job & Invoice Manager Active.", false);
         this.syncOvernight();
       } else {
@@ -315,6 +367,10 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("Choose a start and finish time.", true);
       return;
     }
+    if (this.form.invoiceMode === 'existing' && !this.form.invoiceId) {
+      this.setFeedback("Choose an existing invoice, or create a new one.", true);
+      return;
+    }
     this.syncOvernight();
     try {
       const result = await this.api('logTimeEntry', {
@@ -324,11 +380,27 @@ window.Alpine.data('appState', () => ({
         start: this.form.start,
         lunch: this.form.lunch,
         finish: this.form.finish,
-        overnight: this.overnight
+        overnight: this.overnight,
+        invoiceMode: this.form.invoiceMode,
+        invoiceId: this.form.invoiceId
       });
       if (result && result.success) {
         this.setFeedback(result.message || "Shift records submitted to ledger!", false);
         this.form.jobDetails = '';
+        if (result.invoices) this.invoices = this.mapInvoices(result.invoices);
+        else if (result.invoiceId) {
+          const id = String(result.invoiceId);
+          if (!this.invoices.some((inv) => inv.id === id)) {
+            this.invoices = this.invoices.concat([{
+              id: id,
+              clientName: this.form.clientName,
+              status: 'Draft',
+              date: this.form.date,
+              label: 'Invoice ' + id + ' · Draft'
+            }]);
+          }
+        }
+        this.refreshClientInvoices();
       } else {
         this.setFeedback(this.failMessage(result, "API Connection dropped."), true);
       }
@@ -362,6 +434,10 @@ window.Alpine.data('appState', () => ({
         this.setFeedback("Invoice Ref: " + res.invoiceId + " logged. Ready on INV-Template.", false);
         this.invoiceForm.clientName = '';
         this.unbilledData = { totalHours: 0, totalAmount: 0 };
+        if (res.invoices) {
+          this.invoices = this.mapInvoices(res.invoices);
+          this.refreshClientInvoices();
+        }
       } else {
         this.setFeedback(this.failMessage(res, "Processing timeout."), true);
       }
