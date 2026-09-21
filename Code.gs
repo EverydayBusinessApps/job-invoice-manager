@@ -22,7 +22,7 @@ function doPost(e) {
     let responseData = {};
 
     if (action === "getInitialAppData") {
-      responseData = fetchClientRecords();
+      responseData = fetchInitialAppData();
     } else if (action === "logTimeEntry") {
       responseData = executeTimeLog(requestData.payload);
     } else if (action === "getUnbilledSummary") {
@@ -43,20 +43,121 @@ function doPost(e) {
 }
 
 /**
- * 1. Fetch Client Profiles for Web App Dropdown
+ * 1. Fetch Client Profiles and Invoice Headers for Web App Dropdowns
  */
-function fetchClientRecords() {
+function fetchInitialAppData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const clientSheet = ss.getSheetByName("ClientRecords");
   if (!clientSheet) return { success: false, error: "Missing ClientRecords tab." };
 
   const lastRow = clientSheet.getLastRow();
-  if (lastRow < 2) return { success: true, clients: [] };
+  let clients = [];
+  if (lastRow >= 2) {
+    const data = clientSheet.getRange(2, 1, lastRow - 1, 1).getValues(); // Only need column A (Name) since Rate is sheet-automated
+    clients = data.map(row => ({ name: String(row[0]).trim() })).filter(c => c.name !== "");
+  }
 
-  const data = clientSheet.getRange(2, 1, lastRow - 1, 1).getValues(); // Only need column A (Name) since Rate is sheet-automated
-  const clients = data.map(row => ({ name: String(row[0]).trim() })).filter(c => c.name !== "");
-  
-  return { success: true, clients: clients };
+  return { success: true, clients: clients, invoices: fetchInvoiceRecords() };
+}
+
+function fetchClientRecords() {
+  return fetchInitialAppData();
+}
+
+function formatInvoiceDate_(value, timezone) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, timezone || Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  return String(value || "").trim();
+}
+
+function invoiceLabel_(id, status, dateStr) {
+  let label = "Invoice " + id;
+  if (status) label += " · " + status;
+  if (dateStr) label += " · " + dateStr;
+  return label;
+}
+
+function fetchInvoiceRecords() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const timezone = ss.getSpreadsheetTimeZone();
+  const byId = {};
+
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (invoiceSheet) {
+    const lastRow = invoiceSheet.getLastRow();
+    if (lastRow >= 2) {
+      const data = invoiceSheet.getRange(2, 1, lastRow - 1, 9).getValues();
+      for (let i = 0; i < data.length; i++) {
+        const id = String(data[i][0]).trim();
+        if (!id) continue;
+        const dateStr = formatInvoiceDate_(data[i][7], timezone);
+        const status = String(data[i][8] || "").trim() || "Draft";
+        const clientName = String(data[i][1] || "").trim();
+        byId[id] = {
+          id: id,
+          clientName: clientName,
+          status: status,
+          date: dateStr,
+          label: invoiceLabel_(id, status, dateStr)
+        };
+      }
+    }
+  }
+
+  const timeSheet = ss.getSheetByName("Time&Attendance");
+  if (timeSheet) {
+    const lastRow = timeSheet.getLastRow();
+    if (lastRow >= 2) {
+      const data = timeSheet.getRange(2, 3, lastRow - 1, 2).getValues(); // C InvoiceInt, D ClientID
+      for (let i = 0; i < data.length; i++) {
+        const id = String(data[i][0]).trim();
+        const clientName = String(data[i][1] || "").trim();
+        if (!id) continue;
+        if (!byId[id]) {
+          byId[id] = {
+            id: id,
+            clientName: clientName,
+            status: "Draft",
+            date: "",
+            label: invoiceLabel_(id, "Draft", "")
+          };
+        } else if (!byId[id].clientName && clientName) {
+          byId[id].clientName = clientName;
+        }
+      }
+    }
+  }
+
+  return Object.keys(byId).map(function (key) { return byId[key]; });
+}
+
+function nextInvoiceInt_(invoiceSheet) {
+  const invoiceValues = invoiceSheet.getRange("A2:A").getValues();
+  let nextInvoiceInt = 1;
+  for (let i = 0; i < invoiceValues.length; i++) {
+    if (invoiceValues[i][0] !== "") {
+      nextInvoiceInt++;
+    }
+  }
+  return nextInvoiceInt;
+}
+
+function appendInvoiceListRow_(invoiceSheet) {
+  const invLastValues = invoiceSheet.getRange("H1:H").getValues();
+  let nextInvListRow = 1;
+  while (invLastValues[nextInvListRow - 1] && invLastValues[nextInvListRow - 1][0] !== "") {
+    nextInvListRow++;
+  }
+  invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
+  invoiceSheet.getRange(nextInvListRow, 9).setValue("Draft");      // Column I: Invoice Status
+  return nextInvListRow;
+}
+
+function createDraftInvoice_(invoiceSheet) {
+  const invoiceId = nextInvoiceInt_(invoiceSheet);
+  appendInvoiceListRow_(invoiceSheet);
+  return invoiceId;
 }
 
 /**
@@ -108,8 +209,20 @@ function executeTimeLog(payload) {
   }
 
   const overnight = payload.overnight === true || isOvernightTime(payload.start, payload.finish);
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  const mode = String(payload.invoiceMode || "new").toLowerCase();
+  let invoiceId = "";
+
+  if (mode === "existing") {
+    invoiceId = String(payload.invoiceId || "").trim();
+    if (!invoiceId) return { success: false, error: "Choose an existing invoice." };
+  } else {
+    if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
+    invoiceId = createDraftInvoice_(invoiceSheet);
+  }
 
   // Insert exactly into raw input cells matching your column layout coordinates
+  timeSheet.getRange(nextRow, 3).setValue(Number(invoiceId) || invoiceId); // Col C: InvoiceInt
   timeSheet.getRange(nextRow, 4).setValue(payload.clientName); // Col D: ClientID
   timeSheet.getRange(nextRow, 5).setValue(payload.date);       // Col E: Date (shift start date)
   timeSheet.getRange(nextRow, 6).setValue(payload.jobDetails); // Col F: Job Details
@@ -118,7 +231,18 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 9).setValue(sheetDateTime(payload.date, payload.finish, overnight)); // Col I: Finish (next calendar day when overnight)
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
-  return { success: true, message: overnight ? "Overnight shift submitted to ledger!" : "Shift records submitted to ledger!" };
+  const message = mode === "existing"
+    ? ("Shift added to invoice " + invoiceId + ".")
+    : (overnight
+      ? ("Overnight shift logged on new invoice " + invoiceId + ".")
+      : ("Shift logged on new invoice " + invoiceId + "."));
+
+  return {
+    success: true,
+    message: message,
+    invoiceId: invoiceId,
+    invoices: fetchInvoiceRecords()
+  };
 }
 
 /**
@@ -162,13 +286,7 @@ function processAccountInvoice(payload) {
   if (!timeSheet || !invoiceSheet) return { success: false, error: "Operational tables missing." };
 
   // Calculate the next raw index value sequence for InvoiceInt
-  const invoiceValues = invoiceSheet.getRange("A2:A").getValues();
-  let nextInvoiceInt = 1;
-  for (let i = 0; i < invoiceValues.length; i++) {
-    if (invoiceValues[i][0] !== "") {
-      nextInvoiceInt++;
-    }
-  }
+  const nextInvoiceInt = nextInvoiceInt_(invoiceSheet);
 
   const timeLastRow = timeSheet.getLastRow();
   let updatedRowsCount = 0;
@@ -195,16 +313,7 @@ function processAccountInvoice(payload) {
     range.setValues(data); // Flush updates back to sheet
   }
 
-  // To complete the link loop, insert manual control records to your InvoiceList sheet tab
-  const invLastValues = invoiceSheet.getRange("H1:H").getValues();
-  let nextInvListRow = 1;
-  while (invLastValues[nextInvListRow - 1] && invLastValues[nextInvListRow - 1][0] !== "") {
-    nextInvListRow++;
-  }
+  appendInvoiceListRow_(invoiceSheet);
 
-  // Insert exactly your two manual management fields, letting formulas generate the rest of the line
-  invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
-  invoiceSheet.getRange(nextInvListRow, 9).setValue("Draft");      // Column I: Invoice Status
-
-  return { success: true, invoiceId: nextInvoiceInt };
+  return { success: true, invoiceId: nextInvoiceInt, invoices: fetchInvoiceRecords() };
 }
