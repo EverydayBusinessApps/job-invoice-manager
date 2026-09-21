@@ -146,7 +146,7 @@ window.Alpine = {
         }
       });
 
-      el.querySelectorAll('button, a, select').forEach(btn => {
+      el.querySelectorAll('button, a, select, input, textarea').forEach(btn => {
         const hasClick = btn.hasAttribute('@click') || btn.hasAttribute('x-on:click');
         if (hasClick) {
           const clickExpr = btn.getAttribute('@click') || btn.getAttribute('x-on:click');
@@ -160,6 +160,14 @@ window.Alpine = {
           const changeExpr = btn.getAttribute('@change') || btn.getAttribute('x-on:change');
           btn.addEventListener('change', () => {
             const funcName = changeExpr.replace('()', '').trim();
+            if (typeof proxyState[funcName] === 'function') proxyState[funcName]();
+          });
+        }
+        const hasInput = btn.hasAttribute('@input') || btn.hasAttribute('x-on:input');
+        if (hasInput) {
+          const inputExpr = btn.getAttribute('@input') || btn.getAttribute('x-on:input');
+          btn.addEventListener('input', () => {
+            const funcName = inputExpr.replace('()', '').trim();
             if (typeof proxyState[funcName] === 'function') proxyState[funcName]();
           });
         }
@@ -220,12 +228,41 @@ window.Alpine.data('appState', () => ({
 
   invoiceForm: { clientName: '' },
   unbilledData: { totalHours: 0, totalAmount: 0 },
+  overnight: false,
+  overnightLabel: '',
   form: { clientName: '', date: (() => {
     const now = new Date();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
     return now.getFullYear() + '-' + mm + '-' + dd;
   })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30' },
+
+  timeToMinutes(value) {
+    if (value == null || value === '') return null;
+    const match = String(value).trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    return (Number(match[1]) * 60) + Number(match[2]);
+  },
+  isOvernightShift(start, finish) {
+    const startMins = this.timeToMinutes(start);
+    const finishMins = this.timeToMinutes(finish);
+    if (startMins == null || finishMins == null) return false;
+    return finishMins <= startMins;
+  },
+  nextDayLabel(dateStr) {
+    if (!dateStr) return 'the next day';
+    const parts = String(dateStr).split('-').map(Number);
+    if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return 'the next day';
+    const next = new Date(parts[0], parts[1] - 1, parts[2] + 1);
+    return next.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  },
+  syncOvernight() {
+    const overnight = this.isOvernightShift(this.form.start, this.form.finish);
+    this.overnight = overnight;
+    this.overnightLabel = overnight
+      ? ('Overnight shift · finishes ' + this.nextDayLabel(this.form.date))
+      : '';
+  },
 
   failMessage(res, fallback) {
     if (res && res.error) return String(res.error);
@@ -257,6 +294,7 @@ window.Alpine.data('appState', () => ({
           return { name: (c && (c.name || c.Name || c.clientName)) || '' };
         }).filter(c => c.name);
         this.setFeedback("Everyday Job & Invoice Manager Active.", false);
+        this.syncOvernight();
       } else {
         this.setFeedback(this.failMessage(res, "Cloud synchronization offline."), true);
       }
@@ -273,6 +311,11 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("Choose a client account first.", true);
       return;
     }
+    if (this.timeToMinutes(this.form.start) == null || this.timeToMinutes(this.form.finish) == null) {
+      this.setFeedback("Choose a start and finish time.", true);
+      return;
+    }
+    this.syncOvernight();
     try {
       const result = await this.api('logTimeEntry', {
         clientName: this.form.clientName,
@@ -280,7 +323,8 @@ window.Alpine.data('appState', () => ({
         jobDetails: this.form.jobDetails,
         start: this.form.start,
         lunch: this.form.lunch,
-        finish: this.form.finish
+        finish: this.form.finish,
+        overnight: this.overnight
       });
       if (result && result.success) {
         this.setFeedback(result.message || "Shift records submitted to ledger!", false);

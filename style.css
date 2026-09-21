@@ -16,6 +16,8 @@ label { font-size: 0.75rem; font-weight: 700; color: #64748b; text-transform: up
 select, input, textarea { width: 100%; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.75rem; font-size: 0.875rem; color: #0f172a; box-sizing: border-box; font-family: inherit; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
+input[type="time"], input[type="date"] { min-height: 2.75rem; }
+.shift-note { margin: 0; font-size: 0.75rem; font-weight: 600; color: #4338ca; background: #eef2ff; border-radius: 0.75rem; padding: 0.5rem 0.75rem; }
 button { width: 100%; background-color: #0f172a; color: #ffffff; font-weight: 600; padding: 1rem; border-radius: 0.75rem; border: none; font-size: 0.875rem; cursor: pointer; }
 button:disabled { background-color: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
 button.btn-alt { background-color: #4f46e5; }
