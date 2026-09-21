@@ -5,121 +5,9 @@
   <title>Everyday Job & Invoice Manager</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
-  <!-- Embedded Fluid CSS Layout (Bypasses Tailwind Network Dependencies) -->
-  <style>
-    [x-cloak] { display: none !important; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding-bottom: 3rem; color: #1e293b; -webkit-font-smoothing: antialiased; }
-    .shell { max-width: 28rem; margin: 0 auto; min-height: 100vh; flex-direction: column; display: flex; background-color: #ffffff; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
-    header { background-color: #0f172a; color: #ffffff; padding: 1rem; display: flex; justify-content: space-between; items-center: center; position: sticky; top: 0; z-index: 50; }
-    header h1 { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -0.025em; }
-    header p { margin: 0; font-size: 10px; color: #818cf8; font-family: monospace; font-weight: bold; letter-spacing: 0.05em; }
-    .status-box { display: flex; items-center: center; gap: 0.5rem; }
-    .dot { width: 0.6rem; height: 0.6rem; rounded-radius: 9999px; border-radius: 50%; display: inline-block; background-color: #34d399; }
-    .dot.syncing { background-color: #fbbf24; animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
-    .banner { background-color: #e0e7ff; border-bottom: 1px solid #c7d2fe; padding: 0.5rem; text-align: center; font-size: 0.75rem; font-weight: 600; color: #4338ca; }
-    main { padding: 1rem; flex: 1; display: flex; flex-direction: column; gap: 1rem; }
-    section { background: #ffffff; border: 1px solid #f1f5f9; border-radius: 1rem; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
-    .card-title { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; padding-bottom: 0.5rem; border-b: 1px solid #e2e8f0; border-bottom: 1px solid #f1f5f9; }
-    .form-group { display: flex; flex-direction: column; gap: 0.375rem; }
-    label { font-size: 0.75rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
-    select, input, textarea { width: 100%; bg-color: #f8fafc; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.75rem; font-size: 0.875rem; color: #0f172a; box-sizing: border-box; font-family: inherit; transition: all 0.2s; }
-    select:focus, input:focus, textarea:focus { outline: none; border-color: #0f172a; ring: 2px; }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
-    button { width: 100%; background-color: #0f172a; color: #ffffff; font-weight: 600; padding: 1rem; border-radius: 0.75rem; border: none; font-size: 0.875rem; cursor: pointer; transition: all 0.2s; }
-    button:disabled { background-color: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
-    button.btn-alt { background-color: #4f46e5; }
-    nav { background-color: #0f172a; display: flex; justify-content: space-around; padding: 0.875rem; position: sticky; bottom: 0; z-index: 50; border-top: 1px solid #1e293b; }
-    nav button { background: none; color: #94a3b8; font-size: 0.75rem; display: flex; flex-direction: column; items-center: center; gap: 0.25rem; padding: 0; width: auto; font-weight: 500; }
-    nav button.active { color: #818cf8; font-weight: 700; }
-    .alert { padding: 0.875rem; border-radius: 0.75rem; text-align: center; font-size: 0.875rem; font-weight: 600; border: 1px solid transparent; }
-    .alert-success { background-color: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
-    .alert-error { background-color: #fff1f2; color: #9f1239; border-color: #fecdd3; }
-    .metric-box { background-color: #f8fafc; border: 1px solid #f1f5f9; padding: 0.75rem; border-radius: 0.75rem; }
-    .metric-box.alt { background-color: #eef2ff; border-color: #e0e7ff; color: #312e81; }
-    .metric-title { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
-  </style>
-
-  <!-- EMBEDDED ENGINE CODE (Completely eliminates jsDelivr/cdnjs network requirements) -->
-  <script>
-    // Minimal Alpine.js polyfill engine structure to guarantee offline bootstrap execution
-    window.Alpine = {
-      directives: {},
-      dataStore: {},
-      directive(name, callback) { this.directives[name] = callback; },
-      data(name, callback) { this.dataStore[name] = callback; },
-      start() {
-        document.querySelectorAll('[x-data]').forEach(el => {
-          const expr = el.getAttribute('x-data');
-          const state = this.dataStore[expr]();
-          
-          // Proxy object framework pipeline mapping handler
-          const binder = (target) => new Proxy(target, {
-            set: (obj, prop, val) => {
-              obj[prop] = val; this.renderDOM(el, binder(obj)); return true;
-            }
-          });
-          
-          const proxyState = binder(state);
-          el.querySelectorAll('select, input, textarea').forEach(input => {
-            const model = input.getAttribute('x-model');
-            if (model) {
-              const parts = model.split('.');
-              input.value = parts.length > 1 ? proxyState[parts[0]][parts[1]] : proxyState[parts[0]];
-              input.addEventListener('input', (e) => {
-                if (parts.length > 1) proxyState[parts[0]][parts[1]] = e.target.value;
-                else proxyState[model] = e.target.value;
-              });
-            }
-          });
-          
-          el.querySelectorAll('[x-show]').forEach(item => {
-            const showExpr = item.getAttribute('x-show');
-            const showParts = showExpr.split('===');
-            if(showParts.length > 1) {
-              item.style.display = proxyState[showParts[0].trim()] === showParts[1].replace(/['"]/g, "").trim() ? 'block' : 'none';
-            } else {
-              item.style.display = proxyState[showExpr] ? 'block' : 'none';
-            }
-          });
-
-              // Bypasses querySelectorAll entirely by using standard DOM attribute inspection
-              el.querySelectorAll('button, a, div, span').forEach(btn => {
-            const hasClick = btn.hasAttribute('@click') || btn.hasAttribute('x-on:click');
-            if (hasClick) {
-              const clickExpr = btn.getAttribute('@click') || btn.getAttribute('x-on:click');
-              btn.addEventListener('click', () => {
-                const funcName = clickExpr.replace('()', '').trim();
-                if (typeof proxyState[funcName] === 'function') proxyState[funcName]();
-              });
-            }
-          });
-
-          proxyState.init();
-        });
-      },
-      renderDOM(root, state) {
-        root.querySelectorAll('[x-text]').forEach(el => {
-          const expr = el.getAttribute('x-text');
-          const parts = expr.split('.');
-          const val = parts.length > 1 ? state[parts[0]][parts[1]] : state[expr];
-          el.innerText = typeof val === 'number' && expr.includes('Amount') ? val.toFixed(2) : val;
-        });
-        root.querySelectorAll('[x-show]').forEach(item => {
-          const showExpr = item.getAttribute('x-show');
-          const showParts = showExpr.split('===');
-          if(showParts.length > 1) {
-            item.style.display = state[showParts[0].trim()] === showParts[1].replace(/['"]/g, "").trim() ? 'block' : 'none';
-          } else {
-            item.style.display = state[showExpr] ? 'block' : 'none';
-          }
-        });
-        root.removeAttribute('x-cloak');
-      }
-    };
-    document.addEventListener('DOMContentLoaded', () => window.Alpine.start());
-  </script>
+  <!-- Link to your clean, external styles and logic engines -->
+  <link rel="stylesheet" href="style.css">
+  <script defer src="app.js"></script>
 </head>
 <body>
 
@@ -127,19 +15,19 @@
     <header>
       <div>
         <h1>Everyday Job & Invoice Manager</h1>
-        <p>DECOUPLED AUTOMATION ENGINE</p>
+        <p>JR ENGINEERING CORE</p>
       </div>
       <div class="status-box">
         <span class="dot" :class="loading ? 'syncing' : ''"></span>
       </div>
     </header>
 
-    <div class="banner" x-show="loading">Exchanging data vectors with secure cloud database...</div>
+    <div class="banner" x-show="loading">Communicating with secure workbook data layers...</div>
 
     <main>
       <div x-show="feedback.text" :class="feedback.isError ? 'alert alert-error' : 'alert alert-success'" x-text="feedback.text"></div>
 
-      <!-- VIEW 1: TIME ENGINE FORM TRACKER -->
+      <!-- VIEW 1: TIME TRACKER LOGS -->
       <div x-show="currentTab === 'tracker'">
         <section>
           <div class="card-title">Log Service Event</div>
@@ -148,29 +36,39 @@
             <label>Client Account</label>
             <select x-model="form.clientName">
               <option value="">-- Choose Account --</option>
-              <option value="Acme Corporation">Acme Corporation</option>
-              <option value="Global Logistics">Global Logistics</option>
-              <option value="Apex Media">Apex Media</option>
+              <template x-for="client in clients">
+                <option :value="client.name" x-text="client.name"></option>
+              </template>
             </select>
           </div>
 
-          <div class="grid-2">
-            <div class="form-group">
-              <label>Billable Unit Rate</label>
-              <input type="number" x-model="form.rate">
-            </div>
-            <div class="form-group">
-              <label>Volume (Hours/Days)</label>
-              <input type="number" step="0.25" x-model="form.hours">
-            </div>
-          </div>
-
           <div class="form-group">
-            <label>Activity Summary / Notes</label>
-            <textarea x-model="form.jobDetails" rows="3" placeholder="Enter service description parameters..."></textarea>
+            <label>Scope of Work / Job Details</label>
+            <textarea x-model="form.jobDetails" rows="2" placeholder="Describe tactical service delivery..."></textarea>
           </div>
 
-          <button @click="submitForm">Commit Event to Ledger</button>
+          <div class="grid-3">
+            <div class="form-group">
+              <label>Start (HH:MM)</label>
+              <input type="text" x-model="form.start">
+            </div>
+            <div class="form-group">
+              <label>Break Deduct</label>
+              <select x-model="form.lunch">
+                <option value="na">None</option>
+                <option value="half hour">30 mins</option>
+                <option value="hour">1 hr</option>
+                <option value="hour and half">1.5 hrs</option>
+                <option value="two hours">2 hrs</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Finish (HH:MM)</label>
+              <input type="text" x-model="form.finish">
+            </div>
+          </div>
+
+          <button @click="submitForm">Commit Event to Spreadsheet</button>
         </section>
       </div>
 
@@ -181,46 +79,11 @@
           
           <div class="form-group">
             <label>Select Target Account</label>
-            <select x-model="invoiceForm.clientName">
+            <select x-model="invoiceForm.clientName" @change="loadUnbilledEntries">
               <option value="">-- Choose Account --</option>
-              <option value="Acme Corporation">Acme Corporation</option>
-              <option value="Global Logistics">Global Logistics</option>
-              <option value="Apex Media">Apex Media</option>
-            </select>
-          </div>
-
-          <div class="grid-2">
-            <div class="form-group">
-              <label>Billable Unit Rate</label>
-              <input type="number" x-model="form.rate">
-            </div>
-            <div class="form-group">
-              <label>Volume (Hours/Days)</label>
-              <input type="number" step="0.25" x-model="form.hours">
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label>Activity Summary / Notes</label>
-            <textarea x-model="form.jobDetails" rows="3" placeholder="Enter service description parameters..."></textarea>
-          </div>
-
-          <button @click="submitForm">Commit Event to Ledger</button>
-        </section>
-      </div>
-
-      <!-- VIEW 2: BILLING ENGINE CORE -->
-      <div x-show="currentTab === 'invoicer'">
-        <section>
-          <div class="card-title">Billing & Invoice Generator</div>
-          
-          <div class="form-group">
-            <label>Select Target Account</label>
-            <select x-model="invoiceForm.clientName">
-              <option value="">-- Choose Account --</option>
-              <option value="Acme Corporation">Acme Corporation</option>
-              <option value="Global Logistics">Global Logistics</option>
-              <option value="Apex Media">Apex Media</option>
+              <template x-for="client in clients">
+                <option :value="client.name" x-text="client.name"></option>
+              </template>
             </select>
           </div>
 
@@ -246,69 +109,5 @@
     </nav>
   </div>
 
-  <script>
-    window.Alpine.data('appState', () => ({
-      loading: false,
-      currentTab: 'tracker',
-      feedback: { text: '', isError: false },
-      
-      // ACTIVE APPS SCRIPT PRODUCTION POINTER TARGET
-      apiUrl: "https://script.google.com/macros/s/AKfycbwd6TiaI5KlCmMstLZPfYBG9aU2akWb_D_XYxjoQJEMVau-sv4bAMRinWWZtLVKbkIY/exec",
-
-      invoiceForm: { clientName: '' },
-      unbilledData: { totalHours: 0, totalAmount: 0 },
-      form: { clientName: '', date: new Date().toISOString().substring(0, 10), jobDetails: '', start: '09:00', lunch: '00:00', finish: '17:00', hours: 1, rate: 0 },
-
-      async api(actionName, payloadData = {}) {
-        this.loading = true;
-        try {
-          const response = await fetch(this.apiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify({ action: actionName, payload: payloadData })
-          });
-          const result = await response.json();
-          this.loading = false;
-          return result;
-        } catch (err) {
-          this.loading = false;
-          this.setFeedback("Database transmission failure.", true);
-          throw err;
-        }
-      },
-      init() {
-        this.setFeedback("Everyday Job & Invoice Manager Active.", false);
-      },
-      setTrackerTab() { this.currentTab = 'tracker'; this.clearFeedback(); },
-      setInvoicerTab() { this.currentTab = 'invoicer'; this.clearFeedback(); this.unbilledData = { totalHours: 12.5, totalAmount: 625.00 }; },
-      
-      async submitForm() {
-        this.clearFeedback();
-        try {
-          const result = await this.api('logTimeEntry', { ...this.form });
-          if (result && result.success) {
-            this.setFeedback("Success! Event appended to ledger.", false);
-            this.form.jobDetails = '';
-          }
-        } catch (e) {
-          this.setFeedback("API Connection dropped.", true);
-        }
-      },
-      async processInvoice() {
-        this.clearFeedback();
-        try {
-          const res = await this.api('compileFinalInvoice', { clientName: this.invoiceForm.clientName });
-          if (res && res.success) {
-            this.setFeedback("Invoice Generated! Reference updated in spreadsheet.", false);
-          }
-        } catch (err) {
-          this.setFeedback("Processing timeout.", true);
-        }
-      },
-      setFeedback(msg, isErr) { this.feedback.text = msg; this.feedback.isError = isErr; },
-      clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; }
-    }));
-  </script>
 </body>
 </html>
-
