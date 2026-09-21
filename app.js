@@ -186,8 +186,22 @@ window.Alpine = {
         item.style.display = this.getPath(state, showExpr) ? 'block' : 'none';
       }
     });
+    this.applyClassBindings(root, state);
     this.syncModels(root, state);
     root.removeAttribute('x-cloak');
+  },
+  applyClassBindings(root, state) {
+    root.querySelectorAll('[\\:class], [x-bind\\:class]').forEach(el => {
+      const expr = el.getAttribute(':class') || el.getAttribute('x-bind:class');
+      if (!expr) return;
+      if (!el.hasAttribute('data-base-class')) {
+        el.setAttribute('data-base-class', el.getAttribute('class') || '');
+      }
+      const base = el.getAttribute('data-base-class') || '';
+      const ternary = expr.match(/^(.+?)\s*\?\s*['"]([^'"]*)['"]\s*:\s*['"]([^'"]*)['"]$/);
+      const extra = ternary ? (this.getPath(state, ternary[1].trim()) ? ternary[2] : ternary[3]) : '';
+      el.className = [base, extra].filter(Boolean).join(' ').trim();
+    });
   }
 };
 
@@ -206,8 +220,17 @@ window.Alpine.data('appState', () => ({
 
   invoiceForm: { clientName: '' },
   unbilledData: { totalHours: 0, totalAmount: 0 },
-  form: { clientName: '', date: new Date().toISOString().substring(0, 10), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30' },
+  form: { clientName: '', date: (() => {
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return now.getFullYear() + '-' + mm + '-' + dd;
+  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30' },
 
+  failMessage(res, fallback) {
+    if (res && res.error) return String(res.error);
+    return fallback;
+  },
   async api(actionName, payloadData = {}) {
     this.loading = true;
     try {
@@ -230,14 +253,12 @@ window.Alpine.data('appState', () => ({
       const res = await this.api('getInitialAppData');
       if (res && res.success) {
         this.clients = (Array.isArray(res.clients) ? res.clients : []).map(c => {
-          if (typeof c === 'string') return { name: c, rate: 0 };
-          if (!c || typeof c !== 'object') return { name: '', rate: 0 };
-          return {
-            name: c.name || c.Name || c.clientName || '',
-            rate: c.rate || c.Rate || 0
-          };
+          if (typeof c === 'string') return { name: c };
+          return { name: (c && (c.name || c.Name || c.clientName)) || '' };
         }).filter(c => c.name);
         this.setFeedback("Everyday Job & Invoice Manager Active.", false);
+      } else {
+        this.setFeedback(this.failMessage(res, "Cloud synchronization offline."), true);
       }
     } catch (err) {
       this.setFeedback("Cloud synchronization offline.", true);
@@ -245,18 +266,27 @@ window.Alpine.data('appState', () => ({
   },
   setTrackerTab() { this.currentTab = 'tracker'; this.clearFeedback(); },
   setInvoicerTab() { this.currentTab = 'invoicer'; this.clearFeedback(); this.unbilledData = { totalHours: 0, totalAmount: 0 }; },
-  
-  onClientSelect() {
-    const selected = this.clients.find(c => c.name === this.form.clientName);
-    this.form.rate = selected ? selected.rate : 0;
-  },
+
   async submitForm() {
     this.clearFeedback();
+    if (!this.form.clientName) {
+      this.setFeedback("Choose a client account first.", true);
+      return;
+    }
     try {
-      const result = await this.api('logTimeEntry', { ...this.form });
+      const result = await this.api('logTimeEntry', {
+        clientName: this.form.clientName,
+        date: this.form.date,
+        jobDetails: this.form.jobDetails,
+        start: this.form.start,
+        lunch: this.form.lunch,
+        finish: this.form.finish
+      });
       if (result && result.success) {
-        this.setFeedback("Success! Event appended to ledger.", false);
+        this.setFeedback(result.message || "Shift records submitted to ledger!", false);
         this.form.jobDetails = '';
+      } else {
+        this.setFeedback(this.failMessage(result, "API Connection dropped."), true);
       }
     } catch (e) {
       this.setFeedback("API Connection dropped.", true);
@@ -267,8 +297,10 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api('getUnbilledSummary', { clientName: this.invoiceForm.clientName });
       if (res && res.success) {
-        this.unbilledData.totalHours = res.totalHours;
-        this.unbilledData.totalAmount = res.totalAmount;
+        this.unbilledData.totalHours = Number(res.totalHours) || 0;
+        this.unbilledData.totalAmount = Number(res.totalAmount) || 0;
+      } else {
+        this.setFeedback(this.failMessage(res, "Metrics sync failed."), true);
       }
     } catch (err) {
       this.setFeedback("Metrics sync failed.", true);
@@ -276,12 +308,18 @@ window.Alpine.data('appState', () => ({
   },
   async processInvoice() {
     this.clearFeedback();
+    if (!this.invoiceForm.clientName) {
+      this.setFeedback("Choose a client account first.", true);
+      return;
+    }
     try {
       const res = await this.api('compileFinalInvoice', { clientName: this.invoiceForm.clientName });
       if (res && res.success) {
         this.setFeedback("Invoice Ref: " + res.invoiceId + " logged. Ready on INV-Template.", false);
         this.invoiceForm.clientName = '';
         this.unbilledData = { totalHours: 0, totalAmount: 0 };
+      } else {
+        this.setFeedback(this.failMessage(res, "Processing timeout."), true);
       }
     } catch (err) {
       this.setFeedback("Processing timeout.", true);
