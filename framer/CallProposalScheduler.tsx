@@ -2,11 +2,13 @@ import {
     useCallback,
     useEffect,
     useMemo,
+    useRef,
     useState,
     startTransition,
     type CSSProperties,
     type ChangeEvent,
     type FormEvent,
+    type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
 import { addPropertyControls, ControlType } from "framer"
 
@@ -316,6 +318,10 @@ function buildProposalEmail(options: {
     }
 }
 
+const DROPDOWN_BACKGROUND = "#102A43"
+const DROPDOWN_TEXT = "#F7F1E3"
+const DROPDOWN_HOVER = "rgba(198, 163, 106, 0.28)"
+
 function fieldStyle(
     accentColor: string,
     textColor: string,
@@ -334,8 +340,170 @@ function fieldStyle(
         outline: "none",
         fontFamily: "inherit",
         fontSize: 14,
+        colorScheme: "dark",
         ...extra,
     }
+}
+
+interface DarkSelectOption {
+    value: string
+    label: string
+}
+
+function optionRowStyle(active: boolean): CSSProperties {
+    return {
+        padding: "8px 10px",
+        borderRadius: 8,
+        cursor: "pointer",
+        background: active ? DROPDOWN_HOVER : "transparent",
+        color: DROPDOWN_TEXT,
+        fontSize: 14,
+        lineHeight: 1.35,
+    }
+}
+
+function DarkSelect(props: {
+    id: string
+    name: string
+    value: string
+    options: DarkSelectOption[]
+    placeholder?: string
+    required?: boolean
+    ariaInvalid?: boolean
+    ariaDescribedBy?: string
+    onChange: (value: string) => void
+    triggerStyle: CSSProperties
+    borderRadius: number
+    accentColor: string
+}) {
+    const {
+        id,
+        name,
+        value,
+        options,
+        placeholder,
+        required,
+        ariaInvalid,
+        ariaDescribedBy,
+        onChange,
+        triggerStyle,
+        borderRadius,
+        accentColor,
+    } = props
+    const [open, setOpen] = useState(false)
+    const [activeValue, setActiveValue] = useState(value)
+    const rootRef = useRef<HTMLDivElement>(null)
+    const selected = options.find((option) => option.value === value)
+    const label = selected?.label || placeholder || "Choose"
+
+    useEffect(() => {
+        setActiveValue(value)
+    }, [value, open])
+
+    useEffect(() => {
+        if (!open) return
+        const onDoc = (event: MouseEvent) => {
+            if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+        }
+        const onKey = (event: KeyboardEvent) => {
+            if (event.key === "Escape") setOpen(false)
+        }
+        document.addEventListener("mousedown", onDoc)
+        document.addEventListener("keydown", onKey)
+        return () => {
+            document.removeEventListener("mousedown", onDoc)
+            document.removeEventListener("keydown", onKey)
+        }
+    }, [open])
+
+    const choose = (next: string) => {
+        onChange(next)
+        setOpen(false)
+    }
+
+    const onTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+        if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            setOpen(true)
+        }
+    }
+
+    const menuItems = placeholder
+        ? [{ value: "", label: placeholder }, ...options]
+        : options
+
+    return (
+        <div ref={rootRef} style={{ position: "relative", width: "100%" }}>
+            <input type="hidden" name={name} value={value} />
+            <button
+                type="button"
+                id={id}
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-invalid={ariaInvalid}
+                aria-describedby={ariaDescribedBy}
+                aria-required={required}
+                onClick={() => setOpen((current) => !current)}
+                onKeyDown={onTriggerKeyDown}
+                style={{
+                    ...triggerStyle,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    textAlign: "left",
+                    cursor: "pointer",
+                    appearance: "none",
+                    WebkitAppearance: "none",
+                }}
+            >
+                <span style={{ opacity: selected ? 1 : 0.72 }}>{label}</span>
+                <span aria-hidden="true" style={{ fontSize: 11, opacity: 0.8 }}>
+                    ▾
+                </span>
+            </button>
+            {open ? (
+                <div
+                    role="listbox"
+                    aria-labelledby={id}
+                    style={{
+                        position: "absolute",
+                        zIndex: 50,
+                        left: 0,
+                        right: 0,
+                        top: "calc(100% + 4px)",
+                        maxHeight: 220,
+                        overflowY: "auto",
+                        background: DROPDOWN_BACKGROUND,
+                        color: DROPDOWN_TEXT,
+                        border: `1px solid ${accentColor}`,
+                        borderRadius: Math.max(12, Math.min(16, borderRadius)),
+                        boxShadow: "0 14px 32px rgba(0,0,0,0.55)",
+                        padding: 4,
+                        colorScheme: "dark",
+                    }}
+                >
+                    {menuItems.map((option) => (
+                        <div
+                            key={option.value || "placeholder"}
+                            role="option"
+                            aria-selected={option.value === value}
+                            onMouseEnter={() => setActiveValue(option.value)}
+                            onMouseDown={(event) => {
+                                event.preventDefault()
+                                choose(option.value)
+                            }}
+                            style={optionRowStyle(
+                                option.value === activeValue || option.value === value
+                            )}
+                        >
+                            {option.label}
+                        </div>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    )
 }
 
 /**
@@ -401,8 +569,7 @@ export default function CallProposalScheduler(props: MyComponentProps) {
     }, [])
 
     const handleDateChange = useCallback(
-        (event: ChangeEvent<HTMLSelectElement>) => {
-            const value = event.target.value
+        (value: string) => {
             startTransition(() => setSelectedDate(value))
             clearFieldError("date")
         },
@@ -410,8 +577,7 @@ export default function CallProposalScheduler(props: MyComponentProps) {
     )
 
     const handleTimeChange = useCallback(
-        (event: ChangeEvent<HTMLSelectElement>) => {
-            const value = event.target.value
+        (value: string) => {
             startTransition(() => setSelectedTime(value))
             clearFieldError("time")
         },
@@ -427,13 +593,9 @@ export default function CallProposalScheduler(props: MyComponentProps) {
         [clearFieldError]
     )
 
-    const handleMeetingChange = useCallback(
-        (event: ChangeEvent<HTMLSelectElement>) => {
-            const value = event.target.value as MeetingValue
-            startTransition(() => setMeeting(value))
-        },
-        []
-    )
+    const handleMeetingChange = useCallback((value: string) => {
+        startTransition(() => setMeeting(value as MeetingValue))
+    }, [])
 
     const handleDetailsChange = useCallback(
         (event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -536,6 +698,7 @@ export default function CallProposalScheduler(props: MyComponentProps) {
                 flexDirection: "column",
                 gap: 10,
                 fontFamily: "Inter, sans-serif",
+                overflow: "visible",
             }}
             aria-label="Call proposal scheduler"
         >
@@ -550,45 +713,44 @@ export default function CallProposalScheduler(props: MyComponentProps) {
                     <label htmlFor={dateId} style={labelStyle}>
                         {dateLabel}
                     </label>
-                    <select
+                    <DarkSelect
                         id={dateId}
                         name={dateId}
                         required
                         value={selectedDate}
+                        placeholder="Choose a weekday"
                         onChange={handleDateChange}
-                        aria-required="true"
-                        aria-invalid={Boolean(errors.date)}
-                        aria-describedby={`${helperId}${errors.date ? ` ${errorId}` : ""}`}
-                        style={controlStyle}
-                    >
-                        <option value="">Choose a weekday</option>
-                        {bookableDates.map((date) => {
+                        ariaInvalid={Boolean(errors.date)}
+                        ariaDescribedBy={`${helperId}${errors.date ? ` ${errorId}` : ""}`}
+                        triggerStyle={controlStyle}
+                        borderRadius={borderRadius}
+                        accentColor={accentColor}
+                        options={bookableDates.map((date) => {
                             const value = toDateInputValue(date)
-                            return (
-                                <option key={value} value={value}>
-                                    {formatDateOptionLabel(date)}
-                                </option>
-                            )
+                            return {
+                                value,
+                                label: formatDateOptionLabel(date),
+                            }
                         })}
-                    </select>
+                    />
                 </div>
                 <div>
                     <label htmlFor={timeId} style={labelStyle}>
                         {timeLabel}
                     </label>
-                    <select
+                    <DarkSelect
                         id={timeId}
                         name={timeId}
                         required
                         value={selectedTime}
+                        placeholder="Choose a 20-min slot"
                         onChange={handleTimeChange}
-                        aria-required="true"
-                        aria-invalid={Boolean(errors.time)}
-                        aria-describedby={errors.time ? errorId : undefined}
-                        style={controlStyle}
-                    >
-                        <option value="">Choose a 20-min slot</option>
-                        {slots.map((slot) => {
+                        ariaInvalid={Boolean(errors.time)}
+                        ariaDescribedBy={errors.time ? errorId : undefined}
+                        triggerStyle={controlStyle}
+                        borderRadius={borderRadius}
+                        accentColor={accentColor}
+                        options={slots.map((slot) => {
                             const timeParts = parseTimeLabel(slot)
                             const endLabel = timeParts
                                 ? minutesToTimeLabel(
@@ -597,13 +759,12 @@ export default function CallProposalScheduler(props: MyComponentProps) {
                                           CALL_DURATION_MINUTES
                                   )
                                 : ""
-                            return (
-                                <option key={slot} value={slot}>
-                                    {slot} – {endLabel}
-                                </option>
-                            )
+                            return {
+                                value: slot,
+                                label: `${slot} – ${endLabel}`,
+                            }
                         })}
-                    </select>
+                    />
                 </div>
             </div>
             <div>
@@ -630,19 +791,19 @@ export default function CallProposalScheduler(props: MyComponentProps) {
                 <label htmlFor={meetingId} style={labelStyle}>
                     {meetingFieldLabel}
                 </label>
-                <select
+                <DarkSelect
                     id={meetingId}
                     name={meetingId}
                     value={meeting}
                     onChange={handleMeetingChange}
-                    style={controlStyle}
-                >
-                    {MEETING_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                            {option.label}
-                        </option>
-                    ))}
-                </select>
+                    triggerStyle={controlStyle}
+                    borderRadius={borderRadius}
+                    accentColor={accentColor}
+                    options={MEETING_OPTIONS.map((option) => ({
+                        value: option.value,
+                        label: option.label,
+                    }))}
+                />
             </div>
             <div>
                 <label htmlFor={detailsId} style={labelStyle}>

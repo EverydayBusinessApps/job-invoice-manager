@@ -47,6 +47,7 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+      overflow: visible;
     }
     .grid-2 {
       display: grid;
@@ -60,7 +61,7 @@
       display: block;
       margin-bottom: 6px;
     }
-    input, select, textarea {
+    input, textarea {
       width: 100%;
       border-radius: 14px;
       border: 1px solid var(--accent);
@@ -70,9 +71,62 @@
       outline: none;
       font-family: inherit;
       font-size: 14px;
+      color-scheme: dark;
     }
-    option { color: #102A43; }
     textarea { min-height: 88px; resize: vertical; }
+    .dark-select { position: relative; width: 100%; }
+    .dark-select select {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+      width: 1px;
+      height: 1px;
+    }
+    .dark-select-trigger {
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--accent);
+      background: rgba(255,255,255,0.08);
+      color: var(--text);
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      cursor: pointer;
+      text-align: left;
+      color-scheme: dark;
+    }
+    .dark-select-trigger .placeholder { opacity: 0.72; }
+    .dark-select-menu {
+      position: absolute;
+      z-index: 50;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      max-height: 220px;
+      overflow-y: auto;
+      background: #102A43;
+      color: #F7F1E3;
+      border: 1px solid var(--accent);
+      border-radius: 14px;
+      box-shadow: 0 14px 32px rgba(0,0,0,0.55);
+      padding: 4px;
+    }
+    .dark-select-option {
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: #F7F1E3;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+    .dark-select-option:hover,
+    .dark-select-option.active {
+      background: rgba(198, 163, 106, 0.28);
+    }
     .helper, .error {
       margin: 0;
       font-size: 12px;
@@ -80,7 +134,7 @@
     }
     .helper { color: var(--accent); }
     .error { color: #ffdfdf; }
-    button {
+    button.submit {
       border: none;
       border-radius: 999px;
       background: #FFF7E8;
@@ -123,15 +177,19 @@
       <div class="grid-2">
         <div>
           <label for="call-proposal-date">Proposed weekday</label>
-          <select id="call-proposal-date" name="date" required>
-            <option value="">Choose a weekday</option>
-          </select>
+          <div class="dark-select" data-select="date">
+            <select id="call-proposal-date" name="date" required>
+              <option value="">Choose a weekday</option>
+            </select>
+          </div>
         </div>
         <div>
           <label for="call-proposal-time">20-minute slot</label>
-          <select id="call-proposal-time" name="time" required>
-            <option value="">Choose a 20-min slot</option>
-          </select>
+          <div class="dark-select" data-select="time">
+            <select id="call-proposal-time" name="time" required>
+              <option value="">Choose a 20-min slot</option>
+            </select>
+          </div>
         </div>
       </div>
       <div>
@@ -140,7 +198,9 @@
       </div>
       <div>
         <label for="call-proposal-meeting">How should we meet?</label>
-        <select id="call-proposal-meeting" name="meeting"></select>
+          <div class="dark-select" data-select="meeting">
+            <select id="call-proposal-meeting" name="meeting"></select>
+          </div>
       </div>
       <div>
         <label for="call-proposal-details">Your business or what you need help with</label>
@@ -148,7 +208,7 @@
       </div>
       <p class="helper" id="call-proposal-helper">Mon–Fri, 9:30–12:30, 20 minutes. At least 2 days ahead. This is a phone call (or coffee if you're local). Jane will confirm by email with a calendar booking.</p>
       <p class="error" id="call-proposal-error" role="alert" hidden></p>
-      <button type="submit">Email my proposed time</button>
+      <button class="submit" type="submit">Email my proposed time</button>
       <a class="direct" id="direct-email" href="mailto:Jane@EverydayBusiness.ie">Or email Jane directly</a>
     </form>
     <section class="result" id="email-preview" aria-live="polite"></section>
@@ -203,6 +263,77 @@
       option.textContent = item.label
       meetingSelect.appendChild(option)
     })
+
+    function enhanceDarkSelect(select) {
+      const wrap = select.parentElement
+      const trigger = document.createElement("button")
+      trigger.type = "button"
+      trigger.className = "dark-select-trigger"
+      trigger.setAttribute("aria-haspopup", "listbox")
+      const menu = document.createElement("div")
+      menu.className = "dark-select-menu"
+      menu.hidden = true
+      menu.setAttribute("role", "listbox")
+
+      function currentLabel() {
+        const selected = select.options[select.selectedIndex]
+        return selected ? selected.textContent : ""
+      }
+
+      function renderTrigger() {
+        const selected = select.value
+        trigger.replaceChildren()
+        const text = document.createElement("span")
+        text.textContent = currentLabel()
+        if (!selected) text.className = "placeholder"
+        const caret = document.createElement("span")
+        caret.textContent = "▾"
+        caret.setAttribute("aria-hidden", "true")
+        trigger.append(text, caret)
+      }
+
+      function renderMenu() {
+        menu.replaceChildren()
+        Array.from(select.options).forEach((option) => {
+          const row = document.createElement("div")
+          row.className = "dark-select-option"
+          row.setAttribute("role", "option")
+          row.dataset.value = option.value
+          row.textContent = option.textContent
+          if (option.value === select.value) row.classList.add("active")
+          row.addEventListener("mousedown", (event) => {
+            event.preventDefault()
+            select.value = option.value
+            select.dispatchEvent(new Event("change", { bubbles: true }))
+            menu.hidden = true
+            renderTrigger()
+          })
+          menu.appendChild(row)
+        })
+      }
+
+      trigger.addEventListener("click", () => {
+        const nextOpen = menu.hidden
+        document.querySelectorAll(".dark-select-menu").forEach((el) => {
+          el.hidden = true
+        })
+        if (nextOpen) {
+          renderMenu()
+          menu.hidden = false
+        }
+      })
+
+      document.addEventListener("mousedown", (event) => {
+        if (!wrap.contains(event.target)) menu.hidden = true
+      })
+
+      renderTrigger()
+      wrap.append(trigger, menu)
+    }
+
+    enhanceDarkSelect(dateInput)
+    enhanceDarkSelect(timeSelect)
+    enhanceDarkSelect(meetingSelect)
 
     function showError(message) {
       errorEl.hidden = !message

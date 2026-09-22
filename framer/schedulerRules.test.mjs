@@ -128,5 +128,7 @@ assert.match(tsx, /call-proposal-details/)
 assert.match(tsx, /Monday to Friday/)
 assert.match(tsx, /Choose a weekday/)
 assert.match(tsx, /mins \+ CALL_DURATION_MINUTES <= SLOT_END_MINUTES/)
+assert.match(tsx, /const DROPDOWN_BACKGROUND = "#102A43"/)
+assert.match(tsx, /function DarkSelect/)
 
 console.log("schedulerRules tests passed")
