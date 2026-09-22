@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Call Proposal Scheduler Preview</title>
+  <style>
+    :root {
+      --surface: #102A43;
+      --text: #F7F1E3;
+      --accent: #C6A36A;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, system-ui, sans-serif;
+      background: #0b1c2e;
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 32px 16px 48px;
+    }
+    .page {
+      width: min(520px, 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 650;
+    }
+    .lede {
+      margin: 0;
+      color: var(--accent);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    form.widget {
+      background: var(--surface);
+      color: var(--text);
+      border-radius: var(--radius);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    label {
+      color: var(--accent);
+      font-size: 13px;
+      line-height: 1.3;
+      display: block;
+      margin-bottom: 6px;
+    }
+    input, select, textarea {
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--accent);
+      background: rgba(255,255,255,0.08);
+      color: var(--text);
+      padding: 10px 12px;
+      outline: none;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    option { color: #102A43; }
+    textarea { min-height: 88px; resize: vertical; }
+    .helper, .error {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .helper { color: var(--accent); }
+    .error { color: #ffdfdf; }
+    button {
+      border: none;
+      border-radius: 999px;
+      background: #FFF7E8;
+      color: #102A43;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      align-self: flex-start;
+      white-space: nowrap;
+    }
+    .direct {
+      color: var(--accent);
+      font-size: 13px;
+      line-height: 1.4;
+      align-self: flex-start;
+    }
+    .result {
+      display: none;
+      background: #16324d;
+      border-radius: var(--radius);
+      padding: 14px;
+      white-space: pre-wrap;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .result.visible { display: block; }
+    .result strong { color: var(--accent); }
+    @media (max-width: 520px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Call proposal scheduler</h1>
+    <p class="lede">Weekday 20-minute phone slots between 9:30 and 12:30, at least 2 days ahead. Paste <code>CallProposalScheduler.tsx</code> into Framer when you are happy with the copy.</p>
+    <form class="widget" id="scheduler" aria-label="Call proposal scheduler" novalidate>
+      <div class="grid-2">
+        <div>
+          <label for="call-proposal-date">Proposed weekday</label>
+          <input id="call-proposal-date" name="date" type="date" required>
+        </div>
+        <div>
+          <label for="call-proposal-time">20-minute slot</label>
+          <select id="call-proposal-time" name="time" required>
+            <option value="">Choose a 20-min slot</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label for="call-proposal-phone">Phone number</label>
+        <input id="call-proposal-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="+353 86 000 0000">
+      </div>
+      <div>
+        <label for="call-proposal-meeting">How should we meet?</label>
+        <select id="call-proposal-meeting" name="meeting"></select>
+      </div>
+      <div>
+        <label for="call-proposal-details">Your business or what you need help with</label>
+        <textarea id="call-proposal-details" name="details" required rows="4" maxlength="800" placeholder="A little about your business, or the problem you want help with."></textarea>
+      </div>
+      <p class="helper" id="call-proposal-helper">Mon–Fri, 9:30–12:30, 20 minutes. At least 2 days ahead. This is a phone call (or coffee if you're local). Jane will confirm by email with a calendar booking.</p>
+      <p class="error" id="call-proposal-error" role="alert" hidden></p>
+      <button type="submit">Email my proposed time</button>
+      <a class="direct" id="direct-email" href="mailto:Jane@EverydayBusiness.ie">Or email Jane directly</a>
+    </form>
+    <section class="result" id="email-preview" aria-live="polite"></section>
+  </div>
+  <script type="module">
+    import {
+      buildTimeSlots,
+      CALL_DURATION_MINUTES,
+      MEETING_OPTIONS,
+      getEarliestBookableDate,
+      minutesToTimeLabel,
+      parseTimeLabel,
+      toDateInputValue,
+      validateProposal,
+      buildProposalEmail,
+      buildMailtoUrl,
+    } from "./schedulerRules.mjs"
+
+    const emailAddress = "Jane@EverydayBusiness.ie"
+    const form = document.getElementById("scheduler")
+    const dateInput = document.getElementById("call-proposal-date")
+    const timeSelect = document.getElementById("call-proposal-time")
+    const phoneInput = document.getElementById("call-proposal-phone")
+    const meetingSelect = document.getElementById("call-proposal-meeting")
+    const detailsInput = document.getElementById("call-proposal-details")
+    const errorEl = document.getElementById("call-proposal-error")
+    const resultEl = document.getElementById("email-preview")
+    const slots = buildTimeSlots()
+
+    dateInput.min = toDateInputValue(getEarliestBookableDate(new Date()))
+
+    slots.forEach((slot) => {
+      const timeParts = parseTimeLabel(slot)
+      const endLabel = minutesToTimeLabel(
+        timeParts.hours * 60 + timeParts.minutes + CALL_DURATION_MINUTES
+      )
+      const option = document.createElement("option")
+      option.value = slot
+      option.textContent = `${slot} – ${endLabel}`
+      timeSelect.appendChild(option)
+    })
+
+    MEETING_OPTIONS.forEach((item) => {
+      const option = document.createElement("option")
+      option.value = item.value
+      option.textContent = item.label
+      meetingSelect.appendChild(option)
+    })
+
+    function showError(message) {
+      errorEl.hidden = !message
+      errorEl.textContent = message || ""
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault()
+      const payload = {
+        dateValue: dateInput.value,
+        timeValue: timeSelect.value,
+        phone: phoneInput.value,
+        details: detailsInput.value,
+        now: new Date(),
+        slots,
+      }
+      const errors = validateProposal(payload)
+      const alertText = errors.date || errors.time || errors.phone || errors.details || ""
+      showError(alertText)
+      if (alertText) return
+
+      const proposal = buildProposalEmail({
+        ...payload,
+        meeting: meetingSelect.value,
+      })
+      const mailto = buildMailtoUrl(emailAddress, proposal)
+      resultEl.classList.add("visible")
+      resultEl.replaceChildren()
+      const heading = document.createElement("strong")
+      heading.textContent = "Ready to email Jane"
+      const pre = document.createElement("div")
+      pre.textContent = `\n\nSubject: ${proposal.subject}\n\n${proposal.body}\n\n`
+      const mailLink = document.createElement("a")
+      mailLink.href = mailto
+      mailLink.textContent = "Open mail app"
+      resultEl.append(heading, pre, mailLink)
+    })
+  </script>
+</body>
+</html>
