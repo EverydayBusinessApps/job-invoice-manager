@@ -61,7 +61,7 @@ function buildTimeSlots(): string[] {
     const slots: string[] = []
     for (
         let mins = SLOT_START_MINUTES;
-        mins <= SLOT_END_MINUTES;
+        mins + CALL_DURATION_MINUTES <= SLOT_END_MINUTES;
         mins += SLOT_STEP_MINUTES
     ) {
         slots.push(minutesToTimeLabel(mins))
@@ -88,6 +88,27 @@ function getEarliestBookableDate(now: Date, minLeadDays = MIN_LEAD_DAYS): Date {
         date = addLocalDays(date, 1)
     }
     return date
+}
+
+function listBookableDates(now: Date, count = 20): Date[] {
+    const dates: Date[] = []
+    let date = getEarliestBookableDate(now)
+    while (dates.length < count) {
+        if (isWeekday(date)) {
+            dates.push(new Date(date.getFullYear(), date.getMonth(), date.getDate()))
+        }
+        date = addLocalDays(date, 1)
+    }
+    return dates
+}
+
+function formatDateOptionLabel(date: Date): string {
+    return new Intl.DateTimeFormat(undefined, {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+    }).format(date)
 }
 
 function toDateInputValue(date: Date): string {
@@ -338,7 +359,6 @@ export default function CallProposalScheduler(props: MyComponentProps) {
         borderRadius,
     } = props
 
-    const slots = useMemo(() => buildTimeSlots(), [])
     const [selectedDate, setSelectedDate] = useState("")
     const [selectedTime, setSelectedTime] = useState("")
     const [phone, setPhone] = useState("")
@@ -346,6 +366,10 @@ export default function CallProposalScheduler(props: MyComponentProps) {
     const [details, setDetails] = useState("")
     const [errors, setErrors] = useState<FieldErrors>({})
     const [nowMs, setNowMs] = useState(() => Date.now())
+    const slots = useMemo(() => buildTimeSlots(), [])
+    const bookableDates = useMemo(() => {
+        return listBookableDates(new Date(nowMs))
+    }, [nowMs])
 
     useEffect(() => {
         if (typeof window === "undefined") return
@@ -357,10 +381,6 @@ export default function CallProposalScheduler(props: MyComponentProps) {
             window.clearInterval(timer)
         }
     }, [])
-
-    const minimumDate = useMemo(() => {
-        return toDateInputValue(getEarliestBookableDate(new Date(nowMs)))
-    }, [nowMs])
 
     const lightSurface = hexLuminance(surfaceColor) > 160
     const inputBackground = lightSurface
@@ -381,7 +401,7 @@ export default function CallProposalScheduler(props: MyComponentProps) {
     }, [])
 
     const handleDateChange = useCallback(
-        (event: ChangeEvent<HTMLInputElement>) => {
+        (event: ChangeEvent<HTMLSelectElement>) => {
             const value = event.target.value
             startTransition(() => setSelectedDate(value))
             clearFieldError("date")
@@ -530,19 +550,27 @@ export default function CallProposalScheduler(props: MyComponentProps) {
                     <label htmlFor={dateId} style={labelStyle}>
                         {dateLabel}
                     </label>
-                    <input
+                    <select
                         id={dateId}
                         name={dateId}
-                        type="date"
                         required
-                        min={minimumDate}
                         value={selectedDate}
                         onChange={handleDateChange}
                         aria-required="true"
                         aria-invalid={Boolean(errors.date)}
                         aria-describedby={`${helperId}${errors.date ? ` ${errorId}` : ""}`}
                         style={controlStyle}
-                    />
+                    >
+                        <option value="">Choose a weekday</option>
+                        {bookableDates.map((date) => {
+                            const value = toDateInputValue(date)
+                            return (
+                                <option key={value} value={value}>
+                                    {formatDateOptionLabel(date)}
+                                </option>
+                            )
+                        })}
+                    </select>
                 </div>
                 <div>
                     <label htmlFor={timeId} style={labelStyle}>

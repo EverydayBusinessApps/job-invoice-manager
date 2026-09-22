@@ -12,18 +12,15 @@ import {
     addMinutes,
     toDateInputValue,
     CALL_DURATION_MINUTES,
-    SLOT_START_MINUTES,
-    SLOT_END_MINUTES,
-    SLOT_STEP_MINUTES,
-    MIN_LEAD_DAYS,
     buildProposalEmail,
+    listBookableDates,
 } from "./schedulerRules.mjs"
 
 const slots = buildTimeSlots()
 
 assert.deepEqual(slots[0], "09:30")
-assert.deepEqual(slots[slots.length - 1], "12:30")
-assert.equal(slots.length, 10)
+assert.deepEqual(slots[slots.length - 1], "12:10")
+assert.equal(slots.length, 9)
 assert.deepEqual(slots, [
     "09:30",
     "09:50",
@@ -34,7 +31,6 @@ assert.deepEqual(slots, [
     "11:30",
     "11:50",
     "12:10",
-    "12:30",
 ])
 assert.equal(CALL_DURATION_MINUTES, 20)
 
@@ -65,6 +61,13 @@ assert.equal(
     toDateInputValue(getEarliestBookableDate(dateOn(2026, 3, 25))),
     "2026-04-27"
 )
+
+const bookable = listBookableDates(dateOn(2026, 3, 23), 5)
+assert.deepEqual(
+    bookable.map((date) => toDateInputValue(date)),
+    ["2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01"]
+)
+assert.ok(bookable.every((date) => isWeekday(date)))
 
 assert.equal(isWeekday(dateOn(2026, 3, 24)), true)
 assert.equal(isWeekday(dateOn(2026, 3, 25)), false)
@@ -115,13 +118,15 @@ const tsx = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "CallProposalScheduler.tsx"),
     "utf8"
 )
-assert.match(tsx, new RegExp(`const SLOT_START_MINUTES = ${SLOT_START_MINUTES}`))
-assert.match(tsx, new RegExp(`const SLOT_END_MINUTES = ${SLOT_END_MINUTES}`))
-assert.match(tsx, new RegExp(`const SLOT_STEP_MINUTES = ${SLOT_STEP_MINUTES}`))
-assert.match(tsx, new RegExp(`const CALL_DURATION_MINUTES = ${CALL_DURATION_MINUTES}`))
-assert.match(tsx, new RegExp(`const MIN_LEAD_DAYS = ${MIN_LEAD_DAYS}`))
+assert.match(tsx, /const SLOT_START_MINUTES = 9 \* 60 \+ 30/)
+assert.match(tsx, /const SLOT_END_MINUTES = 12 \* 60 \+ 30/)
+assert.match(tsx, /const SLOT_STEP_MINUTES = 20/)
+assert.match(tsx, /const CALL_DURATION_MINUTES = 20/)
+assert.match(tsx, /const MIN_LEAD_DAYS = 2/)
 assert.match(tsx, /type="tel"/)
 assert.match(tsx, /call-proposal-details/)
 assert.match(tsx, /Monday to Friday/)
+assert.match(tsx, /Choose a weekday/)
+assert.match(tsx, /mins \+ CALL_DURATION_MINUTES <= SLOT_END_MINUTES/)
 
 console.log("schedulerRules tests passed")

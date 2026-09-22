@@ -21,10 +21,15 @@ export function minutesToTimeLabel(mins) {
 export function buildTimeSlots(
     startMinutes = SLOT_START_MINUTES,
     endMinutes = SLOT_END_MINUTES,
-    stepMinutes = SLOT_STEP_MINUTES
+    stepMinutes = SLOT_STEP_MINUTES,
+    durationMinutes = CALL_DURATION_MINUTES
 ) {
     const slots = []
-    for (let mins = startMinutes; mins <= endMinutes; mins += stepMinutes) {
+    for (
+        let mins = startMinutes;
+        mins + durationMinutes <= endMinutes;
+        mins += stepMinutes
+    ) {
         slots.push(minutesToTimeLabel(mins))
     }
     return slots
@@ -49,6 +54,27 @@ export function getEarliestBookableDate(now, minLeadDays = MIN_LEAD_DAYS) {
         date = addLocalDays(date, 1)
     }
     return date
+}
+
+export function listBookableDates(now, count = 20, minLeadDays = MIN_LEAD_DAYS) {
+    const dates = []
+    let date = getEarliestBookableDate(now, minLeadDays)
+    while (dates.length < count) {
+        if (isWeekday(date)) {
+            dates.push(new Date(date.getFullYear(), date.getMonth(), date.getDate()))
+        }
+        date = addLocalDays(date, 1)
+    }
+    return dates
+}
+
+export function formatDateOptionLabel(date) {
+    return new Intl.DateTimeFormat(undefined, {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+    }).format(date)
 }
 
 export function toDateInputValue(date) {

@@ -123,7 +123,9 @@
       <div class="grid-2">
         <div>
           <label for="call-proposal-date">Proposed weekday</label>
-          <input id="call-proposal-date" name="date" type="date" required>
+          <select id="call-proposal-date" name="date" required>
+            <option value="">Choose a weekday</option>
+          </select>
         </div>
         <div>
           <label for="call-proposal-time">20-minute slot</label>
@@ -156,7 +158,8 @@
       buildTimeSlots,
       CALL_DURATION_MINUTES,
       MEETING_OPTIONS,
-      getEarliestBookableDate,
+      listBookableDates,
+      formatDateOptionLabel,
       minutesToTimeLabel,
       parseTimeLabel,
       toDateInputValue,
@@ -176,7 +179,12 @@
     const resultEl = document.getElementById("email-preview")
     const slots = buildTimeSlots()
 
-    dateInput.min = toDateInputValue(getEarliestBookableDate(new Date()))
+    listBookableDates(new Date()).forEach((date) => {
+      const option = document.createElement("option")
+      option.value = toDateInputValue(date)
+      option.textContent = formatDateOptionLabel(date)
+      dateInput.appendChild(option)
+    })
 
     slots.forEach((slot) => {
       const timeParts = parseTimeLabel(slot)
