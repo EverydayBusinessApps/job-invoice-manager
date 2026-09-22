@@ -123,7 +123,43 @@
             </div>
           </div>
 
+          <div class="form-group" x-show="showDraftList">
+            <label>Draft invoices</label>
+            <template x-for="inv in draftInvoices">
+              <p class="shift-note" x-text="inv.label"></p>
+            </template>
+            <p class="shift-note" x-show="noDraftInvoices" x-text="noDraftLabel"></p>
+          </div>
+
           <button class="btn-alt" @click="processInvoice">Compile Account Statement & Invoice</button>
+          <p class="shift-note">Compile sets this account's draft invoices to Invoiced.</p>
+        </section>
+      </div>
+
+      <!-- VIEW 3: BILLING DESK -->
+      <div x-show="currentTab === 'billing'">
+        <section>
+          <div class="card-title">Billing Desk</div>
+          <p class="shift-note">Mark an invoice Paid, Unpaid, or Bad debt. Time can only be added while it is still Draft.</p>
+
+          <div class="form-group">
+            <label>Invoice</label>
+            <select x-model="billing.invoiceId" @change="syncBillingStatus">
+              <option value="">-- Choose invoice --</option>
+              <template x-for="inv in invoices">
+                <option :value="inv.id" x-text="inv.label"></option>
+              </template>
+            </select>
+          </div>
+
+          <div class="metric-box alt">
+            <span class="metric-title">Invoice Status</span>
+            <p x-text="billing.statusLabel"></p>
+          </div>
+
+          <button class="btn-paid" @click="markPaid">Mark Paid</button>
+          <button class="btn-unpaid" @click="markUnpaid">Mark Unpaid</button>
+          <button class="btn-bad" @click="markBadDebt">Mark Bad debt</button>
         </section>
       </div>
     </main>
@@ -131,6 +167,7 @@
     <nav>
       <button @click="setTrackerTab">🕒 Activity Log</button>
       <button @click="setInvoicerTab">📄 Billing Portal</button>
+      <button @click="setBillingTab">💳 Billing Desk</button>
     </nav>
   </div>
 

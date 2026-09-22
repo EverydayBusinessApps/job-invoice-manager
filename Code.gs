@@ -29,6 +29,8 @@ function doPost(e) {
       responseData = fetchUnbilledSummary(requestData.payload);
     } else if (action === "compileFinalInvoice") {
       responseData = processAccountInvoice(requestData.payload);
+    } else if (action === "updateInvoiceStatus") {
+      responseData = updateInvoiceStatus(requestData.payload);
     } else {
       throw new Error("Invalid API action parameter mapping.");
     }
@@ -78,6 +80,61 @@ function invoiceLabel_(id, status, dateStr) {
   return label;
 }
 
+/**
+ * InvoiceList column I (Invoice Status):
+ * Draft when the first time entry opens the invoice, Invoiced when
+ * Compile Account Statement & Invoice runs, then Paid, Unpaid, or Bad debt
+ * from the billing desk. Time can only be added while the status is Draft.
+ */
+function displayStatus_(status) {
+  const value = String(status || "").trim();
+  if (!value) return "Draft";
+  const key = value.toLowerCase();
+  if (key === "draft") return "Draft";
+  if (key === "invoiced") return "Invoiced";
+  if (key === "paid") return "Paid";
+  if (key === "unpaid") return "Unpaid";
+  if (key === "bad debt") return "Bad debt";
+  return value;
+}
+
+function isDraftStatus_(status) {
+  return displayStatus_(status) === "Draft";
+}
+
+function findInvoiceListRow_(invoiceSheet, invoiceId) {
+  if (!invoiceSheet) return 0;
+  const target = String(invoiceId || "").trim();
+  if (!target) return 0;
+  const lastRow = invoiceSheet.getLastRow();
+  if (lastRow < 2) return 0;
+  const ids = invoiceSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]).trim() === target) return i + 2;
+  }
+  return 0;
+}
+
+function guardDraftInvoice_(invoiceSheet, invoiceId) {
+  const row = findInvoiceListRow_(invoiceSheet, invoiceId);
+  if (!row) {
+    return { ok: false, error: "That invoice is not on InvoiceList." };
+  }
+  const current = String(invoiceSheet.getRange(row, 9).getValue() || "").trim();
+  if (!current) {
+    // First time entry establishes column I.
+    invoiceSheet.getRange(row, 9).setValue("Draft");
+    return { ok: true, status: "Draft" };
+  }
+  if (!isDraftStatus_(current)) {
+    return {
+      ok: false,
+      error: "Time can only be added while an invoice is Draft. Invoice " + invoiceId + " is " + displayStatus_(current) + "."
+    };
+  }
+  return { ok: true, status: "Draft" };
+}
+
 function fetchInvoiceRecords() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const timezone = ss.getSpreadsheetTimeZone();
@@ -92,7 +149,7 @@ function fetchInvoiceRecords() {
         const id = String(data[i][0]).trim();
         if (!id) continue;
         const dateStr = formatInvoiceDate_(data[i][7], timezone);
-        const status = String(data[i][8] || "").trim() || "Draft";
+        const status = displayStatus_(data[i][8]);
         const clientName = String(data[i][1] || "").trim();
         byId[id] = {
           id: id,
@@ -143,20 +200,20 @@ function nextInvoiceInt_(invoiceSheet) {
   return nextInvoiceInt;
 }
 
-function appendInvoiceListRow_(invoiceSheet) {
+function appendInvoiceListRow_(invoiceSheet, status) {
   const invLastValues = invoiceSheet.getRange("H1:H").getValues();
   let nextInvListRow = 1;
   while (invLastValues[nextInvListRow - 1] && invLastValues[nextInvListRow - 1][0] !== "") {
     nextInvListRow++;
   }
   invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
-  invoiceSheet.getRange(nextInvListRow, 9).setValue("Draft");      // Column I: Invoice Status
+  invoiceSheet.getRange(nextInvListRow, 9).setValue(status || "Draft"); // Column I: Invoice Status
   return nextInvListRow;
 }
 
 function createDraftInvoice_(invoiceSheet) {
   const invoiceId = nextInvoiceInt_(invoiceSheet);
-  appendInvoiceListRow_(invoiceSheet);
+  appendInvoiceListRow_(invoiceSheet, "Draft");
   return invoiceId;
 }
 
@@ -216,6 +273,9 @@ function executeTimeLog(payload) {
   if (mode === "existing") {
     invoiceId = String(payload.invoiceId || "").trim();
     if (!invoiceId) return { success: false, error: "Choose an existing invoice." };
+    if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
+    const draftGuard = guardDraftInvoice_(invoiceSheet, invoiceId);
+    if (!draftGuard.ok) return { success: false, error: draftGuard.error };
   } else {
     if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
     invoiceId = createDraftInvoice_(invoiceSheet);
@@ -253,6 +313,18 @@ function fetchUnbilledSummary(payload) {
   const timeSheet = ss.getSheetByName("Time&Attendance");
   if (!timeSheet) return { success: false, error: "Time&Attendance tab missing." };
 
+  const clientName = String(payload.clientName || "").trim();
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  const statusById = {};
+  if (invoiceSheet && invoiceSheet.getLastRow() >= 2) {
+    const invoiceRows = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 9).getValues();
+    for (let i = 0; i < invoiceRows.length; i++) {
+      const id = String(invoiceRows[i][0]).trim();
+      if (!id) continue;
+      statusById[id] = displayStatus_(invoiceRows[i][8]);
+    }
+  }
+
   const lastRow = timeSheet.getLastRow();
   let totalHours = 0;
   let totalAmount = 0;
@@ -262,11 +334,14 @@ function fetchUnbilledSummary(payload) {
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
       const invoiceInt = String(row[2]).trim(); // Column C: InvoiceInt
-      const clientName = String(row[3]).trim(); // Column D: ClientID
+      const rowClient = String(row[3]).trim();  // Column D: ClientID
       const hours = Number(row[9]) || 0;         // Column J: Hours (calculated by your formula)
       const charge = Number(row[11]) || 0;       // Column L: Billable Charge (calculated by your formula)
+      if (rowClient !== clientName) continue;
 
-      if (clientName === payload.clientName && invoiceInt === "") {
+      // Still open: legacy rows with no invoice, or time sitting on a Draft invoice.
+      const status = invoiceInt ? (statusById[invoiceInt] || "Draft") : "Draft";
+      if (invoiceInt === "" || isDraftStatus_(status)) {
         totalHours += hours;
         totalAmount += charge;
       }
@@ -285,9 +360,22 @@ function processAccountInvoice(payload) {
 
   if (!timeSheet || !invoiceSheet) return { success: false, error: "Operational tables missing." };
 
-  // Calculate the next raw index value sequence for InvoiceInt
-  const nextInvoiceInt = nextInvoiceInt_(invoiceSheet);
+  const clientName = String(payload.clientName || "").trim();
+  if (!clientName) return { success: false, error: "Choose a client account first." };
 
+  const marked = [];
+  const records = fetchInvoiceRecords();
+  for (let i = 0; i < records.length; i++) {
+    const inv = records[i];
+    if (inv.clientName !== clientName || !isDraftStatus_(inv.status)) continue;
+    const row = findInvoiceListRow_(invoiceSheet, inv.id);
+    if (!row) continue;
+    invoiceSheet.getRange(row, 9).setValue("Invoiced"); // Column I: Invoice Status
+    marked.push(String(inv.id));
+  }
+
+  // Legacy rows still waiting for an invoice number are closed onto a new Invoiced header.
+  const nextInvoiceInt = nextInvoiceInt_(invoiceSheet);
   const timeLastRow = timeSheet.getLastRow();
   let updatedRowsCount = 0;
 
@@ -299,21 +387,57 @@ function processAccountInvoice(payload) {
       const row = data[i];
       const invoiceIntCell = String(row[2]).trim(); // Column C: InvoiceInt
       const clientNameCell = String(row[3]).trim(); // Column D: ClientID
-      
-      if (clientNameCell === payload.clientName && invoiceIntCell === "") {
-        // Write the index number directly into Column C memory space
+
+      if (clientNameCell === clientName && invoiceIntCell === "") {
         data[i][2] = nextInvoiceInt;
         updatedRowsCount++;
       }
     }
 
-    if (updatedRowsCount === 0) {
-      return { success: false, error: "No open unbilled items detected for this client profile." };
+    if (updatedRowsCount > 0) {
+      range.setValues(data);
+      appendInvoiceListRow_(invoiceSheet, "Invoiced");
+      marked.push(String(nextInvoiceInt));
     }
-    range.setValues(data); // Flush updates back to sheet
   }
 
-  appendInvoiceListRow_(invoiceSheet);
+  if (marked.length === 0) {
+    return { success: false, error: "No draft invoices or open unbilled items detected for this client profile." };
+  }
 
-  return { success: true, invoiceId: nextInvoiceInt, invoices: fetchInvoiceRecords() };
+  const label = marked.length === 1 ? ("Invoice " + marked[0]) : ("Invoices " + marked.join(", "));
+  return {
+    success: true,
+    invoiceId: marked[marked.length - 1],
+    status: "Invoiced",
+    message: label + " set to Invoiced.",
+    invoices: fetchInvoiceRecords()
+  };
+}
+
+/**
+ * Billing desk: mark an invoice Paid, Unpaid, or Bad debt (InvoiceList column I).
+ */
+function updateInvoiceStatus(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
+
+  const invoiceId = String((payload && payload.invoiceId) || "").trim();
+  const status = String((payload && payload.status) || "").trim();
+  const allowed = { "Paid": true, "Unpaid": true, "Bad debt": true };
+  if (!invoiceId) return { success: false, error: "Choose an invoice." };
+  if (!allowed[status]) return { success: false, error: "Choose Paid, Unpaid, or Bad debt." };
+
+  const row = findInvoiceListRow_(invoiceSheet, invoiceId);
+  if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
+
+  invoiceSheet.getRange(row, 9).setValue(status); // Column I: Invoice Status
+  return {
+    success: true,
+    invoiceId: invoiceId,
+    status: status,
+    message: "Invoice " + invoiceId + " marked " + status + ".",
+    invoices: fetchInvoiceRecords()
+  };
 }
