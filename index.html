@@ -23,9 +23,178 @@
     </header>
 
     <div class="banner" x-show="loading">Communicating with secure workbook data layers...</div>
+    <div class="banner sample" x-show="dashboardNote" x-text="dashboardNote"></div>
 
     <main>
       <div x-show="feedback.text" :class="feedback.isError ? 'alert alert-error' : 'alert alert-success'" x-text="feedback.text"></div>
+
+      <!-- VIEW: DASHBOARD -->
+      <div x-show="currentTab === 'dashboard'">
+        <div x-show="dashView === 'home'">
+        <section>
+          <div class="card-title">Needs attention</div>
+          <p class="shift-note">Still to collect, overdue, and drafts are the live books, not just this period.</p>
+          <div class="grid-2">
+            <button type="button" class="metric-box alt" data-action="openList" data-id="due">
+              <span class="metric-title">Still to collect</span>
+              <span class="metric-value" x-text="openDueAmount"></span>
+              <span class="metric-sub" x-text="openDueCount"></span>
+            </button>
+            <button type="button" class="metric-box warn" data-action="openList" data-id="overdue">
+              <span class="metric-title">Overdue</span>
+              <span class="metric-value" x-text="openOverdueAmount"></span>
+              <span class="metric-sub" x-text="openOverdueCount"></span>
+            </button>
+            <button type="button" class="metric-box" data-action="openList" data-id="draft">
+              <span class="metric-title">Ready to compile</span>
+              <span class="metric-value" x-text="openDraftAmount"></span>
+              <span class="metric-sub" x-text="openDraftCount"></span>
+            </button>
+            <button type="button" class="metric-box bad" data-action="openList" data-id="bad">
+              <span class="metric-title">Bad debt</span>
+              <span class="metric-value" x-text="openBadAmount"></span>
+              <span class="metric-sub" x-text="openBadCount"></span>
+            </button>
+          </div>
+        </section>
+
+        <section>
+          <div class="card-title" x-text="activeLabel"></div>
+          <div class="grid-3">
+            <button type="button" class="seg" :class="periodMonthClass ? 'seg-on' : ''" data-action="setPeriod" data-id="month">Month</button>
+            <button type="button" class="seg" :class="periodQuarterClass ? 'seg-on' : ''" data-action="setPeriod" data-id="quarter">Quarter</button>
+            <button type="button" class="seg" :class="periodYearClass ? 'seg-on' : ''" data-action="setPeriod" data-id="year">Year</button>
+          </div>
+          <div class="grid-2">
+            <div class="metric-box">
+              <span class="metric-title">Hours worked</span>
+              <span class="metric-value" x-text="activeHours"></span>
+              <span class="metric-sub" x-text="activeShifts"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Work value</span>
+              <span class="metric-value" x-text="activeBillable"></span>
+              <span class="metric-sub" x-text="activeClients"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Average rate</span>
+              <span class="metric-value" x-text="activeAvg"></span>
+              <span class="metric-sub">Per hour worked</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Top client</span>
+              <span class="metric-value metric-value-sm" x-text="activeTop"></span>
+            </div>
+          </div>
+          <div class="grid-2">
+            <button type="button" class="metric-box" data-action="openList" data-id="period-paid">
+              <span class="metric-title">Paid</span>
+              <span class="metric-value" x-text="activePaid"></span>
+              <span class="metric-sub" x-text="activePaidCount"></span>
+            </button>
+            <button type="button" class="metric-box alt" data-action="openList" data-id="period-sent">
+              <span class="metric-title">Sent</span>
+              <span class="metric-value" x-text="activeSent"></span>
+              <span class="metric-sub" x-text="activeSentCount"></span>
+            </button>
+            <button type="button" class="metric-box warn" data-action="openList" data-id="period-due">
+              <span class="metric-title">Due</span>
+              <span class="metric-value" x-text="activeDue"></span>
+              <span class="metric-sub" x-text="activeDueCount"></span>
+            </button>
+            <button type="button" class="metric-box" data-action="openList" data-id="period-draft">
+              <span class="metric-title">Drafts</span>
+              <span class="metric-value" x-text="activeDraft"></span>
+              <span class="metric-sub" x-text="activeDraftCount"></span>
+            </button>
+            <button type="button" class="metric-box warn" data-action="openList" data-id="period-overdue">
+              <span class="metric-title">Overdue in period</span>
+              <span class="metric-value" x-text="activeOverdue"></span>
+              <span class="metric-sub" x-text="activeOverdueCount"></span>
+            </button>
+            <button type="button" class="metric-box bad" data-action="openList" data-id="period-bad">
+              <span class="metric-title">Bad debt</span>
+              <span class="metric-value" x-text="activeBad"></span>
+              <span class="metric-sub" x-text="activeBadCount"></span>
+            </button>
+          </div>
+          <p class="shift-note">Hours are shifts worked in the period. Paid, sent, due, and drafts follow the invoice date. Sent is everything that has left Draft, including invoices later paid or written off.</p>
+        </section>
+        </div>
+
+        <div x-show="dashView === 'list'">
+        <section>
+          <button type="button" class="btn-ghost" data-action="showDashHome">Back to dashboard</button>
+          <div class="card-title" x-text="listTitle"></div>
+          <p class="shift-note" x-show="listHint" x-text="listHint"></p>
+          <template x-for="inv in visibleInvoices">
+            <button type="button" class="inv-row" data-action="openInvoice" :data-id="inv.id">
+              <span class="inv-main">
+                <span class="inv-title" x-text="inv.title"></span>
+                <span class="inv-meta" x-text="inv.meta"></span>
+              </span>
+              <span class="inv-side">
+                <span class="pill" :class="inv.pillClass" x-text="inv.pill"></span>
+                <span class="inv-amt" x-text="inv.amount"></span>
+              </span>
+            </button>
+          </template>
+          <p class="shift-note" x-show="listEmpty" x-text="listEmptyLabel"></p>
+        </section>
+        </div>
+
+        <div x-show="dashView === 'detail'">
+        <section>
+          <button type="button" class="btn-ghost" data-action="showDashList">Back to list</button>
+          <div class="card-title" x-text="detailCode"></div>
+          <p class="shift-note" x-text="detailClient"></p>
+          <div class="grid-2">
+            <div class="metric-box">
+              <span class="metric-title">Status</span>
+              <span class="metric-value metric-value-sm" x-text="detailStatus"></span>
+            </div>
+            <div class="metric-box alt">
+              <span class="metric-title">Total</span>
+              <span class="metric-value" x-text="detailTotal"></span>
+              <span class="metric-sub" x-text="detailHours"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Invoice date</span>
+              <span class="metric-value metric-value-sm" x-text="detailWhen"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Payment</span>
+              <span class="metric-value metric-value-sm" x-text="detailDue"></span>
+            </div>
+          </div>
+          <p class="shift-note" x-text="detailJob"></p>
+          <div class="card-title">Shifts</div>
+          <template x-for="line in detailLines">
+            <div class="line">
+              <span x-text="line.when"></span>
+              <span x-text="line.details"></span>
+              <span class="line-amt" x-text="line.amount"></span>
+              <span class="line-sub" x-text="line.span"></span>
+              <span class="line-sub" x-text="line.hours"></span>
+            </div>
+          </template>
+          <p class="shift-note" x-show="detailLinesEmpty">No shifts are linked to this invoice yet.</p>
+          <p class="shift-note">Creates the printer-ready INV-Template page, the same as choosing this invoice in cell B1. The PDF leaves out the dropdown row. Save it to the Invoices folder on Drive, download it to email yourself, or send it from here.</p>
+          <button type="button" class="btn-alt" data-action="saveInvoicePdf">Save PDF to Drive</button>
+          <button type="button" data-action="downloadInvoicePdf">Download PDF</button>
+          <div class="form-group">
+            <label>Email the PDF</label>
+            <input type="email" x-model="detailEmail" placeholder="client@company.com">
+          </div>
+          <button type="button" class="btn-ghost" data-action="emailInvoicePdf">Email PDF</button>
+          <button type="button" class="btn-alt" x-show="detailIsDraft" data-action="compileOpenInvoice">Compile as Invoiced</button>
+          <button type="button" class="btn-paid" data-action="markDetailPaid">Mark Paid</button>
+          <button type="button" class="btn-unpaid" data-action="markDetailUnpaid">Mark Unpaid</button>
+          <button type="button" class="btn-bad" data-action="markDetailBad">Mark Bad debt</button>
+          <button type="button" class="btn-ghost" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
+        </section>
+        </div>
+      </div>
 
       <!-- VIEW 1: TIME TRACKER LOGS -->
       <div x-show="currentTab === 'tracker'">
@@ -165,9 +334,10 @@
     </main>
 
     <nav>
-      <button @click="setTrackerTab">🕒 Activity Log</button>
-      <button @click="setInvoicerTab">📄 Billing Portal</button>
-      <button @click="setBillingTab">💳 Billing Desk</button>
+      <button :class="tabDashClass ? 'nav-on' : ''" @click="setDashTab">📊 Dashboard</button>
+      <button :class="tabTrackerClass ? 'nav-on' : ''" @click="setTrackerTab">🕒 Log</button>
+      <button :class="tabInvoicerClass ? 'nav-on' : ''" @click="setInvoicerTab">📄 Compile</button>
+      <button :class="tabBillingClass ? 'nav-on' : ''" @click="setBillingTab">💳 Desk</button>
     </nav>
   </div>
 

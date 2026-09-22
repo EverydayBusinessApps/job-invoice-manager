@@ -28,6 +28,10 @@ This software, including all backend routing logic (`Code.gs`) and frontend inte
 * 📄 **Dynamic Billing Portal:** Live data synchronization loops sweep ledger rows to instantly aggregate unbilled tracking balances by account profile automatically.
 * 🔒 **Atomic Invoice Locking:** One-tap compilation groups open service lines, generates a unique document tracking reference ID, locks historical ledger rows, and appends a consolidated financial record directly into the invoicing pipeline.
 * 📦 **Zero-Overhead Distribution Architecture:** Designed for a "Bring Your Own Database (BYOD)" distribution model. The entire architecture is bound to the document context, making it trivial to monetize as a zero-maintenance digital asset wrapper.
+* 📊 **Period dashboard:** Month, quarter, and year totals for hours worked, work value, average rate, top client, and invoices that are paid, sent, due, draft, overdue, or bad debt. Still-to-collect, overdue, and drafts can be opened as lists.
+* 🖨️ **Invoice PDF:** Opening an invoice fills `INV-Template` cell B1 (the same dropdown as the sheet) and exports the printer-ready page. Save it to the Drive folder named `Invoices`, download it to attach to an email, or send it directly.
+
+After updating `Code.gs`, paste it into the bound Apps Script project and deploy a new web app version. The first PDF export asks for Drive access. The print range is `A4:G36`, so the on-sheet invoice picker is not included. Line totals on the template cover rows 20–31.
 
 ## 📊 Database Schema Requirement
 To interface with the API layout, the underlying data core must be structured across exactly three sheets matching this structural matrix:

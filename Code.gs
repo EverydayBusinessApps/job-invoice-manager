@@ -31,6 +31,14 @@ function doPost(e) {
       responseData = processAccountInvoice(requestData.payload);
     } else if (action === "updateInvoiceStatus") {
       responseData = updateInvoiceStatus(requestData.payload);
+    } else if (action === "getDashboard") {
+      responseData = fetchDashboard();
+    } else if (action === "getInvoiceDetail") {
+      responseData = fetchInvoiceDetail(requestData.payload);
+    } else if (action === "compileInvoice") {
+      responseData = compileSingleInvoice(requestData.payload);
+    } else if (action === "exportInvoicePdf") {
+      responseData = exportInvoicePdf(requestData.payload);
     } else {
       throw new Error("Invalid API action parameter mapping.");
     }
@@ -440,4 +448,620 @@ function updateInvoiceStatus(payload) {
     message: "Invoice " + invoiceId + " marked " + status + ".",
     invoices: fetchInvoiceRecords()
   };
+}
+
+/**
+ * Compile one draft: InvoiceList column I becomes Invoiced.
+ * A blank invoice date is stamped today so the period stats can place it.
+ */
+function compileSingleInvoice(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
+
+  const invoiceId = String((payload && payload.invoiceId) || "").trim();
+  if (!invoiceId) return { success: false, error: "Choose an invoice." };
+
+  const row = findInvoiceListRow_(invoiceSheet, invoiceId);
+  if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
+
+  const status = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
+  if (status !== "Draft") {
+    return { success: false, error: "Only a Draft invoice can be compiled. Invoice " + invoiceId + " is " + status + "." };
+  }
+
+  invoiceSheet.getRange(row, 9).setValue("Invoiced");
+  if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
+
+  return {
+    success: true,
+    invoiceId: invoiceId,
+    status: "Invoiced",
+    message: "Invoice " + invoiceId + " set to Invoiced. Save the PDF or download it to email.",
+    invoices: fetchInvoiceRecords()
+  };
+}
+
+function fetchDashboard() {
+  return buildDashboardReport_(SpreadsheetApp.getActiveSpreadsheet(), new Date());
+}
+
+function fetchInvoiceDetail(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const report = buildDashboardReport_(ss, new Date());
+  if (!report.success) return report;
+  const invoiceId = String((payload && payload.invoiceId) || "").trim();
+  const invoice = (report.invoices || []).filter(function (item) { return item.id === invoiceId; })[0];
+  if (!invoice) return { success: false, error: "That invoice is not on the books." };
+  invoice.lines = readInvoiceLines_(ss, invoice);
+  return { success: true, invoice: invoice };
+}
+
+function roundMoney_(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function numberOrNull_(value) {
+  if (value === "" || value == null) return null;
+  if (typeof value === "number") return isNaN(value) ? null : value;
+  const n = Number(String(value).replace(/[^0-9.-]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+function isDateValue_(value) {
+  return Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime());
+}
+
+function isoDate_(value, timezone) {
+  if (isDateValue_(value)) {
+    return Utilities.formatDate(value, timezone || "UTC", "yyyy-MM-dd");
+  }
+  const text = String(value || "").trim();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+  const dmy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (dmy) return dmy[3] + "-" + String(dmy[2]).padStart(2, "0") + "-" + String(dmy[1]).padStart(2, "0");
+  return "";
+}
+
+function serviceEndIso_(text) {
+  const matches = String(text || "").match(/\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/g);
+  if (!matches || !matches.length) return "";
+  return isoDate_(matches[matches.length - 1], "UTC");
+}
+
+function addDaysIso_(iso, days) {
+  if (!iso) return "";
+  const parts = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + (Number(days) || 0)));
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dt.getUTCDate()).padStart(2, "0");
+  return y + "-" + m + "-" + d;
+}
+
+function daysBetweenIso_(startIso, endIso) {
+  if (!startIso || !endIso) return 0;
+  const a = startIso.split("-").map(Number);
+  const b = endIso.split("-").map(Number);
+  const ms = Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2]);
+  return Math.round(ms / 86400000);
+}
+
+function inIsoRange_(iso, start, end) {
+  return !!(iso && start && end && iso >= start && iso <= end);
+}
+
+function invoiceKind_(status) {
+  const label = displayStatus_(status);
+  if (label === "Paid") return "paid";
+  if (label === "Bad debt") return "bad";
+  if (label === "Draft") return "draft";
+  return "due";
+}
+
+function canonicalInvoiceCode_(rawId, timeCodeByInt) {
+  const text = String(rawId || "").trim();
+  if (/^INV-/i.test(text)) return text;
+  if (timeCodeByInt && timeCodeByInt[text]) return timeCodeByInt[text];
+  const n = Number(text);
+  if (text && String(n) === text && n > 0) {
+    const whole = Math.trunc(n);
+    const padded = whole < 1000 ? String(whole).padStart(3, "0") : String(whole);
+    return "INV-JR26-" + padded;
+  }
+  return text;
+}
+
+function invoicePrintCode_(ss, invoiceId) {
+  const text = String(invoiceId || "").trim();
+  if (/^INV-/i.test(text)) return text;
+  const timeCodeByInt = {};
+  const timeSheet = ss.getSheetByName("Time&Attendance");
+  if (timeSheet && timeSheet.getLastRow() >= 2) {
+    const data = timeSheet.getRange(2, 2, timeSheet.getLastRow() - 1, 2).getValues();
+    for (let i = 0; i < data.length; i++) {
+      const code = String(data[i][0] || "").trim();
+      const intId = String(data[i][1] || "").trim();
+      if (code && intId && !timeCodeByInt[intId]) timeCodeByInt[intId] = code;
+    }
+  }
+  return canonicalInvoiceCode_(text, timeCodeByInt);
+}
+
+function lastDayOfMonth_(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function periodWindowFromIso_(iso, key) {
+  const year = Number(iso.slice(0, 4));
+  const month = Number(iso.slice(5, 7));
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  if (key === "month") {
+    const last = lastDayOfMonth_(year, month);
+    return {
+      key: "month",
+      label: names[month - 1] + " " + year,
+      start: iso.slice(0, 7) + "-01",
+      end: iso.slice(0, 7) + "-" + String(last).padStart(2, "0")
+    };
+  }
+  if (key === "quarter") {
+    const quarter = Math.floor((month - 1) / 3);
+    const startMonth = quarter * 3 + 1;
+    const endMonth = startMonth + 2;
+    const last = lastDayOfMonth_(year, endMonth);
+    const pad = function (n) { return String(n).padStart(2, "0"); };
+    return {
+      key: "quarter",
+      label: "Q" + (quarter + 1) + " " + year,
+      start: year + "-" + pad(startMonth) + "-01",
+      end: year + "-" + pad(endMonth) + "-" + pad(last)
+    };
+  }
+  return { key: "year", label: String(year), start: year + "-01-01", end: year + "-12-31" };
+}
+
+function blankPeriod_(window) {
+  return {
+    key: window.key,
+    label: window.label,
+    start: window.start,
+    end: window.end,
+    hours: 0,
+    shifts: 0,
+    clients: 0,
+    billable: 0,
+    avgRate: 0,
+    topClient: "",
+    topClientHours: 0,
+    paid: 0,
+    paidCount: 0,
+    sent: 0,
+    sentCount: 0,
+    due: 0,
+    dueCount: 0,
+    draft: 0,
+    draftCount: 0,
+    overdue: 0,
+    overdueCount: 0,
+    badDebt: 0,
+    badDebtCount: 0
+  };
+}
+
+function readClientDirectory_(ss) {
+  const map = {};
+  const sheet = ss.getSheetByName("ClientRecords");
+  if (!sheet || sheet.getLastRow() < 2) return map;
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();
+  for (let i = 0; i < data.length; i++) {
+    const name = String(data[i][0] || "").trim();
+    if (!name) continue;
+    const terms = Number(data[i][9]);
+    map[name] = {
+      email: String(data[i][7] || "").trim(),
+      terms: terms > 0 ? terms : 0
+    };
+  }
+  return map;
+}
+
+function readTimeRows_(ss, timezone) {
+  const sheet = ss.getSheetByName("Time&Attendance");
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 12).getValues();
+  const rows = [];
+  for (let i = 0; i < data.length; i++) {
+    const client = String(data[i][3] || "").trim();
+    const date = isoDate_(data[i][4], timezone);
+    if (!client && !date) continue;
+    const hours = numberOrNull_(data[i][9]) || 0;
+    const rate = numberOrNull_(data[i][10]);
+    let charge = numberOrNull_(data[i][11]);
+    if (charge == null) charge = rate != null ? hours * rate : 0;
+    rows.push({
+      code: String(data[i][1] || "").trim(),
+      intId: String(data[i][2] || "").trim(),
+      client: client,
+      date: date,
+      details: String(data[i][5] || "").trim(),
+      start: data[i][6],
+      finish: data[i][8],
+      hours: hours,
+      rate: rate == null ? 0 : rate,
+      charge: charge || 0
+    });
+  }
+  return rows;
+}
+
+function clockLabel_(value, timezone) {
+  if (isDateValue_(value)) {
+    return Utilities.formatDate(value, timezone || "UTC", "HH:mm");
+  }
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return String(value || "").trim();
+  return String(match[1]).padStart(2, "0") + ":" + match[2];
+}
+
+function buildDashboardReport_(ss, asOfDate) {
+  const timezone = (ss.getSpreadsheetTimeZone && ss.getSpreadsheetTimeZone()) || "UTC";
+  const today = Utilities.formatDate(asOfDate || new Date(), timezone, "yyyy-MM-dd");
+  const timeSheet = ss.getSheetByName("Time&Attendance");
+  if (!timeSheet) return { success: false, error: "Missing Time&Attendance tab." };
+
+  const clients = readClientDirectory_(ss);
+  const shifts = readTimeRows_(ss, timezone);
+  const timeCodeByInt = {};
+  shifts.forEach(function (shift) {
+    if (shift.code && shift.intId && !timeCodeByInt[shift.intId]) timeCodeByInt[shift.intId] = shift.code;
+  });
+
+  const groups = {};
+  function groupFor(code) {
+    if (!groups[code]) {
+      groups[code] = { code: code, shifts: [], list: null };
+    }
+    return groups[code];
+  }
+  shifts.forEach(function (shift) {
+    const code = shift.code || canonicalInvoiceCode_(shift.intId, timeCodeByInt);
+    if (!code) return;
+    groupFor(code).shifts.push(shift);
+  });
+
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (invoiceSheet && invoiceSheet.getLastRow() >= 2) {
+    const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 9).getValues();
+    for (let i = 0; i < data.length; i++) {
+      const listId = String(data[i][0] || "").trim();
+      if (!listId) continue;
+      const code = canonicalInvoiceCode_(listId, timeCodeByInt);
+      const group = groupFor(code || listId);
+      if (group.list) continue;
+      group.list = {
+        id: listId,
+        client: String(data[i][1] || "").trim(),
+        job: String(data[i][2] || "").trim(),
+        service: String(data[i][3] || "").trim(),
+        hours: numberOrNull_(data[i][4]),
+        rate: numberOrNull_(data[i][5]),
+        total: numberOrNull_(data[i][6]),
+        date: isoDate_(data[i][7], timezone),
+        status: displayStatus_(data[i][8])
+      };
+    }
+  }
+
+  const windows = {
+    month: periodWindowFromIso_(today, "month"),
+    quarter: periodWindowFromIso_(today, "quarter"),
+    year: periodWindowFromIso_(today, "year")
+  };
+  const periods = {
+    month: blankPeriod_(windows.month),
+    quarter: blankPeriod_(windows.quarter),
+    year: blankPeriod_(windows.year)
+  };
+  const clientHours = { month: {}, quarter: {}, year: {} };
+
+  shifts.forEach(function (shift) {
+    if (!shift.date) return;
+    ["month", "quarter", "year"].forEach(function (key) {
+      if (!inIsoRange_(shift.date, windows[key].start, windows[key].end)) return;
+      const bucket = periods[key];
+      bucket.hours = roundMoney_(bucket.hours + shift.hours);
+      bucket.shifts += 1;
+      bucket.billable = roundMoney_(bucket.billable + shift.charge);
+      if (shift.client) {
+        clientHours[key][shift.client] = roundMoney_((clientHours[key][shift.client] || 0) + shift.hours);
+      }
+    });
+  });
+
+  ["month", "quarter", "year"].forEach(function (key) {
+    const names = Object.keys(clientHours[key]);
+    periods[key].clients = names.length;
+    periods[key].avgRate = periods[key].hours ? roundMoney_(periods[key].billable / periods[key].hours) : 0;
+    names.sort(function (a, b) {
+      const diff = clientHours[key][b] - clientHours[key][a];
+      return diff || a.localeCompare(b);
+    });
+    if (names.length) {
+      periods[key].topClient = names[0];
+      periods[key].topClientHours = clientHours[key][names[0]];
+    }
+  });
+
+  const invoices = [];
+  const open = { dueAmount: 0, dueCount: 0, overdueAmount: 0, overdueCount: 0, draftAmount: 0, draftCount: 0, badDebtAmount: 0, badDebtCount: 0 };
+
+  Object.keys(groups).sort().forEach(function (code) {
+    const group = groups[code];
+    const list = group.list;
+    const shiftRows = group.shifts;
+    let client = list && list.client;
+    if (!client) {
+      const named = shiftRows.filter(function (shift) { return shift.client; })[0];
+      client = named ? named.client : "";
+    }
+    const profile = clients[client] || { email: "", terms: 0 };
+    const shiftHours = shiftRows.reduce(function (sum, shift) { return sum + shift.hours; }, 0);
+    const shiftCharge = shiftRows.reduce(function (sum, shift) { return sum + shift.charge; }, 0);
+    const dates = shiftRows.map(function (shift) { return shift.date; }).filter(Boolean).sort();
+    const status = list ? list.status : "Draft";
+    const kind = invoiceKind_(status);
+    const date = (list && list.date) || (dates.length ? dates[dates.length - 1] : "");
+    const service = (list && list.service) || (dates.length ? (dates[0] === dates[dates.length - 1] ? dates[0] : dates[0] + " - " + dates[dates.length - 1]) : "");
+    const anchor = date || serviceEndIso_(service) || (dates.length ? dates[dates.length - 1] : "");
+    const dueDate = date && profile.terms ? addDaysIso_(date, profile.terms) : "";
+    const overdue = kind === "due" && !!dueDate && dueDate < today;
+    const total = list && list.total != null ? roundMoney_(list.total) : roundMoney_(shiftCharge);
+    const hours = list && list.hours != null ? roundMoney_(list.hours) : roundMoney_(shiftHours);
+    const job = (list && list.job) || (shiftRows.filter(function (shift) { return shift.details; }).map(function (shift) { return shift.details; })[0] || "");
+
+    const invoice = {
+      id: list ? list.id : code,
+      code: code,
+      clientName: client,
+      status: status,
+      kind: kind,
+      date: date,
+      dueDate: dueDate,
+      overdue: overdue,
+      daysOverdue: overdue ? daysBetweenIso_(dueDate, today) : 0,
+      hours: hours,
+      total: total,
+      rate: list && list.rate != null ? roundMoney_(list.rate) : 0,
+      servicePeriod: service,
+      jobDetails: job,
+      email: profile.email,
+      terms: profile.terms,
+      inMonth: inIsoRange_(anchor, windows.month.start, windows.month.end),
+      inQuarter: inIsoRange_(anchor, windows.quarter.start, windows.quarter.end),
+      inYear: inIsoRange_(anchor, windows.year.start, windows.year.end)
+    };
+    invoices.push(invoice);
+
+    if (kind === "due") {
+      open.dueAmount = roundMoney_(open.dueAmount + total);
+      open.dueCount += 1;
+      if (overdue) {
+        open.overdueAmount = roundMoney_(open.overdueAmount + total);
+        open.overdueCount += 1;
+      }
+    } else if (kind === "draft") {
+      open.draftAmount = roundMoney_(open.draftAmount + total);
+      open.draftCount += 1;
+    } else if (kind === "bad") {
+      open.badDebtAmount = roundMoney_(open.badDebtAmount + total);
+      open.badDebtCount += 1;
+    }
+
+    ["month", "quarter", "year"].forEach(function (key) {
+      const flag = key === "month" ? invoice.inMonth : key === "quarter" ? invoice.inQuarter : invoice.inYear;
+      if (!flag) return;
+      const bucket = periods[key];
+      if (kind !== "draft") {
+        bucket.sent = roundMoney_(bucket.sent + total);
+        bucket.sentCount += 1;
+      }
+      if (kind === "paid") {
+        bucket.paid = roundMoney_(bucket.paid + total);
+        bucket.paidCount += 1;
+      } else if (kind === "due") {
+        bucket.due = roundMoney_(bucket.due + total);
+        bucket.dueCount += 1;
+        if (overdue) {
+          bucket.overdue = roundMoney_(bucket.overdue + total);
+          bucket.overdueCount += 1;
+        }
+      } else if (kind === "draft") {
+        bucket.draft = roundMoney_(bucket.draft + total);
+        bucket.draftCount += 1;
+      } else if (kind === "bad") {
+        bucket.badDebt = roundMoney_(bucket.badDebt + total);
+        bucket.badDebtCount += 1;
+      }
+    });
+  });
+
+  invoices.sort(function (a, b) {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+    const dueCmp = String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"));
+    if (dueCmp) return dueCmp;
+    return String(a.code).localeCompare(String(b.code));
+  });
+
+  return {
+    success: true,
+    asOf: today,
+    timezone: timezone,
+    open: open,
+    periods: periods,
+    invoices: invoices
+  };
+}
+
+function readInvoiceLines_(ss, invoice) {
+  const timezone = (ss.getSpreadsheetTimeZone && ss.getSpreadsheetTimeZone()) || "UTC";
+  const shifts = readTimeRows_(ss, timezone).filter(function (shift) {
+    return shift.code === invoice.code || shift.code === invoice.id || shift.intId === invoice.id || shift.intId === invoice.code;
+  });
+  shifts.sort(function (a, b) {
+    const dateCmp = String(a.date).localeCompare(String(b.date));
+    if (dateCmp) return dateCmp;
+    return clockLabel_(a.start, timezone).localeCompare(clockLabel_(b.start, timezone));
+  });
+  return shifts.map(function (shift) {
+    return {
+      date: shift.date,
+      details: shift.details,
+      start: clockLabel_(shift.start, timezone),
+      finish: clockLabel_(shift.finish, timezone),
+      hours: roundMoney_(shift.hours),
+      rate: roundMoney_(shift.rate),
+      amount: roundMoney_(shift.charge)
+    };
+  });
+}
+
+/**
+ * Fill INV-Template!B1 (the print dropdown) and export that sheet as PDF.
+ * Rows 1–3 are the on-sheet picker, so the PDF starts at the INVOICE title.
+ * Save into the Drive folder named Invoices, or return the file for download / email.
+ */
+function exportInvoicePdf(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const invoiceId = String((payload && payload.invoiceId) || "").trim();
+  const mode = String((payload && payload.mode) || "download").toLowerCase();
+  if (!invoiceId) return { success: false, error: "Choose an invoice." };
+  if (mode !== "drive" && mode !== "download" && mode !== "email") {
+    return { success: false, error: "Choose save, download, or email." };
+  }
+
+  const code = invoicePrintCode_(ss, invoiceId);
+  const email = String((payload && payload.email) || "").trim();
+  if (mode === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { success: false, error: "Enter an email address to send the PDF." };
+  }
+
+  const sheet = ss.getSheetByName("INV-Template");
+  if (!sheet) return { success: false, error: "The workbook has no INV-Template sheet." };
+
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(20000)) {
+    return { success: false, error: "The invoice template is busy. Try again in a moment." };
+  }
+
+  const previous = sheet.getRange("B1").getValue();
+  try {
+    widenInvoiceTotals_(sheet);
+    sheet.getRange("B1").setValue(code);
+    SpreadsheetApp.flush();
+    Utilities.sleep(2000);
+
+    const timezone = ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+    const today = Utilities.formatDate(new Date(), timezone, "yyyy-MM-dd");
+    const fileName = invoicePdfName_(code, today);
+    const blob = renderInvoicePdf_(ss, sheet).setName(fileName);
+
+    if (mode === "download") {
+      return {
+        success: true,
+        mode: mode,
+        fileName: fileName,
+        pdfBase64: Utilities.base64Encode(blob.getBytes()),
+        message: fileName + " is ready to download and attach to an email."
+      };
+    }
+
+    if (mode === "email") {
+      MailApp.sendEmail({
+        to: email,
+        subject: "Invoice " + code,
+        body: "Please find invoice " + code + " attached.\n\nJR Engineering",
+        attachments: [blob]
+      });
+      return {
+        success: true,
+        mode: mode,
+        fileName: fileName,
+        message: "Emailed " + fileName + " to " + email + "."
+      };
+    }
+
+    const folder = invoicesFolder_(ss);
+    const stored = uniqueFileName_(folder, fileName);
+    blob.setName(stored);
+    const file = folder.createFile(blob);
+    return {
+      success: true,
+      mode: mode,
+      fileName: stored,
+      url: file.getUrl(),
+      message: "Saved " + stored + " to the Invoices folder on Google Drive."
+    };
+  } catch (err) {
+    return { success: false, error: "Could not create the invoice PDF. " + err };
+  } finally {
+    sheet.getRange("B1").setValue(previous);
+    SpreadsheetApp.flush();
+    lock.releaseLock();
+  }
+}
+
+function widenInvoiceTotals_(sheet) {
+  const hoursFormula = String(sheet.getRange("E32").getFormula() || "");
+  if (/E20:E24/i.test(hoursFormula)) sheet.getRange("E32").setFormula("=SUM(E20:E31)");
+  const amountFormula = String(sheet.getRange("G32").getFormula() || "");
+  if (/G20:G24/i.test(amountFormula)) sheet.getRange("G32").setFormula("=SUM(G20:G31)");
+}
+
+function renderInvoicePdf_(ss, sheet) {
+  const url = ss.getUrl().replace(/\/edit.*$/, "") + "export?format=pdf&exportFormat=pdf"
+    + "&gid=" + sheet.getSheetId()
+    + "&range=" + encodeURIComponent("A4:G36")
+    + "&size=letter&portrait=true&fitw=true"
+    + "&sheetnames=false&printtitle=false&pagenumbers=false"
+    + "&gridlines=false&fzr=false"
+    + "&horizontal_alignment=CENTER&vertical_alignment=TOP"
+    + "&top_margin=0.5&bottom_margin=0.5&left_margin=0.4&right_margin=0.4";
+  const response = UrlFetchApp.fetch(url, {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  const blob = response.getBlob();
+  const type = String(blob.getContentType() || "");
+  if (response.getResponseCode() !== 200 || (type.indexOf("pdf") === -1 && type.indexOf("octet-stream") === -1)) {
+    throw new Error("The spreadsheet export did not return a PDF. Redeploy the script and approve Drive access.");
+  }
+  return blob;
+}
+
+function invoicePdfName_(code, isoDate) {
+  const safe = String(code || "invoice").replace(/[^\w.-]+/g, "_");
+  return safe + "_" + isoDate + ".pdf";
+}
+
+function uniqueFileName_(folder, name) {
+  if (!folder.getFilesByName(name).hasNext()) return name;
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "HHmm");
+  return name.replace(/\.pdf$/i, "_" + stamp + ".pdf");
+}
+
+function invoicesFolder_(ss) {
+  const ssFile = DriveApp.getFileById(ss.getId());
+  const parents = ssFile.getParents();
+  while (parents.hasNext()) {
+    const parent = parents.next();
+    const named = parent.getFoldersByName("Invoices");
+    if (named.hasNext()) return named.next();
+  }
+  const any = DriveApp.getFoldersByName("Invoices");
+  if (any.hasNext()) return any.next();
+  const again = ssFile.getParents();
+  if (again.hasNext()) return again.next().createFolder("Invoices");
+  return DriveApp.createFolder("Invoices");
 }
