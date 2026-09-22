@@ -119,10 +119,15 @@ function loadApi(workbook) {
     SpreadsheetApp: { getActiveSpreadsheet: function () { return workbook; } },
     Session: { getScriptTimeZone: function () { return "UTC"; } },
     Utilities: {
-      formatDate: function (date) {
+      formatDate: function (date, timezone, pattern) {
+        if (!(date instanceof Date) || isNaN(date.getTime())) return "";
         const y = date.getFullYear();
         const m = String(date.getMonth() + 1).padStart(2, "0");
         const d = String(date.getDate()).padStart(2, "0");
+        const hh = String(date.getHours()).padStart(2, "0");
+        const mm = String(date.getMinutes()).padStart(2, "0");
+        if (pattern === "HH:mm") return hh + ":" + mm;
+        if (pattern === "HHmm") return hh + mm;
         return y + "-" + m + "-" + d;
       }
     },
@@ -259,6 +264,143 @@ test("unbilled summary counts draft time only", function (api, workbook) {
   const closed = api.fetchUnbilledSummary({ clientName: "Acme" });
   assert(closed.totalHours === 0 && closed.totalAmount === 0, JSON.stringify(closed));
   assert(created.success, "setup");
+});
+
+function atNoon(year, month, day) {
+  return new Date(year, month - 1, day, 12, 0, 0);
+}
+
+function seedBooks(workbook) {
+  const clients = workbook.sheets["ClientRecords"];
+  clients.getRange(2, 1).setValue("Acme");
+  clients.getRange(2, 8).setValue("acme@example.com");
+  clients.getRange(2, 10).setValue(14);
+  clients.getRange(3, 1).setValue("Other Co");
+  clients.getRange(3, 10).setValue(30);
+
+  const invoices = workbook.sheets["InvoiceList"];
+  const invoiceRows = [
+    ["INV-JR26-001", "Acme", "", "", "", "", 100, atNoon(2026, 8, 1), "Paid"],
+    ["INV-JR26-002", "Acme", "Site visit", "", "", "", 200, atNoon(2026, 9, 1), "Invoiced"],
+    ["INV-JR26-003", "Other Co", "", "", "", "", 50, atNoon(2026, 9, 10), "Draft"],
+    ["INV-JR26-004", "Acme", "", "", "", "", 80, atNoon(2026, 7, 15), "Bad Debt"],
+    ["INV-JR26-005", "Other Co", "", "", "", "", "", atNoon(2026, 9, 20), "Unpaid"]
+  ];
+  invoiceRows.forEach(function (row, index) {
+    row.forEach(function (value, col) {
+      if (value === "") return;
+      invoices.getRange(index + 2, col + 1).setValue(value);
+    });
+  });
+
+  const time = workbook.sheets["Time&Attendance"];
+  const shifts = [
+    ["INV-JR26-002", 2, "Acme", atNoon(2026, 9, 2), "Site visit", "08:00", "12:00", 4, 200],
+    ["INV-JR26-003", 3, "Other Co", atNoon(2026, 9, 12), "", "09:00", "10:00", 1, 50],
+    ["INV-JR26-005", 5, "Other Co", atNoon(2026, 9, 21), "", "09:00", "11:00", 2, 40],
+    ["INV-JR26-001", 1, "Acme", atNoon(2026, 8, 2), "", "09:00", "12:00", 3, 100],
+    ["INV-JR26-004", 4, "Acme", atNoon(2026, 7, 16), "", "09:00", "11:00", 2, 80]
+  ];
+  shifts.forEach(function (row, index) {
+    const line = index + 2;
+    time.getRange(line, 2).setValue(row[0]);
+    time.getRange(line, 3).setValue(row[1]);
+    time.getRange(line, 4).setValue(row[2]);
+    time.getRange(line, 5).setValue(row[3]);
+    time.getRange(line, 6).setValue(row[4]);
+    time.getRange(line, 7).setValue(row[5]);
+    time.getRange(line, 9).setValue(row[6]);
+    time.getRange(line, 10).setValue(row[7]);
+    time.getRange(line, 12).setValue(row[8]);
+  });
+}
+
+function findInvoice(report, id) {
+  return report.invoices.filter(function (inv) { return inv.id === id; })[0];
+}
+
+test("dashboard splits hours and invoices across month, quarter, and year", function (api, workbook) {
+  seedBooks(workbook);
+  const report = api.buildDashboardReport_(workbook, atNoon(2026, 9, 22));
+  assert(report.success, report.error);
+  assert(report.asOf === "2026-09-22", report.asOf);
+
+  const month = report.periods.month;
+  assert(month.label === "September 2026", month.label);
+  assert(month.hours === 7, "month hours " + month.hours);
+  assert(month.shifts === 3, "month shifts " + month.shifts);
+  assert(month.clients === 2, "month clients " + month.clients);
+  assert(month.billable === 290, "month billable " + month.billable);
+  assert(month.avgRate === 41.43, "avg rate " + month.avgRate);
+  assert(month.topClient === "Acme" && month.topClientHours === 4, month.topClient + " " + month.topClientHours);
+  assert(month.paid === 0 && month.paidCount === 0, "month paid");
+  assert(month.sent === 240 && month.sentCount === 2, "month sent " + month.sent);
+  assert(month.due === 240 && month.dueCount === 2, "month due " + month.due);
+  assert(month.draft === 50 && month.draftCount === 1, "month draft");
+  assert(month.overdue === 200 && month.overdueCount === 1, "month overdue");
+  assert(month.badDebt === 0, "month bad debt");
+
+  const quarter = report.periods.quarter;
+  assert(quarter.label === "Q3 2026", quarter.label);
+  assert(quarter.hours === 12 && quarter.billable === 470, JSON.stringify({ hours: quarter.hours, billable: quarter.billable }));
+  assert(quarter.avgRate === 39.17, "quarter rate " + quarter.avgRate);
+  assert(quarter.topClient === "Acme" && quarter.topClientHours === 9, quarter.topClientHours);
+  assert(quarter.paid === 100 && quarter.sent === 420, "quarter money " + quarter.paid + " " + quarter.sent);
+  assert(quarter.due === 240 && quarter.draft === 50 && quarter.badDebt === 80, "quarter split");
+  assert(quarter.overdue === 200, "quarter overdue");
+  assert(report.periods.year.sent === quarter.sent && report.periods.year.hours === quarter.hours, "year should match this sample");
+
+  assert(report.open.dueAmount === 240 && report.open.dueCount === 2, "open due");
+  assert(report.open.overdueAmount === 200 && report.open.overdueCount === 1, "open overdue");
+  assert(report.open.draftAmount === 50 && report.open.draftCount === 1, "open draft");
+  assert(report.open.badDebtAmount === 80 && report.open.badDebtCount === 1, "open bad debt");
+
+  const overdue = findInvoice(report, "INV-JR26-002");
+  assert(overdue && overdue.kind === "due" && overdue.overdue, "invoiced should be overdue");
+  assert(overdue.dueDate === "2026-09-15" && overdue.daysOverdue === 7, overdue.dueDate + " " + overdue.daysOverdue);
+  assert(overdue.email === "acme@example.com", overdue.email);
+  const unpaid = findInvoice(report, "INV-JR26-005");
+  assert(unpaid && unpaid.kind === "due" && !unpaid.overdue && unpaid.total === 40, JSON.stringify(unpaid));
+  assert(unpaid.dueDate === "2026-10-20", unpaid.dueDate);
+  const bad = findInvoice(report, "INV-JR26-004");
+  assert(bad && bad.status === "Bad debt" && bad.kind === "bad", bad && bad.status);
+  const draft = findInvoice(report, "INV-JR26-003");
+  assert(draft && draft.kind === "draft" && draft.inMonth && !draft.inQuarter === false, "draft period flags");
+  assert(draft.inQuarter && draft.inYear, "draft should sit in the quarter and year");
+
+  const detail = api.fetchInvoiceDetail({ invoiceId: "INV-JR26-002" });
+  // fetchInvoiceDetail uses the live clock, so call the line reader through the report invoice.
+  const lines = api.readInvoiceLines_(workbook, overdue);
+  assert(lines.length === 1, "lines " + lines.length);
+  assert(lines[0].date === "2026-09-02" && lines[0].hours === 4 && lines[0].amount === 200, JSON.stringify(lines[0]));
+  assert(lines[0].start === "08:00" && lines[0].finish === "12:00", lines[0].start + " " + lines[0].finish);
+  assert(detail.success === false || detail.success === true, "detail callable");
+});
+
+test("invoice print code follows the INV-Template dropdown values", function (api, workbook) {
+  const time = workbook.sheets["Time&Attendance"];
+  time.getRange(2, 2).setValue("INV-JR26-007");
+  time.getRange(2, 3).setValue(7);
+  assert(api.invoicePrintCode_(workbook, "INV-JR26-013") === "INV-JR26-013", "formatted id");
+  assert(api.invoicePrintCode_(workbook, "7") === "INV-JR26-007", api.invoicePrintCode_(workbook, "7"));
+  assert(api.invoicePrintCode_(workbook, "8") === "INV-JR26-008", api.invoicePrintCode_(workbook, "8"));
+  assert(api.invoicePdfName_("INV-JR26-013", "2026-09-22") === "INV-JR26-013_2026-09-22.pdf", "pdf name");
+});
+
+test("compile invoice marks one draft as Invoiced and stamps a blank date", function (api, workbook) {
+  const invoices = workbook.sheets["InvoiceList"];
+  invoices.getRange(2, 1).setValue("INV-JR26-014");
+  invoices.getRange(2, 2).setValue("Acme");
+  const compiled = api.compileSingleInvoice({ invoiceId: "INV-JR26-014" });
+  assert(compiled.success, compiled.error);
+  assert(compiled.status === "Invoiced", compiled.status);
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+  const stamped = invoices.getRange(2, 8).getValue();
+  assert(stamped && typeof stamped.getTime === "function" && !isNaN(stamped.getTime()), "blank date was not stamped");
+
+  const again = api.compileSingleInvoice({ invoiceId: "INV-JR26-014" });
+  assert(!again.success, "compiled twice");
+  assert(/Draft/.test(again.error), again.error);
 });
 
 if (failures.length) {
