@@ -828,15 +828,18 @@ window.Alpine.data('appState', () => ({
     this.listHint = hints[kind] || "";
     this.dashView = "list";
     this.driveUrl = "";
+    this.clearFeedback();
     this.syncVisibleInvoices();
   },
   showDashHome() {
     this.dashView = "home";
     this.driveUrl = "";
+    this.clearFeedback();
   },
   showDashList() {
     this.dashView = "list";
     this.driveUrl = "";
+    this.clearFeedback();
     this.syncVisibleInvoices();
   },
   fillDetail(row, lines, keepEmail) {
