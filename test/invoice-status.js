@@ -211,6 +211,14 @@ function loadApi(workbook) {
       },
       sendEmail: function () { context.mailTouches += 1; }
     },
+    ScriptApp: {
+      AuthMode: { FULL: "FULL" },
+      getAuthorizationInfo: function () {
+        return {
+          getAuthorizationUrl: function () { return "https://accounts.google.com/o/oauth2/auth?everydaywork=1"; }
+        };
+      }
+    },
     Session: { getScriptTimeZone: function () { return "UTC"; } },
     Utilities: {
       formatDate: function (date, timezone, pattern) {
@@ -613,13 +621,31 @@ test("a failed pdf export restores the template view", function (api, workbook) 
 
 test("drive and email permission errors tell Jane how to authorize", function (api) {
   const drive = api.invoicePdfError_(new Error("You do not have permission to call DriveApp.getFileById"), "drive");
-  assert(/authorizeEverydayWork/.test(drive), drive);
+  assert(/New deployment/.test(drive), drive);
   const email = api.invoicePdfError_(new Error("Specified permissions are not sufficient for MailApp"), "email");
-  assert(/authorizeEverydayWork/.test(email), email);
+  assert(/Allow email sending/.test(email) && /authorizeEverydayWork/.test(email), email);
   const download = api.invoicePdfError_(new Error("You do not have permission to call UrlFetchApp.fetch"), "download");
   assert(!/authorizeEverydayWork/.test(download), download);
+  const failure = api.pdfPermissionResult_(new Error("You do not have permission to call MailApp.sendEmail"), "email", null);
+  assert(failure.authUrl.indexOf("https://accounts.google.com/") === 0, failure.authUrl);
+  assert(!api.pdfPermissionResult_(new Error("boom"), "download", null).authUrl, "download offered an allow link");
   api.authorizeEverydayWork();
   assert(api.driveTouches === 1 && api.mailTouches === 1, "authorize did not touch Drive and Gmail");
+});
+
+test("email without mail permission still returns the invoice PDF and an allow link", function (api, workbook) {
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  api.MailApp.sendEmail = function () {
+    throw new Error("You do not have permission to call MailApp.sendEmail. Required permissions: https://www.googleapis.com/auth/script.send_mail");
+  };
+  const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "email", email: "accounts@example.com" });
+  assert(!failed.success, "mail failure was treated as success");
+  assert(/script\.send_mail/.test(failed.error), failed.error);
+  assert(failed.authUrl.indexOf("https://accounts.google.com/") === 0, failed.authUrl);
+  assert(failed.pdfBase64 === Buffer.from([37, 80, 68, 70]).toString("base64"), "pdf bytes missing");
+  assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet stayed hidden");
+  assert(!template.isRowHiddenByUser(1), "picker rows stayed hidden");
 });
 
 if (failures.length) {
