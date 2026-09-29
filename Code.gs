@@ -1180,20 +1180,27 @@ function renderInvoicePdf_(ss, sheet) {
 function invoiceLogo_(sheet) {
   try {
     if (!sheet.getImages) return null;
-    const images = sheet.getImages();
-    if (!images || !images.length) return null;
-    const blob = images[0].getBlob();
+    const images = sheet.getImages() || [];
+    for (let i = 0; i < images.length; i++) {
+      const logo = invoiceImageLogo_(images[i]);
+      if (logo) return logo;
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function invoiceImageLogo_(image) {
+  try {
+    if (!image || !image.getBlob) return null;
+    const blob = image.getBlob();
     if (!blob) return null;
-    const bytes = pdfByteList_(blob.getBytes());
-    const direct = logoFromBytes_(bytes);
+    const direct = logoFromBytes_(pdfByteList_(blob.getBytes()));
     if (direct) return direct;
     if (!blob.getAs) return null;
-    try {
-      const jpeg = blob.getAs("image/jpeg");
-      return logoFromBytes_(pdfByteList_(jpeg.getBytes()));
-    } catch (err) {
-      return null;
-    }
+    const jpeg = blob.getAs("image/jpeg");
+    return logoFromBytes_(pdfByteList_(jpeg.getBytes()));
   } catch (err) {
     return null;
   }
@@ -1289,11 +1296,14 @@ function buildInvoicePdf_(rows, logo) {
   fill(50.1, 385.7, 188.2, 30.9, 0.851, 0.851, 0.851);
   fill(238.3, 385.7, 323.9, 30.9, 0.8, 0.8, 0.8);
   if (logo && logo.bytes && logo.width && logo.height) {
-    const fit = Math.min(56 / logo.width, 57 / logo.height);
+    const maxW = 74;
+    const maxH = 56;
+    const fit = Math.min(maxW / logo.width, maxH / logo.height);
     const dw = Math.max(1, logo.width * fit);
     const dh = Math.max(1, logo.height * fit);
-    const y = 792 - (103 + dh);
-    commands.push("q " + round1(dw) + " 0 0 " + round1(dh) + " 59.5 " + round1(y) + " cm /Im1 Do Q");
+    const top = 108 + (maxH - dh) / 2;
+    const y = 792 - (top + dh);
+    commands.push("q " + round1(dw) + " 0 0 " + round1(dh) + " 52 " + round1(y) + " cm /Im1 Do Q");
   }
   stroke(50.3, 53.8, 511.9, 362.8, 0.5);
   hline(50.1, 562.2, 90.1, 0.5);
@@ -1317,16 +1327,42 @@ function buildInvoicePdf_(rows, logo) {
     const table = sheetRow >= 19 && sheetRow <= 32;
     const payment = sheetRow >= 33;
     const header = sheetRow === 19;
+    if (payment) {
+      let label = "";
+      let value = "";
+      let onlyCol = -1;
+      for (let c = 0; c < 7; c++) {
+        const text = cells[c];
+        if (!text || text === label || text === value) continue;
+        if (!label) {
+          label = text;
+          onlyCol = c;
+        } else {
+          value = text;
+          onlyCol = c;
+        }
+      }
+      const size = 6.2;
+      if (value) {
+        const labelWidth = draw(label, 52, y, size, false, "0 0 0");
+        const valueWidth = pdfTextWidth_(value, size);
+        let valueX = 560 - valueWidth;
+        const minX = 52 + labelWidth + 10;
+        if (valueX < minX) valueX = minX;
+        draw(value, valueX, y, size, false, "0 0 0");
+      } else if (label && onlyCol >= 2) {
+        drawRight(label, 560, y, size, false);
+      } else if (label) {
+        draw(label, 52, y, size, false, "0 0 0");
+      }
+      continue;
+    }
     for (let c = 0; c < 7; c++) {
       if (!cells[c]) continue;
       const size = table ? (header ? 7 : 6.2) : (c === 1 && !payment ? 7.5 : 6.2);
       const bold = header || (!table && !payment && c === 5 && /^(invoice id|invoice date|service period|bill to)$/i.test(cells[c])) || (!table && !payment && c === 1 && !namedCompany);
       if (!table && !payment && c === 1 && !namedCompany) namedCompany = true;
       const link = /^www\.|^https?:/i.test(cells[c]);
-      if (payment && c >= 2) {
-        drawRight(cells[c], 560, y, size, false);
-        continue;
-      }
       if (table && c >= 4) {
         const edge = c === 4 ? 411 : (c === 5 ? 482 : 560);
         drawRight(cells[c], edge, y, size, bold);
@@ -1613,7 +1649,8 @@ function pdfInflateStored_(d) {
   return 0;
 }
 function pdfInflate_(source, size) {
-  var dest = new Uint8Array(size);
+  var dest = [];
+  if (size) dest.length = size;
   var d = new PdfInf_(source, dest);
   var bfinal, btype, res;
   do {
@@ -1668,7 +1705,7 @@ function pngLogo_(bytes) {
     }
     const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
     if (bitDepth !== 8 || !channels || !width || !height) return null;
-    const inflated = pdfInflate_(idat.slice(2));
+    const inflated = pdfInflate_(idat.slice(2), height * (1 + width * channels));
     const stride = width * channels;
     const rgb = [];
     let i = 0;
@@ -1718,10 +1755,46 @@ function pngLogo_(bytes) {
         }
       }
     }
-    return pdfShrinkRgb_(rgb, width, height, 160);
+    const trimmed = pdfTrimRgb_(rgb, width, height);
+    return pdfShrinkRgb_(trimmed.rgb, trimmed.width, trimmed.height, 160);
   } catch (err) {
     return null;
   }
+}
+
+function pdfTrimRgb_(rgb, width, height) {
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 3;
+      if (rgb[i] < 248 || rgb[i + 1] < 248 || rgb[i + 2] < 248) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < minX) return { rgb: rgb, width: width, height: height };
+  const pad = 1;
+  minX = Math.max(0, minX - pad);
+  minY = Math.max(0, minY - pad);
+  maxX = Math.min(width - 1, maxX + pad);
+  maxY = Math.min(height - 1, maxY + pad);
+  const nw = maxX - minX + 1;
+  const nh = maxY - minY + 1;
+  if (nw === width && nh === height) return { rgb: rgb, width: width, height: height };
+  const out = [];
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const i = (y * width + x) * 3;
+      out.push(rgb[i], rgb[i + 1], rgb[i + 2]);
+    }
+  }
+  return { rgb: out, width: nw, height: nh };
 }
 
 function pdfShrinkRgb_(rgb, width, height, maxEdge) {
