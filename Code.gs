@@ -995,13 +995,14 @@ function readInvoiceLines_(ss, invoice) {
 /**
  * Run once from the Apps Script editor to approve Drive and Gmail.
  * Download does not need this. Save to Drive and Email do.
- * Click Run, choose Allow, then deploy a new web app version.
+ * Click Run, choose Allow for Gmail sending, then deploy a new web app version.
+ * Invoice email is sent with GmailApp so Gmail can sign it for your address.
  */
 function authorizeEverydayWork() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const fileName = DriveApp.getFileById(ss.getId()).getName();
   const remaining = MailApp.getRemainingDailyQuota();
-  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining);
+  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail.");
 }
 
 /**
@@ -1056,14 +1057,7 @@ function exportInvoicePdf(payload) {
 
     if (mode === "email") {
       const copyTo = recordsEmail_(ss, email);
-      const mail = {
-        to: email,
-        subject: "Invoice " + code,
-        body: "Please find invoice " + code + " attached.\n\nEverydayWork",
-        attachments: [blob]
-      };
-      if (copyTo) mail.bcc = copyTo;
-      MailApp.sendEmail(mail);
+      sendInvoiceEmail_(ss, email, code, blob, copyTo);
       return {
         success: true,
         mode: mode,
@@ -1101,21 +1095,50 @@ function recordsEmail_(ss, clientEmail) {
   } catch (err) {
     found = "";
   }
-  if (!found) {
-    const config = ss.getSheetByName("Config");
-    if (config) {
-      const rows = config.getRange("A1:B60").getDisplayValues();
-      for (let i = 0; i < rows.length; i++) {
-        if (/business email/i.test(String(rows[i][0] || ""))) {
-          found = String(rows[i][1] || "").trim();
-          break;
-        }
-      }
-    }
-  }
+  if (!found) found = businessProfile_(ss).email;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(found)) return "";
   if (found.toLowerCase() === String(clientEmail || "").trim().toLowerCase()) return "";
   return found;
+}
+
+function businessProfile_(ss) {
+  const profile = { name: "", email: "" };
+  const config = ss.getSheetByName("Config");
+  if (!config) return profile;
+  const rows = config.getRange("A1:B60").getDisplayValues();
+  for (let i = 0; i < rows.length; i++) {
+    const key = String(rows[i][0] || "");
+    const value = String(rows[i][1] || "").trim();
+    if (/business name/i.test(key) && value) profile.name = value;
+    if (/business email/i.test(key) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) profile.email = value;
+  }
+  return profile;
+}
+
+/**
+ * Send through Gmail so the message is signed for the account that runs
+ * EverydayWork. MailApp leaves the sender unverified, and Gmail files that as spam.
+ */
+function sendInvoiceEmail_(ss, email, code, blob, copyTo) {
+  const profile = businessProfile_(ss);
+  const sender = profile.name || "EverydayWork";
+  const plain = "Please find invoice " + code + " attached.\n\n" + sender;
+  const html = "<p>Please find invoice " + pdfEscapeHtml_(code) + " attached.</p><p>" + pdfEscapeHtml_(sender) + "</p>";
+  const options = {
+    attachments: [blob],
+    name: sender,
+    htmlBody: html
+  };
+  if (copyTo) options.bcc = copyTo;
+  if (profile.email && profile.email.toLowerCase() !== String(email || "").toLowerCase()) options.replyTo = profile.email;
+  GmailApp.sendEmail(email, "Invoice " + code, plain, options);
+}
+
+function pdfEscapeHtml_(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function widenInvoiceTotals_(sheet) {
@@ -1128,7 +1151,11 @@ function widenInvoiceTotals_(sheet) {
 function invoicePdfError_(err, mode) {
   const text = String(err && err.message ? err.message : err);
   const denied = /permission|authorization/i.test(text);
-  if (denied && (mode === "drive" || mode === "email")) {
+  if (denied && mode === "email") {
+    return "Could not create the invoice PDF. " + text
+      + " In the Apps Script editor, select authorizeEverydayWork, click Run, and choose Allow for Gmail sending. Then deploy a new web app version. Invoice email is sent through Gmail so your address can be verified.";
+  }
+  if (denied && mode === "drive") {
     return "Could not create the invoice PDF. " + text
       + " In the Apps Script editor, select authorizeEverydayWork, click Run, choose Allow, then deploy a new web app version.";
   }

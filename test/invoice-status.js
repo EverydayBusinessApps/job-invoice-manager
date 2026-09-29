@@ -230,9 +230,21 @@ function loadApi(workbook) {
         context.mailTouches += 1;
         return 100;
       },
-      sendEmail: function (message) {
+      sendEmail: function () { throw new Error("MailApp.sendEmail leaves the sender unverified"); }
+    },
+    GmailApp: {
+      sendEmail: function (to, subject, body, options) {
         context.mailTouches += 1;
-        context.lastEmail = message;
+        context.lastEmail = {
+          to: to,
+          subject: subject,
+          body: body,
+          bcc: options && options.bcc,
+          attachments: options && options.attachments,
+          name: options && options.name,
+          htmlBody: options && options.htmlBody,
+          replyTo: options && options.replyTo
+        };
       }
     },
     Session: {
@@ -690,12 +702,21 @@ test("email sends the invoice to the client and a copy to us", function (api, wo
   template.getRange("G19").setValue("Amount");
   const config = createSheet("Config");
   workbook.sheets.Config = config;
+  config.getRange("A5").setValue("Business Name");
+  config.getRange("B5").setValue("Everyday Business");
   config.getRange("A6").setValue("Business Email");
   config.getRange("B6").setValue("records@everydaybusiness.ie");
+  const source = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert(/GmailApp\.sendEmail/.test(source), "invoice email still bypasses Gmail");
+  assert(!/MailApp\.sendEmail/.test(source), "invoice email still uses MailApp");
   const sent = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "email", email: "client@bakewell.test" });
   assert(sent.success, sent.error);
   assert(api.lastEmail && api.lastEmail.to === "client@bakewell.test", JSON.stringify(api.lastEmail));
   assert(api.lastEmail.bcc === "jane@everydaybusiness.ie", api.lastEmail.bcc);
+  assert(api.lastEmail.name === "Everyday Business", api.lastEmail.name);
+  assert(api.lastEmail.replyTo === "records@everydaybusiness.ie", api.lastEmail.replyTo);
+  assert(api.lastEmail.htmlBody && api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+  assert(api.lastEmail.subject === "Invoice INV-JR26-011", api.lastEmail.subject);
   assert(/jane@everydaybusiness.ie/.test(sent.message), sent.message);
   assert(api.lastEmail.attachments && api.lastEmail.attachments.length === 1, "missing attachment");
 
