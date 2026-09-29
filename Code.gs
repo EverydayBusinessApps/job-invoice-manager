@@ -31,6 +31,8 @@ function doPost(e) {
       responseData = processAccountInvoice(requestData.payload);
     } else if (action === "updateInvoiceStatus") {
       responseData = updateInvoiceStatus(requestData.payload);
+    } else if (action === "getAppSnapshot") {
+      responseData = fetchAppSnapshot();
     } else if (action === "getDashboard") {
       responseData = fetchDashboard();
     } else if (action === "getInvoiceDetail") {
@@ -305,12 +307,12 @@ function executeTimeLog(payload) {
       ? ("Overnight shift logged on new invoice " + invoiceId + ".")
       : ("Shift logged on new invoice " + invoiceId + "."));
 
-  return {
+  return attachSnapshot_(ss, {
     success: true,
     message: message,
     invoiceId: invoiceId,
     invoices: fetchInvoiceRecords()
-  };
+  });
 }
 
 /**
@@ -356,6 +358,16 @@ function fetchUnbilledSummary(payload) {
     }
   }
   return { success: true, totalHours: totalHours, totalAmount: totalAmount };
+}
+
+function attachSnapshot_(ss, result) {
+  if (!result || !result.success) return result;
+  try {
+    if (SpreadsheetApp.flush) SpreadsheetApp.flush();
+    const snapshot = buildDashboardReport_(ss, new Date());
+    if (snapshot && snapshot.success) result.snapshot = snapshot;
+  } catch (err) {}
+  return result;
 }
 
 /**
@@ -414,13 +426,13 @@ function processAccountInvoice(payload) {
   }
 
   const label = marked.length === 1 ? ("Invoice " + marked[0]) : ("Invoices " + marked.join(", "));
-  return {
+  return attachSnapshot_(ss, {
     success: true,
     invoiceId: marked[marked.length - 1],
     status: "Invoiced",
     message: label + " set to Invoiced.",
     invoices: fetchInvoiceRecords()
-  };
+  });
 }
 
 /**
@@ -441,13 +453,13 @@ function updateInvoiceStatus(payload) {
   if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
 
   invoiceSheet.getRange(row, 9).setValue(status); // Column I: Invoice Status
-  return {
+  return attachSnapshot_(ss, {
     success: true,
     invoiceId: invoiceId,
     status: status,
     message: "Invoice " + invoiceId + " marked " + status + ".",
     invoices: fetchInvoiceRecords()
-  };
+  });
 }
 
 /**
@@ -473,17 +485,21 @@ function compileSingleInvoice(payload) {
   invoiceSheet.getRange(row, 9).setValue("Invoiced");
   if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
 
-  return {
+  return attachSnapshot_(ss, {
     success: true,
     invoiceId: invoiceId,
     status: "Invoiced",
     message: "Invoice " + invoiceId + " set to Invoiced. Save the PDF or download it to email.",
     invoices: fetchInvoiceRecords()
-  };
+  });
 }
 
 function fetchDashboard() {
   return buildDashboardReport_(SpreadsheetApp.getActiveSpreadsheet(), new Date());
+}
+
+function fetchAppSnapshot() {
+  return fetchDashboard();
 }
 
 function fetchInvoiceDetail(payload) {
@@ -493,7 +509,7 @@ function fetchInvoiceDetail(payload) {
   const invoiceId = String((payload && payload.invoiceId) || "").trim();
   const invoice = (report.invoices || []).filter(function (item) { return item.id === invoiceId; })[0];
   if (!invoice) return { success: false, error: "That invoice is not on the books." };
-  invoice.lines = readInvoiceLines_(ss, invoice);
+  if (!invoice.lines) invoice.lines = readInvoiceLines_(ss, invoice);
   return { success: true, invoice: invoice };
 }
 
@@ -820,6 +836,7 @@ function buildDashboardReport_(ss, asOfDate) {
     const total = list && list.total != null ? roundMoney_(list.total) : roundMoney_(shiftCharge);
     const hours = list && list.hours != null ? roundMoney_(list.hours) : roundMoney_(shiftHours);
     const job = (list && list.job) || (shiftRows.filter(function (shift) { return shift.details; }).map(function (shift) { return shift.details; })[0] || "");
+    const lines = linesFromGroup_(shiftRows, timezone);
 
     const invoice = {
       id: list ? list.id : code,
@@ -840,7 +857,8 @@ function buildDashboardReport_(ss, asOfDate) {
       terms: profile.terms,
       inMonth: inIsoRange_(anchor, windows.month.start, windows.month.end),
       inQuarter: inIsoRange_(anchor, windows.quarter.start, windows.quarter.end),
-      inYear: inIsoRange_(anchor, windows.year.start, windows.year.end)
+      inYear: inIsoRange_(anchor, windows.year.start, windows.year.end),
+      lines: lines
     };
     invoices.push(invoice);
 
@@ -894,14 +912,61 @@ function buildDashboardReport_(ss, asOfDate) {
     return String(a.code).localeCompare(String(b.code));
   });
 
+  const unbilled = {};
+  function addUnbilled_(client, hours, amount) {
+    const name = String(client || "").trim();
+    if (!name) return;
+    if (!unbilled[name]) unbilled[name] = { totalHours: 0, totalAmount: 0 };
+    unbilled[name].totalHours = roundMoney_(unbilled[name].totalHours + (Number(hours) || 0));
+    unbilled[name].totalAmount = roundMoney_(unbilled[name].totalAmount + (Number(amount) || 0));
+  }
+  shifts.forEach(function (shift) {
+    const code = shift.code || canonicalInvoiceCode_(shift.intId, timeCodeByInt);
+    if (!code) {
+      addUnbilled_(shift.client, shift.hours, shift.charge);
+      return;
+    }
+    const group = groups[code];
+    const status = group && group.list ? group.list.status : "Draft";
+    if (!String(shift.intId || "").trim() || isDraftStatus_(status)) {
+      addUnbilled_(shift.client, shift.hours, shift.charge);
+    }
+  });
+
+  const clientList = Object.keys(clients).sort(function (a, b) { return a.localeCompare(b); }).map(function (name) {
+    return { name: name };
+  });
+
   return {
     success: true,
     asOf: today,
     timezone: timezone,
     open: open,
     periods: periods,
-    invoices: invoices
+    invoices: invoices,
+    clients: clientList,
+    unbilled: unbilled
   };
+}
+
+function linesFromGroup_(shiftRows, timezone) {
+  const rows = (shiftRows || []).slice();
+  rows.sort(function (a, b) {
+    const dateCmp = String(a.date).localeCompare(String(b.date));
+    if (dateCmp) return dateCmp;
+    return clockLabel_(a.start, timezone).localeCompare(clockLabel_(b.start, timezone));
+  });
+  return rows.map(function (shift) {
+    return {
+      date: shift.date,
+      details: shift.details,
+      start: clockLabel_(shift.start, timezone),
+      finish: clockLabel_(shift.finish, timezone),
+      hours: roundMoney_(shift.hours),
+      rate: roundMoney_(shift.rate),
+      amount: roundMoney_(shift.charge)
+    };
+  });
 }
 
 function readInvoiceLines_(ss, invoice) {

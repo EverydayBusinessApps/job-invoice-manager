@@ -265,7 +265,8 @@ function sampleDashboard() {
       row({ id: "INV-JR26-003", code: "INV-JR26-003", clientName: "Other Co", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
       row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", status: "Bad debt", kind: "bad", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
-    ]
+    ],
+    unbilled: { "Other Co": { totalHours: 1, totalAmount: 50 } }
   };
 }
 
@@ -294,6 +295,7 @@ window.Alpine.data('appState', () => ({
   overnight: false,
   overnightLabel: '',
   previewMode: /(?:\?|&)preview=1(?:&|$)/.test(typeof location !== "undefined" ? location.search : ""),
+  unbilled: {},
   dashboardLive: false,
   dashboardNote: "",
   period: "month",
@@ -465,8 +467,9 @@ window.Alpine.data('appState', () => ({
     if (res && res.error) return String(res.error);
     return fallback;
   },
-  async api(actionName, payloadData = {}) {
-    this.loading = true;
+  async api(actionName, payloadData = {}, opts) {
+    const quiet = opts && opts.quiet;
+    if (!quiet) this.loading = true;
     try {
       const response = await fetch(this.apiUrl, {
         method: "POST",
@@ -474,11 +477,11 @@ window.Alpine.data('appState', () => ({
         body: JSON.stringify({ action: actionName, payload: payloadData })
       });
       const result = await response.json();
-      this.loading = false;
+      if (!quiet) this.loading = false;
       return result;
     } catch (err) {
-      this.loading = false;
-      this.setFeedback("Database transmission failure.", true);
+      if (!quiet) this.loading = false;
+      if (!quiet) this.setFeedback("Database transmission failure.", true);
       throw err;
     }
   },
@@ -490,22 +493,9 @@ window.Alpine.data('appState', () => ({
       await this.loadDashboard();
       return;
     }
-    try {
-      const res = await this.api('getInitialAppData');
-      if (res && res.success) {
-        this.clients = (Array.isArray(res.clients) ? res.clients : []).map(c => {
-          if (typeof c === 'string') return { name: c };
-          return { name: (c && (c.name || c.Name || c.clientName)) || '' };
-        }).filter(c => c.name);
-        this.invoices = this.mapInvoices(res.invoices);
-        this.refreshClientInvoices();
-      } else if (!this.previewMode) {
-        this.setFeedback(this.failMessage(res, "Cloud synchronization offline."), true);
-      }
-    } catch (err) {
-      if (!this.previewMode) this.setFeedback("Cloud synchronization offline.", true);
-    }
-    await this.loadDashboard();
+    const stored = this.storedSnapshot();
+    if (stored) this.applySnapshot(stored, true);
+    await this.refreshSnapshot({ quiet: !!stored, announce: !stored });
   },
   syncTabClasses() {
     this.tabDashClass = this.currentTab === "dashboard" ? "nav-on" : "";
@@ -517,7 +507,6 @@ window.Alpine.data('appState', () => ({
     this.currentTab = "dashboard";
     this.syncTabClasses();
     this.clearFeedback();
-    this.loadDashboard({ quiet: true });
   },
   setTrackerTab() { this.currentTab = 'tracker'; this.syncTabClasses(); this.clearFeedback(); },
   setInvoicerTab() {
@@ -572,7 +561,7 @@ window.Alpine.data('appState', () => ({
       if (result && result.success) {
         this.setFeedback(result.message || "Shift records submitted to ledger!", false);
         this.form.jobDetails = '';
-        if (result.invoices) this.invoices = this.mapInvoices(result.invoices);
+        if (!this.adoptWrite(result) && result.invoices) this.invoices = this.mapInvoices(result.invoices);
         else if (result.invoiceId) {
           const id = String(result.invoiceId);
           if (!this.invoices.some((inv) => inv.id === id)) {
@@ -597,6 +586,12 @@ window.Alpine.data('appState', () => ({
   async loadUnbilledEntries() {
     this.refreshDraftInvoices();
     if (!this.invoiceForm.clientName) { this.unbilledData = { totalHours: 0, totalAmount: 0 }; return; }
+    const local = this.unbilled && this.unbilled[this.invoiceForm.clientName];
+    if (local || this.previewMode) {
+      this.unbilledData.totalHours = local ? (Number(local.totalHours) || 0) : 0;
+      this.unbilledData.totalAmount = local ? (Number(local.totalAmount) || 0) : 0;
+      return;
+    }
     try {
       const res = await this.api('getUnbilledSummary', { clientName: this.invoiceForm.clientName });
       if (res && res.success) {
@@ -621,7 +616,10 @@ window.Alpine.data('appState', () => ({
         this.setFeedback(res.message || ("Invoice Ref: " + res.invoiceId + " set to Invoiced."), false);
         this.invoiceForm.clientName = '';
         this.unbilledData = { totalHours: 0, totalAmount: 0 };
-        if (res.invoices) {
+        if (this.adoptWrite(res)) {
+          this.refreshDraftInvoices();
+          this.syncBillingStatus();
+        } else if (res.invoices) {
           this.invoices = this.mapInvoices(res.invoices);
           this.refreshClientInvoices();
         }
@@ -646,11 +644,11 @@ window.Alpine.data('appState', () => ({
         status: status
       });
       if (res && res.success) {
-        if (res.invoices) this.invoices = this.mapInvoices(res.invoices);
+        if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
         this.refreshClientInvoices();
         this.refreshDraftInvoices();
         this.syncBillingStatus();
-        if (this.dashboardLive) await this.loadDashboard({ quiet: true });
+        if (!res.snapshot && this.dashboardLive) await this.loadDashboard({ quiet: true });
         this.setFeedback(res.message || ("Invoice " + this.billing.invoiceId + " marked " + status + "."), false);
       } else {
         this.setFeedback(this.failMessage(res, "Could not update invoice status."), true);
@@ -763,10 +761,101 @@ window.Alpine.data('appState', () => ({
     this.syncVisibleInvoices();
     if (keepView === "detail" && keepId) {
       const row = this.invoiceRows.find((item) => item.id === keepId);
-      if (row) this.fillDetail(row, this.detailLinesRaw || [], keepEmail);
+      if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], keepEmail);
       else this.dashView = "home";
     } else {
       this.dashView = keepView || "home";
+    }
+  },
+  snapshotKey() { return "everydaywork-snapshot-v1"; },
+  storedSnapshot() {
+    try {
+      if (typeof localStorage === "undefined") return null;
+      const parsed = JSON.parse(localStorage.getItem(this.snapshotKey()) || "null");
+      if (!parsed || !parsed.res || !parsed.res.success || !parsed.res.periods) return null;
+      return parsed.res;
+    } catch (err) {
+      return null;
+    }
+  },
+  rememberSnapshot(res) {
+    try {
+      if (typeof localStorage === "undefined" || !res || !res.success) return;
+      localStorage.setItem(this.snapshotKey(), JSON.stringify({ savedAt: Date.now(), res: res }));
+    } catch (err) {}
+  },
+  takeSnapshot(res) {
+    if (res && res.snapshot && res.snapshot.success && res.snapshot.periods) return res.snapshot;
+    if (res && res.success && res.periods && Array.isArray(res.invoices)) return res;
+    return null;
+  },
+  applyClientList(list) {
+    this.clients = (Array.isArray(list) ? list : []).map((c) => {
+      if (typeof c === "string") return { name: c };
+      return { name: (c && (c.name || c.Name || c.clientName)) || "" };
+    }).filter((c) => c.name);
+  },
+  applySnapshot(res, keepEmail) {
+    if (Array.isArray(res.clients) && res.clients.length) this.applyClientList(res.clients);
+    this.unbilled = res.unbilled || {};
+    this.applyDashboard(res, keepEmail);
+    if (Array.isArray(res.invoices)) {
+      this.invoices = this.mapInvoices(res.invoices);
+      this.refreshClientInvoices();
+      this.refreshDraftInvoices();
+    }
+  },
+  adoptWrite(res) {
+    const snapshot = this.takeSnapshot(res);
+    if (!snapshot) return false;
+    this.dashboardLive = true;
+    this.dashboardNote = "";
+    this.applySnapshot(snapshot, true);
+    this.rememberSnapshot(snapshot);
+    return true;
+  },
+  async refreshBooks() {
+    if (this.previewMode) return;
+    await this.refreshSnapshot({ quiet: false, announce: true });
+  },
+  async refreshSnapshot(opts) {
+    const quiet = !!(opts && opts.quiet);
+    const announce = !opts || opts.announce !== false;
+    if (this.previewMode) {
+      await this.loadDashboard();
+      return;
+    }
+    try {
+      let res = await this.api("getAppSnapshot", {}, { quiet: quiet });
+      if (res && /Invalid API action/.test(String(res.error || ""))) {
+        if (!this.clients.length) {
+          const initial = await this.api("getInitialAppData", {}, { quiet: quiet });
+          if (initial && initial.success) {
+            this.applyClientList(initial.clients);
+            this.invoices = this.mapInvoices(initial.invoices);
+            this.refreshClientInvoices();
+          }
+        }
+        res = await this.api("getDashboard", {}, { quiet: quiet });
+      }
+      const snapshot = this.takeSnapshot(res);
+      if (snapshot) {
+        this.dashboardLive = true;
+        this.dashboardNote = "";
+        this.applySnapshot(snapshot, true);
+        this.rememberSnapshot(snapshot);
+        if (announce && !quiet) this.setFeedback((this.activeLabel || "Dashboard") + " is loaded.", false);
+        return;
+      }
+      if (res && /Invalid API action/.test(String(res.error || ""))) {
+        this.dashboardLive = false;
+        this.dashboardNote = "The live script does not have the dashboard yet. Replace Code.gs in Apps Script, deploy a new version, and approve Drive access.";
+        this.setFeedback(this.dashboardNote, true);
+      } else if (!quiet) {
+        this.setFeedback(this.failMessage(res, "Could not load the dashboard."), true);
+      }
+    } catch (err) {
+      if (!quiet) this.setFeedback("Could not load the dashboard.", true);
     }
   },
   async loadDashboard(opts) {
@@ -774,7 +863,9 @@ window.Alpine.data('appState', () => ({
     if (this.previewMode) {
       this.dashboardLive = false;
       this.dashboardNote = "Sample figures for the layout. Live totals appear after Code.gs is pasted into Apps Script and deployed.";
-      this.applyDashboard(sampleDashboard(), true);
+      const sample = sampleDashboard();
+      this.unbilled = sample.unbilled || {};
+      this.applyDashboard(sample, true);
       return;
     }
     try {
@@ -873,7 +964,7 @@ window.Alpine.data('appState', () => ({
     if (!row) return;
     this.driveUrl = "";
     this.clearFeedback();
-    if (this.previewMode) {
+    if (this.previewMode || Array.isArray(row.lines)) {
       this.fillDetail(row, row.lines || []);
       return;
     }
@@ -968,12 +1059,12 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api("compileInvoice", { invoiceId: this.detailId });
       if (res && res.success) {
-        if (res.invoices) this.invoices = this.mapInvoices(res.invoices);
+        if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
         this.refreshClientInvoices();
         this.refreshDraftInvoices();
-        await this.loadDashboard({ quiet: true });
+        if (!res.snapshot) await this.loadDashboard({ quiet: true });
         const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
-        if (row) this.fillDetail(row, this.detailLinesRaw || [], true);
+        if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], true);
         this.setFeedback(res.message || "Invoice set to Invoiced.", false);
       } else {
         this.setFeedback(this.failMessage(res, "Could not compile that invoice."), true);
@@ -995,13 +1086,13 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api("updateInvoiceStatus", { invoiceId: this.detailId, status: status });
       if (res && res.success) {
-        if (res.invoices) this.invoices = this.mapInvoices(res.invoices);
+        if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
         this.refreshClientInvoices();
         this.refreshDraftInvoices();
         this.syncBillingStatus();
-        await this.loadDashboard({ quiet: true });
+        if (!res.snapshot) await this.loadDashboard({ quiet: true });
         const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
-        if (row) this.fillDetail(row, this.detailLinesRaw || [], true);
+        if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], true);
         this.setFeedback(res.message || ("Invoice marked " + status + "."), false);
       } else {
         this.setFeedback(this.failMessage(res, "Could not update invoice status."), true);
