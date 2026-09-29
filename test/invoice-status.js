@@ -48,9 +48,20 @@ function parseA1(a1) {
   if (cell) {
     return {
       startRow: Number(cell[2]),
+      endRow: Number(cell[2]),
       startCol: colToIndex(cell[1]),
       endCol: colToIndex(cell[1]),
       single: true
+    };
+  }
+  const full = String(a1).match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+  if (full) {
+    return {
+      startRow: Number(full[2]),
+      endRow: Number(full[4]),
+      startCol: colToIndex(full[1]),
+      endCol: colToIndex(full[3]),
+      single: false
     };
   }
   const match = String(a1).match(/^([A-Z]+)(\d+):([A-Z]+)$/);
@@ -76,6 +87,9 @@ function parseA1(a1) {
         if (parsed.single) {
           rows = 1;
           cols = 1;
+        } else if (parsed.endRow) {
+          rows = parsed.endRow - startRow + 1;
+          cols = parsed.endCol - startCol + 1;
         } else {
           const end = Math.max(lastRow(), startRow);
           rows = end - startRow + 1;
@@ -107,6 +121,13 @@ function parseA1(a1) {
             out.push(line);
           }
           return out;
+        },
+        getDisplayValues: function () {
+          return this.getValues().map(function (line) {
+            return line.map(function (value) {
+              return value == null ? "" : String(value);
+            });
+          });
         },
         setValues: function (values) {
           for (let r = 0; r < values.length; r++) {
@@ -514,10 +535,12 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
   assert(/Draft/.test(again.error), again.error);
 });
 
-test("invoice pdf hides other sheets and the picker without UrlFetch", function (api, workbook) {
+test("invoice pdf is INV-Template from row 2 and does not call Drive", function (api, workbook) {
   const source = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
-  assert(!/UrlFetchApp\.fetch/.test(source), "PDF export still calls UrlFetchApp.fetch");
-  assert(!/getOAuthToken/.test(source), "PDF export still asks for an OAuth token");
+  assert(!/UrlFetchApp/.test(source), "PDF export still calls UrlFetchApp");
+  assert(!/getBlob\s*\(/.test(source), "PDF export still prints the spreadsheet");
+  assert(!/hideSheet\s*\(/.test(source), "PDF export still hides sheets");
+  assert(!/moveActiveSheet\s*\(/.test(source), "PDF export still reorders tabs");
 
   const template = createSheet("INV-Template");
   const archive = createSheet("Archive");
@@ -525,90 +548,113 @@ test("invoice pdf hides other sheets and the picker without UrlFetch", function 
   workbook.sheets.Archive = archive;
   archive.hideSheet();
   template.hideRows(2, 1);
-  template.hideColumns(9, 1);
+  template.getRange("A1").setValue("Select Invoice To print");
   template.getRange("B1").setValue("OLD");
+  template.getRange("A4").setValue("INVOICE");
+  template.getRange("F6").setValue("Invoice ID");
+  template.getRange("G6").setValue("INV-JR26-013");
+  template.getRange("B7").setValue("JR Engineering");
+  template.getRange("F7").setValue("Invoice Date");
+  template.getRange("G7").setValue("28/09/2026");
+  template.getRange("F10").setValue("Bill To");
+  template.getRange("F11").setValue("Panelto Foods");
+  template.getRange("A17").setValue("Work Summary");
+  template.getRange("A19").setValue("Date");
+  template.getRange("B19").setValue("Details");
+  template.getRange("C19").setValue("Start");
+  template.getRange("D19").setValue("Finish");
+  template.getRange("E19").setValue("Total hours");
+  template.getRange("F19").setValue("Hourly Rate");
+  template.getRange("G19").setValue("Amount");
+  template.getRange("A20").setValue("Thu 17/09/26");
+  template.getRange("B20").setValue("Maintenance Cover");
+  template.getRange("C20").setValue("06:00");
+  template.getRange("D20").setValue("18:00");
+  template.getRange("E20").setValue("12.0");
+  template.getRange("F20").setValue("\u20ac45.00");
+  template.getRange("G20").setValue("\u20ac540.00");
+  template.getRange("E32").setValue("12.0");
+  template.getRange("G32").setValue("\u20ac540.00");
+  template.getRange("A35").setValue("Bank Transfers payable to:");
+  template.getRange("C35").setValue("Jonathon Reynolds");
+  template.getRange("A36").setValue("IBAN");
+  template.getRange("C36").setValue("IE89 REVO 9903 6056 2184 91");
   const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
-  assert(orderBefore[0] !== "INV-Template", "template was already the first tab");
-  assert(orderBefore.indexOf("Time&Attendance") < orderBefore.indexOf("INV-Template"), "time sheet order");
-
-  let during = null;
-  workbook.getBlob = function () {
-    during = {
-      first: workbook.getSheets()[0].getName(),
-      active: workbook.getActiveSheet().getName(),
-      timeHidden: workbook.sheets["Time&Attendance"].isSheetHidden(),
-      templateHidden: template.isSheetHidden(),
-      archiveHidden: archive.isSheetHidden(),
-      clientsHidden: workbook.sheets.ClientRecords.isSheetHidden(),
-      b1: template.getRange("B1").getValue(),
-      row1: template.isRowHiddenByUser(1),
-      row2: template.isRowHiddenByUser(2),
-      row3: template.isRowHiddenByUser(3),
-      row4: template.isRowHiddenByUser(4),
-      row36: template.isRowHiddenByUser(36),
-      row37: template.isRowHiddenByUser(37),
-      row1000: template.isRowHiddenByUser(1000),
-      col7: template.isColumnHiddenByUser(7),
-      col8: template.isColumnHiddenByUser(8),
-      col9: template.isColumnHiddenByUser(9),
-      col26: template.isColumnHiddenByUser(26)
-    };
-    return {
-      setName: function () { return this; },
-      getBytes: function () { return [37, 80, 68, 70]; },
-      getContentType: function () { return "application/pdf"; }
-    };
+  const activeBefore = workbook.getActiveSheet().getName();
+  let seenB1 = null;
+  const originalRange = template.getRange;
+  template.getRange = function (rowOrA1) {
+    const range = originalRange.apply(this, arguments);
+    if (rowOrA1 === "A2:G36") {
+      const read = range.getDisplayValues;
+      range.getDisplayValues = function () {
+        seenB1 = originalRange.call(template, "B1").getValue();
+        return read.call(range);
+      };
+    }
+    return range;
   };
+  workbook.getBlob = function () { throw new Error("getBlob should not run"); };
+  const touches = api.driveTouches;
 
   const saved = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(saved.success, saved.error);
   assert(saved.fileName === "INV-JR26-013_" + new Date().getFullYear() + "-"
     + String(new Date().getMonth() + 1).padStart(2, "0") + "-"
     + String(new Date().getDate()).padStart(2, "0") + ".pdf", saved.fileName);
-  assert(saved.pdfBase64 === Buffer.from([37, 80, 68, 70]).toString("base64"), "pdf bytes");
-  assert(during, "getBlob was not called");
-  assert(during.first === "INV-Template", "PDF first sheet was " + during.first);
-  assert(during.active === "INV-Template", "PDF active sheet was " + during.active);
-  assert(during.timeHidden, "Time&Attendance was included in the PDF");
-  assert(during.b1 === "INV-JR26-013", "B1 during export " + during.b1);
-  assert(!during.templateHidden, "template was hidden");
-  assert(during.archiveHidden, "an already hidden sheet was shown");
-  assert(during.clientsHidden, "another sheet stayed visible in the PDF");
-  assert(during.row1 && during.row2 && during.row3, "picker rows stayed visible");
-  assert(!during.row4 && !during.row36, "invoice rows were hidden");
-  assert(during.row37 && during.row1000, "rows below the invoice were printed");
-  assert(!during.col7, "column G was hidden");
-  assert(during.col8 && during.col9 && during.col26, "columns after G stayed visible");
-
+  const pdf = Buffer.from(saved.pdfBase64, "base64").toString("latin1");
+  assert(pdf.indexOf("%PDF-1.4") === 0, "pdf header");
+  assert(pdf.indexOf("%%EOF") !== -1, "pdf trailer");
+  assert(pdf.indexOf("(INVOICE)") !== -1, "missing invoice title");
+  assert(pdf.indexOf("(JR Engineering)") !== -1, "missing business name");
+  assert(pdf.indexOf("(Invoice ID)") !== -1, "missing invoice label");
+  assert(pdf.indexOf("(INV-JR26-013)") !== -1, "missing selected invoice");
+  assert(pdf.indexOf("(Panelto Foods)") !== -1, "missing bill to");
+  assert(pdf.indexOf("(Maintenance Cover)") !== -1, "missing line");
+  assert(pdf.indexOf("(Work Summary)") !== -1, "missing work summary");
+  assert(pdf.indexOf("(Bank Transfers payable to:)") !== -1, "missing payment line");
+  assert(pdf.indexOf("(IBAN)") !== -1, "missing IBAN label");
+  assert(pdf.indexOf("EUR 540.00") !== -1, "euro amount was dropped");
+  assert(pdf.indexOf("Select Invoice") === -1, "picker row was included");
+  assert(pdf.indexOf("(OLD)") === -1, "previous dropdown value was printed");
+  assert(seenB1 === "INV-JR26-013", "B1 during read " + seenB1);
   assert(template.getRange("B1").getValue() === "OLD", "B1 was not restored");
-  assert(!template.isSheetHidden(), "template stayed hidden");
+  assert(api.driveTouches === touches, "download called Drive");
   assert(archive.isSheetHidden(), "Archive was unhidden");
-  assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords stayed hidden");
-  assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet stayed hidden");
-  assert(!workbook.sheets.InvoiceList.isSheetHidden(), "invoice list stayed hidden");
-  assert(!template.isRowHiddenByUser(1) && template.isRowHiddenByUser(2) && !template.isRowHiddenByUser(3), "picker restore");
-  assert(!template.isRowHiddenByUser(37) && !template.isRowHiddenByUser(1000), "tail rows stayed hidden");
-  assert(!template.isColumnHiddenByUser(8) && template.isColumnHiddenByUser(9) && !template.isColumnHiddenByUser(26), "column restore");
-  assert(workbook.getSheets().map(function (item) { return item.getName(); }).join("|") === orderBefore.join("|"), "tab order was not restored");
-  assert(workbook.getActiveSheet().getName() === "Time&Attendance", "active tab was left on the invoice");
+  assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords was hidden");
+  assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet was hidden");
+  assert(!template.isSheetHidden(), "template was hidden");
+  assert(template.isRowHiddenByUser(2) && !template.isRowHiddenByUser(1), "template rows were changed");
+  assert(workbook.getSheets().map(function (item) { return item.getName(); }).join("|") === orderBefore.join("|"), "tab order changed");
+  assert(workbook.getActiveSheet().getName() === activeBefore, "active tab changed");
+
+  const note = api.buildInvoicePdf_([["Note (draft)"], ["\u20ac45.00"]]);
+  assert(note.indexOf("Note \\(draft\\)") !== -1, "parentheses were not escaped");
+  assert(note.indexOf("EUR 45.00") !== -1 && note.indexOf("\u20ac") === -1, "euro sign leaked into the PDF");
 });
 
-test("a failed pdf export restores the template view", function (api, workbook) {
+test("a failed pdf export restores the invoice selected in B1", function (api, workbook) {
   const template = createSheet("INV-Template");
   workbook.sheets["INV-Template"] = template;
   template.getRange("B1").setValue("KEEP");
   const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
-  workbook.getBlob = function () { throw new Error("boom"); };
+  const originalRange = template.getRange;
+  template.getRange = function (rowOrA1) {
+    if (rowOrA1 === "A2:G36") throw new Error("boom");
+    return originalRange.apply(this, arguments);
+  };
+  workbook.getBlob = function () { throw new Error("getBlob should not run"); };
   const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(!failed.success, "failure was treated as success");
   assert(/boom/.test(failed.error), failed.error);
   assert(!/authorizeEverydayWork/.test(failed.error), failed.error);
+  assert(!/DriveApp/.test(failed.error), failed.error);
   assert(template.getRange("B1").getValue() === "KEEP", "B1 changed after a failure");
-  assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords stayed hidden after failure");
-  assert(!template.isRowHiddenByUser(1) && !template.isRowHiddenByUser(37), "rows stayed hidden after failure");
-  assert(!template.isColumnHiddenByUser(8), "columns stayed hidden after failure");
+  assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords was hidden after failure");
+  assert(!template.isRowHiddenByUser(1), "rows were hidden after failure");
   assert(workbook.getSheets().map(function (item) { return item.getName(); }).join("|") === orderBefore.join("|"), "tab order changed after failure");
   assert(workbook.getActiveSheet().getName() === "Time&Attendance", "active tab changed after failure");
+  assert(api.driveTouches === 0, "a failed download called Drive");
 });
 
 test("drive and email permission errors tell Jane how to authorize", function (api) {
