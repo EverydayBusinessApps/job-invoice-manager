@@ -181,7 +181,7 @@
             </div>
           </template>
           <p class="shift-note" x-show="detailLinesEmpty">No shifts are linked to this invoice yet.</p>
-          <p class="shift-note">Creates the printer-ready INV-Template page, the same as choosing this invoice in cell B1. The PDF leaves out the dropdown row. Save it to the Invoices folder on Drive, download it to email yourself, or send it from here.</p>
+          <p class="shift-note">Writes this invoice into INV-Template cell B1, then makes the PDF from that sheet starting at row 2. Save it to the Invoices folder on Drive, download it, or send it from here.</p>
           <button type="button" class="btn-alt" data-action="saveInvoicePdf">Save PDF to Drive</button>
           <button type="button" data-action="downloadInvoicePdf">Download PDF</button>
           <div class="form-group">

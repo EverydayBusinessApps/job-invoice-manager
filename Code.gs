@@ -1017,10 +1017,9 @@ function scriptAuthUrl_() {
 }
 
 /**
- * Fill INV-Template!B1 (the print dropdown) and export that sheet as PDF.
- * Rows 1–3 are the on-sheet picker, so they are hidden along with every other
- * sheet and the unused rows and columns. The PDF uses the template's page setup.
- * Save into the Drive folder named Invoices, or return the file for download / email.
+ * Write the selected invoice into INV-Template!B1, then build the PDF from that
+ * sheet. Row 1 is the on-sheet dropdown, so the PDF starts at row 2.
+ * Download uses only the spreadsheet. Save to Drive and Email still need Drive and Gmail.
  */
 function exportInvoicePdf(payload) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1136,134 +1135,213 @@ function pdfPermissionResult_(err, mode, built) {
 }
 
 /**
- * Build a PDF of INV-Template from the spreadsheet the web app can already read.
- * getBlob() prints the first sheet, so Time & Attendance was the file Jane received.
- * The template moves to the first tab, every other sheet is hidden, and the PDF
- * bytes are read before those tabs are put back.
+ * Read INV-Template rows 2–36 after B1 has been set. Row 1 stays the dropdown.
+ * The PDF is drawn from those cells, so download does not call Drive or print
+ * whichever tab happens to be first.
  */
 function renderInvoicePdf_(ss, sheet) {
   if (sheet.getName && sheet.getName() !== "INV-Template") {
     throw new Error("The invoice PDF has to be INV-Template, not " + sheet.getName() + ".");
   }
-  const state = {
-    showedTemplate: false,
-    hiddenSheets: [],
-    picker: null,
-    tail: null,
-    columns: null,
-    originalIndex: sheet.getIndex ? sheet.getIndex() : 1,
-    previousSheet: ss.getActiveSheet ? ss.getActiveSheet() : null
-  };
-  try {
-    if (sheet.isSheetHidden()) {
-      sheet.showSheet();
-      state.showedTemplate = true;
-    }
-    const all = ss.getSheets();
-    for (let i = 0; i < all.length; i++) {
-      const other = all[i];
-      if (other.getSheetId() === sheet.getSheetId()) continue;
-      if (other.isSheetHidden()) continue;
-      other.hideSheet();
-      state.hiddenSheets.push(other);
-    }
-    state.picker = concealForPdf_(sheet, 1, 3, "row");
-    const maxRows = sheet.getMaxRows();
-    if (maxRows > 36) state.tail = concealForPdf_(sheet, 37, maxRows - 36, "row");
-    const maxCols = sheet.getMaxColumns();
-    if (maxCols > 7) state.columns = concealForPdf_(sheet, 8, maxCols - 7, "column");
-    if (sheet.activate) sheet.activate();
-    if (ss.setActiveSheet) ss.setActiveSheet(sheet);
-    if (state.originalIndex !== 1) ss.moveActiveSheet(1);
-    SpreadsheetApp.flush();
-    Utilities.sleep(1000);
-    const raw = ss.getBlob();
-    if (!raw) throw new Error("The spreadsheet did not return a PDF.");
-    const type = String((raw.getContentType && raw.getContentType()) || "");
-    if (type && type.indexOf("pdf") === -1 && type.indexOf("octet-stream") === -1) {
-      throw new Error("The spreadsheet did not return a PDF.");
-    }
-    const bytes = raw.getBytes();
-    if (!bytes || !bytes.length) throw new Error("The spreadsheet did not return a PDF.");
-    const first = ss.getSheets()[0];
-    if (!first || first.getSheetId() !== sheet.getSheetId()) {
-      throw new Error("The invoice PDF was not taken from INV-Template.");
-    }
-    return Utilities.newBlob(bytes, type || "application/pdf");
-  } finally {
-    restoreInvoicePdfView_(ss, sheet, state);
-  }
+  SpreadsheetApp.flush();
+  const values = sheet.getRange("A2:G36").getDisplayValues();
+  return Utilities.newBlob(buildInvoicePdf_(values), "application/pdf", "invoice.pdf");
 }
 
-function concealForPdf_(sheet, start, count, axis) {
-  if (count < 1) return { mode: "none" };
-  if (count > 40) {
-    if (axis === "row") sheet.hideRows(start, count);
-    else sheet.hideColumns(start, count);
-    return { mode: "bulk", start: start, count: count };
+function buildInvoicePdf_(rows) {
+  const grid = [];
+  const source = rows || [];
+  for (let r = 0; r < source.length; r++) {
+    const line = [];
+    const raw = source[r] || [];
+    for (let c = 0; c < 7; c++) line.push(pdfText_(raw[c]));
+    grid.push(line);
   }
-  return { mode: "spans", spans: hideVisibleSpan_(sheet, start, count, axis) };
-}
 
-function revealForPdf_(sheet, hidden, axis) {
-  if (!hidden || hidden.mode === "none") return;
-  if (hidden.mode === "bulk") {
-    if (axis === "row") sheet.showRows(hidden.start, hidden.count);
-    else sheet.showColumns(hidden.start, hidden.count);
-    return;
-  }
-  showSpan_(sheet, hidden.spans, axis);
-}
-
-function hideVisibleSpan_(sheet, start, count, axis) {
-  const rowAxis = axis === "row";
-  const alreadyHidden = rowAxis
-    ? function (index) { return sheet.isRowHiddenByUser(index); }
-    : function (index) { return sheet.isColumnHiddenByUser(index); };
-  const hide = rowAxis
-    ? function (index, n) { sheet.hideRows(index, n); }
-    : function (index, n) { sheet.hideColumns(index, n); };
-  const spans = [];
-  let runStart = 0;
-  for (let offset = 0; offset <= count; offset++) {
-    const atEnd = offset === count;
-    const skip = !atEnd && alreadyHidden(start + offset);
-    if (!atEnd && !skip) {
-      if (!runStart) runStart = start + offset;
-    } else if (runStart) {
-      const n = (start + offset) - runStart;
-      hide(runStart, n);
-      spans.push({ start: runStart, count: n });
-      runStart = 0;
+  let headerAt = -1;
+  for (let r = 0; r < grid.length; r++) {
+    if (/^date$/i.test(grid[r][0]) && /amount/i.test(grid[r].join(" "))) {
+      headerAt = r;
+      break;
     }
   }
-  return spans;
+
+  const commands = [];
+  let y = 750;
+  function textWidth(text, size) {
+    return String(text || "").length * size * 0.5;
+  }
+  function draw(text, x, yPos, size, bold) {
+    const shown = pdfText_(text);
+    if (!shown) return;
+    commands.push("BT");
+    commands.push("/" + (bold ? "F2" : "F1") + " " + size + " Tf");
+    commands.push("1 0 0 1 " + Math.round(x) + " " + Math.round(yPos) + " Tm");
+    commands.push("(" + pdfEscape_(shown) + ") Tj");
+    commands.push("ET");
+  }
+  function drawRight(text, edge, yPos, size, bold) {
+    const shown = pdfText_(text);
+    if (!shown) return;
+    draw(shown, edge - textWidth(shown, size), yPos, size, bold);
+  }
+  function rule(yPos) {
+    commands.push("0.6 w");
+    commands.push("40 " + Math.round(yPos) + " m");
+    commands.push("572 " + Math.round(yPos) + " l");
+    commands.push("S");
+  }
+  function fit(text, size, width) {
+    const shown = pdfText_(text);
+    const max = Math.max(1, Math.floor(width / (size * 0.5)));
+    if (shown.length <= max) return shown;
+    return shown.slice(0, max);
+  }
+
+  if (headerAt < 0) {
+    for (let r = 0; r < grid.length; r++) {
+      const line = grid[r].filter(Boolean).join("  ");
+      if (!line) {
+        y -= 6;
+        continue;
+      }
+      draw(line, 40, y, /^invoice$/i.test(line) ? 20 : 10, /^invoice$/i.test(line));
+      y -= /^invoice$/i.test(line) ? 24 : 13;
+    }
+    return pdfDocument_(commands.join("\n"));
+  }
+
+  for (let r = 0; r < headerAt; r++) {
+    const cells = grid[r];
+    const left = cells.slice(0, 5).filter(Boolean).join(" ");
+    const label = cells[5];
+    const value = cells[6];
+    if (!left && !label && !value) {
+      y -= 6;
+      continue;
+    }
+    if (/^invoice$/i.test(left) && !label && !value) {
+      draw(left, 40, y, 20, true);
+      y -= 8;
+      rule(y);
+      y -= 18;
+      continue;
+    }
+    if (/^work summary$/i.test(left) && !label && !value) {
+      draw(left, 40, y, 12, true);
+      y -= 16;
+      continue;
+    }
+    if (left) draw(left, 40, y, 10, false);
+    if (label && value) {
+      draw(label, 330, y, 9, false);
+      drawRight(value, 572, y, 9, true);
+    } else if (label || value) {
+      draw(label || value, 330, y, 9, /^bill to$/i.test(label || value));
+    }
+    y -= 13;
+  }
+
+  const columns = [
+    { x: 40, w: 72 },
+    { x: 114, w: 148 },
+    { x: 266, w: 48 },
+    { x: 316, w: 48 },
+    { x: 366, w: 62 },
+    { x: 430, w: 68 },
+    { x: 500, w: 72 }
+  ];
+  for (let r = headerAt; r < grid.length; r++) {
+    const cells = grid[r];
+    if (!pdfRowContinuesTable_(cells, r === headerAt)) break;
+    if (!cells.some(Boolean)) {
+      y -= 6;
+      continue;
+    }
+    const header = r === headerAt;
+    const total = !header && !cells[0] && !cells[1];
+    if (total) rule(y + 11);
+    for (let c = 0; c < 7; c++) {
+      if (!cells[c]) continue;
+      const size = 8;
+      const shown = fit(cells[c], size, columns[c].w);
+      const rightAlign = c >= 4;
+      const x = rightAlign ? columns[c].x + columns[c].w - textWidth(shown, size) : columns[c].x;
+      draw(shown, x, y, size, header || total);
+    }
+    y -= 4;
+    if (header) rule(y);
+    y -= 12;
+  }
+
+  let footerStarted = false;
+  for (let r = headerAt; r < grid.length; r++) {
+    if (pdfRowContinuesTable_(grid[r], r === headerAt)) continue;
+    const cells = grid[r];
+    const left = cells.slice(0, 2).filter(Boolean).join(" ");
+    const right = cells.slice(2).filter(Boolean).join(" ");
+    if (!left && !right) {
+      y -= 6;
+      continue;
+    }
+    if (!footerStarted) {
+      rule(y + 2);
+      y -= 18;
+      footerStarted = true;
+    }
+    if (left) draw(left, 40, y, 9, false);
+    if (right) draw(right, 210, y, 9, true);
+    y -= 14;
+  }
+
+  return pdfDocument_(commands.join("\n"));
 }
 
-function showSpan_(sheet, spans, axis) {
-  const show = axis === "row"
-    ? function (index, n) { sheet.showRows(index, n); }
-    : function (index, n) { sheet.showColumns(index, n); };
-  for (let i = spans.length - 1; i >= 0; i--) show(spans[i].start, spans[i].count);
+function pdfRowContinuesTable_(cells, isHeader) {
+  if (isHeader) return true;
+  const first = cells[0];
+  if (!first) return true;
+  return /\d/.test(first);
 }
 
-function restoreInvoicePdfView_(ss, sheet, state) {
-  if (state.columns) revealForPdf_(sheet, state.columns, "column");
-  if (state.tail) revealForPdf_(sheet, state.tail, "row");
-  if (state.picker) revealForPdf_(sheet, state.picker, "row");
-  const hiddenSheets = state.hiddenSheets || [];
-  for (let i = 0; i < hiddenSheets.length; i++) hiddenSheets[i].showSheet();
-  if (state.originalIndex && sheet.getIndex && sheet.getIndex() !== state.originalIndex) {
-    if (sheet.activate) sheet.activate();
-    if (ss.setActiveSheet) ss.setActiveSheet(sheet);
-    ss.moveActiveSheet(state.originalIndex);
+function pdfText_(value) {
+  let text = String(value == null ? "" : value);
+  text = text.replace(/\u20ac/g, "EUR ");
+  text = text.replace(/[^\x20-\x7E]/g, " ");
+  return text.replace(/[ \t]+/g, " ").trim();
+}
+
+function pdfEscape_(text) {
+  return String(text).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function pdfDocument_(stream) {
+  const body = String(stream || "");
+  const streamBody = body.charAt(body.length - 1) === "\n" ? body : body + "\n";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+    "<< /Length " + streamBody.length + " >>\nstream\n" + streamBody + "endstream",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(pdf.length);
+    pdf += (i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
   }
-  if (state.showedTemplate) sheet.hideSheet();
-  const previous = state.previousSheet;
-  if (previous && previous.getSheetId() !== sheet.getSheetId() && !previous.isSheetHidden()) {
-    if (previous.activate) previous.activate();
-    else if (ss.setActiveSheet) ss.setActiveSheet(previous);
+  const xrefAt = pdf.length;
+  pdf += "xref\n0 " + (objects.length + 1) + "\n";
+  pdf += "0000000000 65535 f \n";
+  for (let i = 1; i < offsets.length; i++) {
+    const digits = String(offsets[i]);
+    pdf += ("0000000000" + digits).slice(-10) + " 00000 n \n";
   }
+  pdf += "trailer\n<< /Size " + (objects.length + 1) + " /Root 1 0 R >>\n";
+  pdf += "startxref\n" + xrefAt + "\n%%EOF\n";
+  return pdf;
 }
 
 function invoicePdfName_(code, isoDate) {
