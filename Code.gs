@@ -928,8 +928,21 @@ function readInvoiceLines_(ss, invoice) {
 }
 
 /**
+ * Run once from the Apps Script editor to approve Drive and Gmail.
+ * Download does not need this. Save to Drive and Email do.
+ * Click Run, choose Allow, then deploy a new web app version.
+ */
+function authorizeEverydayWork() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const fileName = DriveApp.getFileById(ss.getId()).getName();
+  const remaining = MailApp.getRemainingDailyQuota();
+  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining);
+}
+
+/**
  * Fill INV-Template!B1 (the print dropdown) and export that sheet as PDF.
- * Rows 1–3 are the on-sheet picker, so the PDF starts at the INVOICE title.
+ * Rows 1–3 are the on-sheet picker, so they are hidden along with every other
+ * sheet and the unused rows and columns. The PDF uses the template's page setup.
  * Save into the Drive folder named Invoices, or return the file for download / email.
  */
 function exportInvoicePdf(payload) {
@@ -1004,7 +1017,7 @@ function exportInvoicePdf(payload) {
       message: "Saved " + stored + " to the Invoices folder on Google Drive."
     };
   } catch (err) {
-    return { success: false, error: "Could not create the invoice PDF. " + err };
+    return { success: false, error: invoicePdfError_(err, mode) };
   } finally {
     sheet.getRange("B1").setValue(previous);
     SpreadsheetApp.flush();
@@ -1019,25 +1032,121 @@ function widenInvoiceTotals_(sheet) {
   if (/G20:G24/i.test(amountFormula)) sheet.getRange("G32").setFormula("=SUM(G20:G31)");
 }
 
-function renderInvoicePdf_(ss, sheet) {
-  const url = ss.getUrl().replace(/\/edit.*$/, "") + "export?format=pdf&exportFormat=pdf"
-    + "&gid=" + sheet.getSheetId()
-    + "&range=" + encodeURIComponent("A4:G36")
-    + "&size=letter&portrait=true&fitw=true"
-    + "&sheetnames=false&printtitle=false&pagenumbers=false"
-    + "&gridlines=false&fzr=false"
-    + "&horizontal_alignment=CENTER&vertical_alignment=TOP"
-    + "&top_margin=0.5&bottom_margin=0.5&left_margin=0.4&right_margin=0.4";
-  const response = UrlFetchApp.fetch(url, {
-    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    muteHttpExceptions: true
-  });
-  const blob = response.getBlob();
-  const type = String(blob.getContentType() || "");
-  if (response.getResponseCode() !== 200 || (type.indexOf("pdf") === -1 && type.indexOf("octet-stream") === -1)) {
-    throw new Error("The spreadsheet export did not return a PDF. Redeploy the script and approve Drive access.");
+function invoicePdfError_(err, mode) {
+  const text = String(err && err.message ? err.message : err);
+  const denied = /permission|authorization/i.test(text);
+  if (denied && (mode === "drive" || mode === "email")) {
+    return "Could not create the invoice PDF. " + text
+      + " In the Apps Script editor, select authorizeEverydayWork, click Run, choose Allow, then deploy a new web app version.";
   }
-  return blob;
+  return "Could not create the invoice PDF. " + text;
+}
+
+/**
+ * Build a PDF from the spreadsheet the web app can already read.
+ * UrlFetchApp needs script.external_request, which an existing deployment does not have.
+ * Hiding the other sheets and the picker keeps the file to the invoice page.
+ * A long tail is hidden in one call so the export stays inside the web app time limit.
+ */
+function renderInvoicePdf_(ss, sheet) {
+  const state = {
+    showedTemplate: false,
+    hiddenSheets: [],
+    picker: null,
+    tail: null,
+    columns: null
+  };
+  try {
+    if (sheet.isSheetHidden()) {
+      sheet.showSheet();
+      state.showedTemplate = true;
+    }
+    const all = ss.getSheets();
+    for (let i = 0; i < all.length; i++) {
+      const other = all[i];
+      if (other.getSheetId() === sheet.getSheetId()) continue;
+      if (other.isSheetHidden()) continue;
+      other.hideSheet();
+      state.hiddenSheets.push(other);
+    }
+    state.picker = concealForPdf_(sheet, 1, 3, "row");
+    const maxRows = sheet.getMaxRows();
+    if (maxRows > 36) state.tail = concealForPdf_(sheet, 37, maxRows - 36, "row");
+    const maxCols = sheet.getMaxColumns();
+    if (maxCols > 7) state.columns = concealForPdf_(sheet, 8, maxCols - 7, "column");
+    if (ss.setActiveSheet) ss.setActiveSheet(sheet);
+    SpreadsheetApp.flush();
+    const blob = ss.getBlob();
+    if (!blob) throw new Error("The spreadsheet did not return a PDF.");
+    const type = String((blob.getContentType && blob.getContentType()) || "");
+    if (type && type.indexOf("pdf") === -1 && type.indexOf("octet-stream") === -1) {
+      throw new Error("The spreadsheet did not return a PDF.");
+    }
+    return blob;
+  } finally {
+    restoreInvoicePdfView_(sheet, state);
+  }
+}
+
+function concealForPdf_(sheet, start, count, axis) {
+  if (count < 1) return { mode: "none" };
+  if (count > 40) {
+    if (axis === "row") sheet.hideRows(start, count);
+    else sheet.hideColumns(start, count);
+    return { mode: "bulk", start: start, count: count };
+  }
+  return { mode: "spans", spans: hideVisibleSpan_(sheet, start, count, axis) };
+}
+
+function revealForPdf_(sheet, hidden, axis) {
+  if (!hidden || hidden.mode === "none") return;
+  if (hidden.mode === "bulk") {
+    if (axis === "row") sheet.showRows(hidden.start, hidden.count);
+    else sheet.showColumns(hidden.start, hidden.count);
+    return;
+  }
+  showSpan_(sheet, hidden.spans, axis);
+}
+
+function hideVisibleSpan_(sheet, start, count, axis) {
+  const rowAxis = axis === "row";
+  const alreadyHidden = rowAxis
+    ? function (index) { return sheet.isRowHiddenByUser(index); }
+    : function (index) { return sheet.isColumnHiddenByUser(index); };
+  const hide = rowAxis
+    ? function (index, n) { sheet.hideRows(index, n); }
+    : function (index, n) { sheet.hideColumns(index, n); };
+  const spans = [];
+  let runStart = 0;
+  for (let offset = 0; offset <= count; offset++) {
+    const atEnd = offset === count;
+    const skip = !atEnd && alreadyHidden(start + offset);
+    if (!atEnd && !skip) {
+      if (!runStart) runStart = start + offset;
+    } else if (runStart) {
+      const n = (start + offset) - runStart;
+      hide(runStart, n);
+      spans.push({ start: runStart, count: n });
+      runStart = 0;
+    }
+  }
+  return spans;
+}
+
+function showSpan_(sheet, spans, axis) {
+  const show = axis === "row"
+    ? function (index, n) { sheet.showRows(index, n); }
+    : function (index, n) { sheet.showColumns(index, n); };
+  for (let i = spans.length - 1; i >= 0; i--) show(spans[i].start, spans[i].count);
+}
+
+function restoreInvoicePdfView_(sheet, state) {
+  if (state.columns) revealForPdf_(sheet, state.columns, "column");
+  if (state.tail) revealForPdf_(sheet, state.tail, "row");
+  if (state.picker) revealForPdf_(sheet, state.picker, "row");
+  const hiddenSheets = state.hiddenSheets || [];
+  for (let i = 0; i < hiddenSheets.length; i++) hiddenSheets[i].showSheet();
+  if (state.showedTemplate) sheet.hideSheet();
 }
 
 function invoicePdfName_(code, isoDate) {

@@ -19,6 +19,11 @@ function colToIndex(letters) {
 
 function createSheet(name) {
   const cells = {};
+  createSheet.nextId = (createSheet.nextId || 0) + 1;
+  const sheetId = createSheet.nextId;
+  let sheetHidden = false;
+  const hiddenRows = {};
+  const hiddenCols = {};
   function key(row, col) { return row + ":" + col; }
   function get(row, col) {
     return Object.prototype.hasOwnProperty.call(cells, key(row, col)) ? cells[key(row, col)] : "";
@@ -38,15 +43,24 @@ function createSheet(name) {
     });
     return max;
   }
-  function parseA1(a1) {
-    const match = String(a1).match(/^([A-Z]+)(\d+):([A-Z]+)$/);
-    if (!match) throw new Error("Unsupported range " + a1);
+function parseA1(a1) {
+  const cell = String(a1).match(/^([A-Z]+)(\d+)$/);
+  if (cell) {
     return {
-      startRow: Number(match[2]),
-      startCol: colToIndex(match[1]),
-      endCol: colToIndex(match[3])
+      startRow: Number(cell[2]),
+      startCol: colToIndex(cell[1]),
+      endCol: colToIndex(cell[1]),
+      single: true
     };
   }
+  const match = String(a1).match(/^([A-Z]+)(\d+):([A-Z]+)$/);
+  if (!match) throw new Error("Unsupported range " + a1);
+  return {
+    startRow: Number(match[2]),
+    startCol: colToIndex(match[1]),
+    endCol: colToIndex(match[3])
+  };
+}
   return {
     name: name,
     getLastRow: lastRow,
@@ -59,9 +73,14 @@ function createSheet(name) {
         const parsed = parseA1(rowOrA1);
         startRow = parsed.startRow;
         startCol = parsed.startCol;
-        const end = Math.max(lastRow(), startRow);
-        rows = end - startRow + 1;
-        cols = parsed.endCol - startCol + 1;
+        if (parsed.single) {
+          rows = 1;
+          cols = 1;
+        } else {
+          const end = Math.max(lastRow(), startRow);
+          rows = end - startRow + 1;
+          cols = parsed.endCol - startCol + 1;
+        }
       } else if (numRows == null) {
         startRow = rowOrA1;
         startCol = col;
@@ -93,8 +112,31 @@ function createSheet(name) {
           for (let r = 0; r < values.length; r++) {
             for (let c = 0; c < values[r].length; c++) set(startRow + r, startCol + c, values[r][c]);
           }
-        }
+        },
+        getFormula: function () { return ""; },
+        setFormula: function () {}
       };
+    },
+    getSheetId: function () { return sheetId; },
+    getName: function () { return name; },
+    getMaxRows: function () { return 1000; },
+    getMaxColumns: function () { return 26; },
+    isSheetHidden: function () { return sheetHidden; },
+    hideSheet: function () { sheetHidden = true; },
+    showSheet: function () { sheetHidden = false; },
+    isRowHiddenByUser: function (row) { return !!hiddenRows[row]; },
+    isColumnHiddenByUser: function (col) { return !!hiddenCols[col]; },
+    hideRows: function (row, count) {
+      for (let i = 0; i < count; i++) hiddenRows[row + i] = true;
+    },
+    showRows: function (row, count) {
+      for (let i = 0; i < count; i++) delete hiddenRows[row + i];
+    },
+    hideColumns: function (col, count) {
+      for (let i = 0; i < count; i++) hiddenCols[col + i] = true;
+    },
+    showColumns: function (col, count) {
+      for (let i = 0; i < count; i++) delete hiddenCols[col + i];
     }
   };
 }
@@ -109,18 +151,54 @@ function createWorkbook() {
   sheets["InvoiceList"].getRange(1, 8).setValue("Invoice Date");
   return {
     getSheetByName: function (name) { return sheets[name] || null; },
+    getSheets: function () {
+      return Object.keys(sheets).map(function (name) { return sheets[name]; });
+    },
     getSpreadsheetTimeZone: function () { return "UTC"; },
+    getId: function () { return "workbook"; },
+    setActiveSheet: function () {},
+    getBlob: function () {
+      return {
+        setName: function () { return this; },
+        getBytes: function () { return [37, 80, 68, 70]; },
+        getContentType: function () { return "application/pdf"; }
+      };
+    },
     sheets: sheets
   };
 }
 
 function loadApi(workbook) {
   const context = {
-    SpreadsheetApp: { getActiveSpreadsheet: function () { return workbook; } },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: function () { return workbook; },
+      flush: function () {}
+    },
+    LockService: {
+      getDocumentLock: function () {
+        return {
+          tryLock: function () { return true; },
+          releaseLock: function () {}
+        };
+      }
+    },
+    DriveApp: {
+      getFileById: function () {
+        context.driveTouches += 1;
+        return { getName: function () { return "EverydayWork"; } };
+      }
+    },
+    MailApp: {
+      getRemainingDailyQuota: function () {
+        context.mailTouches += 1;
+        return 100;
+      },
+      sendEmail: function () { context.mailTouches += 1; }
+    },
     Session: { getScriptTimeZone: function () { return "UTC"; } },
     Utilities: {
       formatDate: function (date, timezone, pattern) {
-        if (!(date instanceof Date) || isNaN(date.getTime())) return "";
+        if (Object.prototype.toString.call(date) !== "[object Date]" || isNaN(date.getTime())) return "";
         const y = date.getFullYear();
         const m = String(date.getMonth() + 1).padStart(2, "0");
         const d = String(date.getDate()).padStart(2, "0");
@@ -129,10 +207,14 @@ function loadApi(workbook) {
         if (pattern === "HH:mm") return hh + ":" + mm;
         if (pattern === "HHmm") return hh + mm;
         return y + "-" + m + "-" + d;
-      }
+      },
+      sleep: function () {},
+      base64Encode: function (bytes) { return Buffer.from(bytes).toString("base64"); }
     },
     ContentService: { MimeType: { JSON: "json" }, createTextOutput: function () { return { setMimeType: function () { return {}; } }; } },
-    console: console
+    console: console,
+    driveTouches: 0,
+    mailTouches: 0
   };
   context.global = context;
   vm.createContext(context);
@@ -401,6 +483,100 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
   const again = api.compileSingleInvoice({ invoiceId: "INV-JR26-014" });
   assert(!again.success, "compiled twice");
   assert(/Draft/.test(again.error), again.error);
+});
+
+test("invoice pdf hides other sheets and the picker without UrlFetch", function (api, workbook) {
+  const source = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert(!/UrlFetchApp\.fetch/.test(source), "PDF export still calls UrlFetchApp.fetch");
+  assert(!/getOAuthToken/.test(source), "PDF export still asks for an OAuth token");
+
+  const template = createSheet("INV-Template");
+  const archive = createSheet("Archive");
+  workbook.sheets["INV-Template"] = template;
+  workbook.sheets.Archive = archive;
+  archive.hideSheet();
+  template.hideRows(2, 1);
+  template.hideColumns(9, 1);
+  template.getRange("B1").setValue("OLD");
+
+  let during = null;
+  workbook.getBlob = function () {
+    during = {
+      templateHidden: template.isSheetHidden(),
+      archiveHidden: archive.isSheetHidden(),
+      clientsHidden: workbook.sheets.ClientRecords.isSheetHidden(),
+      b1: template.getRange("B1").getValue(),
+      row1: template.isRowHiddenByUser(1),
+      row2: template.isRowHiddenByUser(2),
+      row3: template.isRowHiddenByUser(3),
+      row4: template.isRowHiddenByUser(4),
+      row36: template.isRowHiddenByUser(36),
+      row37: template.isRowHiddenByUser(37),
+      row1000: template.isRowHiddenByUser(1000),
+      col7: template.isColumnHiddenByUser(7),
+      col8: template.isColumnHiddenByUser(8),
+      col9: template.isColumnHiddenByUser(9),
+      col26: template.isColumnHiddenByUser(26)
+    };
+    return {
+      setName: function () { return this; },
+      getBytes: function () { return [37, 80, 68, 70]; },
+      getContentType: function () { return "application/pdf"; }
+    };
+  };
+
+  const saved = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
+  assert(saved.success, saved.error);
+  assert(saved.fileName === "INV-JR26-013_" + new Date().getFullYear() + "-"
+    + String(new Date().getMonth() + 1).padStart(2, "0") + "-"
+    + String(new Date().getDate()).padStart(2, "0") + ".pdf", saved.fileName);
+  assert(saved.pdfBase64 === Buffer.from([37, 80, 68, 70]).toString("base64"), "pdf bytes");
+  assert(during, "getBlob was not called");
+  assert(during.b1 === "INV-JR26-013", "B1 during export " + during.b1);
+  assert(!during.templateHidden, "template was hidden");
+  assert(during.archiveHidden, "an already hidden sheet was shown");
+  assert(during.clientsHidden, "another sheet stayed visible in the PDF");
+  assert(during.row1 && during.row2 && during.row3, "picker rows stayed visible");
+  assert(!during.row4 && !during.row36, "invoice rows were hidden");
+  assert(during.row37 && during.row1000, "rows below the invoice were printed");
+  assert(!during.col7, "column G was hidden");
+  assert(during.col8 && during.col9 && during.col26, "columns after G stayed visible");
+
+  assert(template.getRange("B1").getValue() === "OLD", "B1 was not restored");
+  assert(!template.isSheetHidden(), "template stayed hidden");
+  assert(archive.isSheetHidden(), "Archive was unhidden");
+  assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords stayed hidden");
+  assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet stayed hidden");
+  assert(!workbook.sheets.InvoiceList.isSheetHidden(), "invoice list stayed hidden");
+  assert(!template.isRowHiddenByUser(1) && template.isRowHiddenByUser(2) && !template.isRowHiddenByUser(3), "picker restore");
+  assert(!template.isRowHiddenByUser(37) && !template.isRowHiddenByUser(1000), "tail rows stayed hidden");
+  assert(!template.isColumnHiddenByUser(8) && template.isColumnHiddenByUser(9) && !template.isColumnHiddenByUser(26), "column restore");
+});
+
+test("a failed pdf export restores the template view", function (api, workbook) {
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  template.getRange("B1").setValue("KEEP");
+  workbook.getBlob = function () { throw new Error("boom"); };
+  const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
+  assert(!failed.success, "failure was treated as success");
+  assert(/boom/.test(failed.error), failed.error);
+  assert(!/authorizeEverydayWork/.test(failed.error), failed.error);
+  assert(template.getRange("B1").getValue() === "KEEP", "B1 changed after a failure");
+  assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords stayed hidden after failure");
+  assert(!template.isRowHiddenByUser(1) && !template.isRowHiddenByUser(37), "rows stayed hidden after failure");
+  assert(!template.isColumnHiddenByUser(8), "columns stayed hidden after failure");
+});
+
+test("drive and email permission errors tell Jane how to authorize", function (api) {
+  const drive = api.invoicePdfError_(new Error("You do not have permission to call DriveApp.getFileById"), "drive");
+  assert(/authorizeEverydayWork/.test(drive), drive);
+  const email = api.invoicePdfError_(new Error("Specified permissions are not sufficient for MailApp"), "email");
+  assert(/authorizeEverydayWork/.test(email), email);
+  const download = api.invoicePdfError_(new Error("You do not have permission to call UrlFetchApp.fetch"), "download");
+  assert(!/authorizeEverydayWork/.test(download), download);
+  api.authorizeEverydayWork();
+  assert(api.driveTouches === 1 && api.mailTouches === 1, "authorize did not touch Drive and Gmail");
 });
 
 if (failures.length) {
