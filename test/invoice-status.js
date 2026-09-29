@@ -476,7 +476,13 @@ test("dashboard splits hours and invoices across month, quarter, and year", func
   const detail = api.fetchInvoiceDetail({ invoiceId: "INV-JR26-002" });
   // fetchInvoiceDetail uses the live clock, so call the line reader through the report invoice.
   const lines = api.readInvoiceLines_(workbook, overdue);
+  assert(overdue.lines && overdue.lines.length === 1, "snapshot lines " + (overdue.lines && overdue.lines.length));
+  assert(overdue.lines[0].hours === 4 && overdue.lines[0].amount === 200, JSON.stringify(overdue.lines[0]));
   assert(lines.length === 1, "lines " + lines.length);
+  assert(report.unbilled["Other Co"].totalHours === 1 && report.unbilled["Other Co"].totalAmount === 50, JSON.stringify(report.unbilled));
+  assert(!report.unbilled.Acme, "paid and invoiced time was left open");
+  assert(report.clients.map(function (client) { return client.name; }).join(",") === "Acme,Other Co", JSON.stringify(report.clients));
+  assert(api.fetchAppSnapshot().success, "snapshot action");
   assert(lines[0].date === "2026-09-02" && lines[0].hours === 4 && lines[0].amount === 200, JSON.stringify(lines[0]));
   assert(lines[0].start === "08:00" && lines[0].finish === "12:00", lines[0].start + " " + lines[0].finish);
   assert(detail.success === false || detail.success === true, "detail callable");
