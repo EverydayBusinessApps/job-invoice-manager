@@ -993,22 +993,32 @@ function readInvoiceLines_(ss, invoice) {
 }
 
 /**
- * Run once from the Apps Script editor to approve Drive and Gmail.
- * Download does not need this. Save to Drive and Email do.
- * Click Run, choose Allow for Gmail sending, then deploy a new web app version.
- * Invoice email is sent with GmailApp so Gmail can sign it for your address.
+ * Run once from the Apps Script editor. Click Run, choose Allow, then open
+ * Deploy, Manage deployments, edit the web app, set Version to New version,
+ * and Deploy. The published web app keeps the previous PDF until that
+ * deployment is updated.
  */
 function authorizeEverydayWork() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const fileName = DriveApp.getFileById(ss.getId()).getName();
   const remaining = MailApp.getRemainingDailyQuota();
-  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail.");
+  const sheet = ss.getSheetByName("INV-Template");
+  const url = sheet
+    ? templatePdfUrl_(ss, sheet)
+    : "https://docs.google.com/spreadsheets/d/" + ss.getId() + "/export?format=pdf";
+  UrlFetchApp.fetch(url, {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail. The invoice PDF is the INV-Template print.");
 }
 
 /**
  * Write the selected invoice into INV-Template!B1, then build the PDF from that
  * sheet. Row 1 is the on-sheet dropdown, so the PDF starts at row 2.
- * Download uses only the spreadsheet. Save to Drive and Email still need Drive and Gmail.
+ * The PDF is Google's print of INV-Template from row 2. Save to Drive
+ * and Email still need Drive and Gmail. Printing the sheet also needs
+ * permission to connect to an external service.
  */
 function exportInvoicePdf(payload) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1051,7 +1061,7 @@ function exportInvoicePdf(payload) {
         mode: mode,
         fileName: fileName,
         pdfBase64: Utilities.base64Encode(blob.getBytes()),
-        message: fileName + " is ready to download and attach to an email."
+        message: fileName + " is the INV-Template print, ready to download."
       };
     }
 
@@ -1063,8 +1073,8 @@ function exportInvoicePdf(payload) {
         mode: mode,
         fileName: fileName,
         message: copyTo
-          ? "Emailed " + fileName + " to " + email + ". A copy went to " + copyTo + " for your records."
-          : "Emailed " + fileName + " to " + email + "."
+          ? "Emailed the INV-Template print " + fileName + " to " + email + ". A copy went to " + copyTo + " for your records."
+          : "Emailed the INV-Template print " + fileName + " to " + email + "."
       };
     }
 
@@ -1150,668 +1160,72 @@ function widenInvoiceTotals_(sheet) {
 
 function invoicePdfError_(err, mode) {
   const text = String(err && err.message ? err.message : err);
-  const denied = /permission|authorization/i.test(text);
+  const denied = /permission|authorization|external_request|UrlFetchApp/i.test(text);
+  if (denied && /UrlFetchApp|external_request/i.test(text)) {
+    return "Could not create the invoice PDF. " + text + " " + templatePdfAuthHint_();
+  }
   if (denied && mode === "email") {
     return "Could not create the invoice PDF. " + text
-      + " In the Apps Script editor, select authorizeEverydayWork, click Run, and choose Allow for Gmail sending. Then deploy a new web app version. Invoice email is sent through Gmail so your address can be verified.";
+      + " In the Apps Script editor, select authorizeEverydayWork, click Run, and choose Allow email sending. Then open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. If that deployment still has no mail permission, use Deploy, then New deployment, then Web app. Invoice email is sent through Gmail so your address can be verified.";
   }
   if (denied && mode === "drive") {
-    return "Could not create the invoice PDF. " + text
-      + " In the Apps Script editor, select authorizeEverydayWork, click Run, choose Allow, then deploy a new web app version.";
+    return "Could not create the invoice PDF. " + text + " " + templatePdfAuthHint_();
   }
   return "Could not create the invoice PDF. " + text;
 }
 
+function templatePdfAuthHint_() {
+  return "In the Apps Script editor, select authorizeEverydayWork, click Run, and choose Allow, including connecting to an external service. Then open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. If Allow did not add the new permission, use Deploy, then New deployment, then Web app, and replace the web app URL in the app. The current web app keeps serving the old PDF until its deployment is updated.";
+}
+
 /**
- * Read INV-Template rows 2–36 after B1 has been set. Row 1 stays the dropdown.
- * The PDF follows the printed template: title, business block, invoice box,
- * work lines, totals, and the payment bar.
+ * Print INV-Template itself. Row 1 is the dropdown, so the print starts at row 2.
+ * The PDF is Google's print of that sheet, including the logo and the bank block.
  */
 function renderInvoicePdf_(ss, sheet) {
   if (sheet.getName && sheet.getName() !== "INV-Template") {
     throw new Error("The invoice PDF has to be INV-Template, not " + sheet.getName() + ".");
   }
   SpreadsheetApp.flush();
-  const values = sheet.getRange("A2:G36").getDisplayValues();
-  const pdf = buildInvoicePdf_(values, invoiceLogo_(sheet));
-  return Utilities.newBlob(pdfToBytes_(pdf), "application/pdf", "invoice.pdf");
+  const response = UrlFetchApp.fetch(templatePdfUrl_(ss, sheet), {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  const code = response.getResponseCode();
+  const blob = response.getBlob();
+  const bytes = blob && blob.getBytes ? blob.getBytes() : [];
+  const header = [];
+  for (let i = 0; i < bytes.length && i < 5; i++) header.push(String.fromCharCode(bytes[i] & 255));
+  const pdf = header.join("") === "%PDF-";
+  if (code === 401 || code === 403 || !pdf) {
+    throw new Error("You do not have permission to call UrlFetchApp.fetch. INV-Template could not be printed (" + code + ").");
+  }
+  return blob;
 }
 
-function invoiceLogo_(sheet) {
-  try {
-    if (!sheet.getImages) return null;
-    const images = sheet.getImages() || [];
-    for (let i = 0; i < images.length; i++) {
-      const logo = invoiceImageLogo_(images[i]);
-      if (logo) return logo;
-    }
-    return null;
-  } catch (err) {
-    return null;
-  }
-}
-
-function invoiceImageLogo_(image) {
-  try {
-    if (!image || !image.getBlob) return null;
-    const blob = image.getBlob();
-    if (!blob) return null;
-    const direct = logoFromBytes_(pdfByteList_(blob.getBytes()));
-    if (direct) return direct;
-    if (!blob.getAs) return null;
-    const jpeg = blob.getAs("image/jpeg");
-    return logoFromBytes_(pdfByteList_(jpeg.getBytes()));
-  } catch (err) {
-    return null;
-  }
-}
-
-function pdfByteList_(raw) {
-  const bytes = [];
-  for (let i = 0; i < raw.length; i++) bytes.push(raw[i] & 255);
-  return bytes;
-}
-
-function logoFromBytes_(bytes) {
-  if (!bytes || bytes.length < 8) return null;
-  if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
-    const size = jpegSize_(bytes);
-    if (!size) return null;
-    return { bytes: bytes, width: size.width, height: size.height, raw: false };
-  }
-  if (bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71) return pngLogo_(bytes);
-  return null;
-}
-
-function jpegSize_(bytes) {
-  let i = 2;
-  while (i < bytes.length - 8) {
-    if (bytes[i] !== 0xFF) { i++; continue; }
-    const marker = bytes[i + 1];
-    if (marker === 0xC0 || marker === 0xC2) {
-      return {
-        height: (bytes[i + 5] << 8) + bytes[i + 6],
-        width: (bytes[i + 7] << 8) + bytes[i + 8]
-      };
-    }
-    const len = (bytes[i + 2] << 8) + bytes[i + 3];
-    if (len < 2) return null;
-    i += 2 + len;
-  }
-  return null;
-}
-
-function buildInvoicePdf_(rows, logo) {
-  const grid = [];
-  const source = rows || [];
-  for (let r = 0; r < source.length; r++) {
-    const line = [];
-    const raw = source[r] || [];
-    for (let c = 0; c < 7; c++) line.push(pdfText_(raw[c]));
-    grid.push(line);
-  }
-  if (grid.length < 10) return pdfDocument_(simpleInvoiceStream_(grid), null);
-
-  const commands = [];
-  function round1(n) { return Math.round(n * 10) / 10; }
-  function fill(x, top, w, h, r, g, b) {
-    const y = 792 - (top + h);
-    commands.push(r + " " + g + " " + b + " rg");
-    commands.push(round1(x) + " " + round1(y) + " " + round1(w) + " " + round1(h) + " re f");
-  }
-  function stroke(x, top, w, h, width) {
-    const y = 792 - (top + h);
-    commands.push("0 0 0 RG");
-    commands.push(width + " w");
-    commands.push(round1(x) + " " + round1(y) + " " + round1(w) + " " + round1(h) + " re S");
-  }
-  function hline(x1, x2, top, width) {
-    const y = 792 - top;
-    commands.push("0 0 0 RG");
-    commands.push(width + " w");
-    commands.push(round1(x1) + " " + round1(y) + " m");
-    commands.push(round1(x2) + " " + round1(y) + " l");
-    commands.push("S");
-  }
-  function draw(text, x, yPos, size, bold, color) {
-    const shown = pdfText_(text);
-    if (!shown) return 0;
-    commands.push((color || "0 0 0") + " rg");
-    commands.push("BT");
-    commands.push("/" + (bold ? "F2" : "F1") + " " + size + " Tf");
-    commands.push("1 0 0 1 " + round1(x) + " " + round1(yPos) + " Tm");
-    commands.push("(" + pdfEscape_(shown) + ") Tj");
-    commands.push("ET");
-    return pdfTextWidth_(shown, size);
-  }
-  function drawRight(text, edge, yPos, size, bold) {
-    const shown = pdfText_(text);
-    if (!shown) return;
-    draw(shown, edge - pdfTextWidth_(shown, size), yPos, size, bold, "0 0 0");
-  }
-
-  fill(412.4, 99.7, 149.8, 105.8, 0.851, 0.851, 0.851);
-  fill(50.1, 214.9, 512.1, 11.7, 0.965, 0.973, 0.976);
-  fill(50.1, 235.9, 512.1, 11.7, 0.965, 0.973, 0.976);
-  fill(50.1, 385.7, 188.2, 30.9, 0.851, 0.851, 0.851);
-  fill(238.3, 385.7, 323.9, 30.9, 0.8, 0.8, 0.8);
-  if (logo && logo.bytes && logo.width && logo.height) {
-    const maxW = 74;
-    const maxH = 56;
-    const fit = Math.min(maxW / logo.width, maxH / logo.height);
-    const dw = Math.max(1, logo.width * fit);
-    const dh = Math.max(1, logo.height * fit);
-    const top = 108 + (maxH - dh) / 2;
-    const y = 792 - (top + dh);
-    commands.push("q " + round1(dw) + " 0 0 " + round1(dh) + " 52 " + round1(y) + " cm /Im1 Do Q");
-  }
-  stroke(50.3, 53.8, 511.9, 362.8, 0.5);
-  hline(50.1, 562.2, 90.1, 0.5);
-  stroke(50.1, 247.4, 512.1, 118.4, 1.4);
-
-  let namedCompany = false;
-  for (let sheetRow = 2; sheetRow <= grid.length + 1 && sheetRow <= 36; sheetRow++) {
-    const cells = grid[sheetRow - 2];
-    if (!cells || !cells.some(Boolean)) continue;
-    const y = 792 - pdfLineBottom_(sheetRow);
-    if (sheetRow === 4 && /invoice/i.test(cells.filter(Boolean).join(" "))) {
-      const title = "INVOICE";
-      draw(title, 306 - pdfTextWidth_(title, 12) / 2, y, 12, true, "0 0 0");
-      continue;
-    }
-    if (sheetRow === 17 && /work summary/i.test(cells.filter(Boolean).join(" "))) {
-      const heading = "Work Summary";
-      draw(heading, 306 - pdfTextWidth_(heading, 7.5) / 2, y, 7.5, true, "0 0 0");
-      continue;
-    }
-    const table = sheetRow >= 19 && sheetRow <= 32;
-    const payment = sheetRow >= 33;
-    const header = sheetRow === 19;
-    if (payment) {
-      let label = "";
-      let value = "";
-      let onlyCol = -1;
-      for (let c = 0; c < 7; c++) {
-        const text = cells[c];
-        if (!text || text === label || text === value) continue;
-        if (!label) {
-          label = text;
-          onlyCol = c;
-        } else {
-          value = text;
-          onlyCol = c;
-        }
-      }
-      const size = 6.2;
-      if (value) {
-        const labelWidth = draw(label, 52, y, size, false, "0 0 0");
-        const valueWidth = pdfTextWidth_(value, size);
-        let valueX = 560 - valueWidth;
-        const minX = 52 + labelWidth + 10;
-        if (valueX < minX) valueX = minX;
-        draw(value, valueX, y, size, false, "0 0 0");
-      } else if (label && onlyCol >= 2) {
-        drawRight(label, 560, y, size, false);
-      } else if (label) {
-        draw(label, 52, y, size, false, "0 0 0");
-      }
-      continue;
-    }
-    for (let c = 0; c < 7; c++) {
-      if (!cells[c]) continue;
-      const size = table ? (header ? 7 : 6.2) : (c === 1 && !payment ? 7.5 : 6.2);
-      const bold = header || (!table && !payment && c === 5 && /^(invoice id|invoice date|service period|bill to)$/i.test(cells[c])) || (!table && !payment && c === 1 && !namedCompany);
-      if (!table && !payment && c === 1 && !namedCompany) namedCompany = true;
-      const link = /^www\.|^https?:/i.test(cells[c]);
-      if (table && c >= 4) {
-        const edge = c === 4 ? 411 : (c === 5 ? 482 : 560);
-        drawRight(cells[c], edge, y, size, bold);
-        continue;
-      }
-      if (c === 6) {
-        drawRight(cells[c], 560, y, size, false);
-        continue;
-      }
-      const left = [52, 128.7, 239.7, 315.1, 374.2, 414.3, 480][c];
-      const width = draw(cells[c], left, y, size, bold, link ? "0.067 0.333 0.800" : "0 0 0");
-      if (link) {
-        commands.push("0.067 0.333 0.800 RG");
-        commands.push("0.5 w");
-        commands.push(round1(left) + " " + round1(y - 1) + " m");
-        commands.push(round1(left + width) + " " + round1(y - 1) + " l");
-        commands.push("S");
-      }
-    }
-  }
-  return pdfDocument_(commands.join("\n"), logo);
-}
-
-function simpleInvoiceStream_(grid) {
-  const commands = [];
-  let y = 750;
-  for (let r = 0; r < grid.length; r++) {
-    const line = grid[r].filter(Boolean).join("  ");
-    if (!line) continue;
-    commands.push("BT");
-    commands.push("/F1 10 Tf");
-    commands.push("1 0 0 1 40 " + y + " Tm");
-    commands.push("(" + pdfEscape_(line) + ") Tj");
-    commands.push("ET");
-    y -= 14;
-  }
-  return commands.join("\n");
-}
-
-function pdfLineBottom_(sheetRow) {
-  if (sheetRow >= 20) return 256.45 + (sheetRow - 20) * 9.87;
-  const bottoms = {
-    4: 87.71,
-    6: 108.52,
-    7: 119.76,
-    8: 130.99,
-    9: 142.03,
-    10: 153.47,
-    11: 164.7,
-    12: 174.53,
-    13: 184.36,
-    14: 194.19,
-    15: 204.02,
-    17: 224.89,
-    19: 244.88
-  };
-  return bottoms[sheetRow] || (100 + sheetRow * 10);
-}
-
-function pdfTextWidth_(text, size) {
-  const widths = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
-  let width = 0;
-  const value = String(text || "");
-  for (let i = 0; i < value.length; i++) {
-    let code = value.charCodeAt(i);
-    if (code === 8364) code = 128;
-    const units = code === 128 ? 556 : (widths[code - 32] || 500);
-    width += units * size / 1000;
-  }
-  return width;
-}
-
-function pdfText_(value) {
-  let text = String(value == null ? "" : value);
-  text = text.replace(/[^\x20-\x7E\u20ac]/g, " ");
-  return text.replace(/[ \t]+/g, " ").trim();
-}
-
-function pdfEscape_(text) {
-  return String(text)
-    .replace(/\\/g, "\\\\")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
-    .replace(/\u20ac/g, "\\200");
-}
-
-function pdfDocument_(stream, image) {
-  const body = String(stream || "");
-  const streamBody = body.charAt(body.length - 1) === "\n" ? body : body + "\n";
-  const page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >>"
-    + (image ? " /XObject << /Im1 7 0 R >>" : "")
-    + " >> >>";
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
-    page,
-    "<< /Length " + streamBody.length + " >>\nstream\n" + streamBody + "endstream",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"
+function templatePdfUrl_(ss, sheet) {
+  const params = [
+    "format=pdf",
+    "gid=" + sheet.getSheetId(),
+    "r1=1",
+    "c1=0",
+    "r2=36",
+    "c2=7",
+    "portrait=true",
+    "size=a4",
+    "scale=2",
+    "fitw=true",
+    "sheetnames=false",
+    "title=false",
+    "gridlines=false",
+    "fzr=false",
+    "fzc=false",
+    "top_margin=0.75",
+    "bottom_margin=0.75",
+    "left_margin=0.7",
+    "right_margin=0.7"
   ];
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  for (let i = 0; i < objects.length; i++) {
-    offsets.push(pdf.length);
-    pdf += (i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
-  }
-  if (image && image.bytes) {
-    let binary = "";
-    for (let i = 0; i < image.bytes.length; i++) binary += String.fromCharCode(image.bytes[i] & 255);
-    offsets.push(pdf.length);
-    pdf += "7 0 obj\n<< /Type /XObject /Subtype /Image /Width " + image.width
-      + " /Height " + image.height
-      + " /ColorSpace /DeviceRGB /BitsPerComponent 8"
-      + (image.raw ? "" : " /Filter /DCTDecode")
-      + " /Length " + image.bytes.length + " >>\nstream\n" + binary + "\nendstream\nendobj\n";
-  }
-  const xrefAt = pdf.length;
-  pdf += "xref\n0 " + (objects.length + (image && image.bytes ? 2 : 1)) + "\n";
-  pdf += "0000000000 65535 f \n";
-  for (let i = 1; i < offsets.length; i++) {
-    pdf += ("0000000000" + String(offsets[i])).slice(-10) + " 00000 n \n";
-  }
-  pdf += "trailer\n<< /Size " + (objects.length + (image && image.bytes ? 2 : 1)) + " /Root 1 0 R >>\n";
-  pdf += "startxref\n" + xrefAt + "\n%%EOF\n";
-  return pdf;
-}
-
-function pdfToBytes_(pdf) {
-  const out = [];
-  const text = String(pdf || "");
-  for (let i = 0; i < text.length; i++) out.push(text.charCodeAt(i) & 255);
-  return out;
-}
-
-function PdfTree_() {
-  this.table = new Uint16Array(16);
-  this.trans = new Uint16Array(288);
-}
-function PdfInf_(source, dest) {
-  this.source = source;
-  this.sourceIndex = 0;
-  this.tag = 0;
-  this.bitcount = 0;
-  this.dest = dest;
-  this.destLen = 0;
-  this.ltree = new PdfTree_();
-  this.dtree = new PdfTree_();
-}
-var pdfSlTree_ = new PdfTree_();
-var pdfSdTree_ = new PdfTree_();
-var pdfLenBits_ = new Uint8Array(30);
-var pdfLenBase_ = new Uint16Array(30);
-var pdfDistBits_ = new Uint8Array(30);
-var pdfDistBase_ = new Uint16Array(30);
-var pdfClcIdx_ = new Uint8Array([16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]);
-var pdfCodeTree_ = new PdfTree_();
-var pdfLengths_ = new Uint8Array(320);
-var pdfOffs_ = new Uint16Array(16);
-
-function pdfBuildBits_(bits, base, delta, first) {
-  var i, sum;
-  for (i = 0; i < delta; ++i) bits[i] = 0;
-  for (i = 0; i < 30 - delta; ++i) bits[i + delta] = i / delta | 0;
-  for (sum = first, i = 0; i < 30; ++i) {
-    base[i] = sum;
-    sum += 1 << bits[i];
-  }
-}
-function pdfBuildFixed_(lt, dt) {
-  var i;
-  for (i = 0; i < 7; ++i) lt.table[i] = 0;
-  lt.table[7] = 24;
-  lt.table[8] = 152;
-  lt.table[9] = 112;
-  for (i = 0; i < 24; ++i) lt.trans[i] = 256 + i;
-  for (i = 0; i < 144; ++i) lt.trans[24 + i] = i;
-  for (i = 0; i < 8; ++i) lt.trans[24 + 144 + i] = 280 + i;
-  for (i = 0; i < 112; ++i) lt.trans[24 + 144 + 8 + i] = 144 + i;
-  for (i = 0; i < 5; ++i) dt.table[i] = 0;
-  dt.table[5] = 32;
-  for (i = 0; i < 32; ++i) dt.trans[i] = i;
-}
-function pdfBuildTree_(t, lengths, off, num) {
-  var i, sum;
-  for (i = 0; i < 16; ++i) t.table[i] = 0;
-  for (i = 0; i < num; ++i) t.table[lengths[off + i]]++;
-  t.table[0] = 0;
-  for (sum = 0, i = 0; i < 16; ++i) {
-    pdfOffs_[i] = sum;
-    sum += t.table[i];
-  }
-  for (i = 0; i < num; ++i) {
-    if (lengths[off + i]) t.trans[pdfOffs_[lengths[off + i]]++] = i;
-  }
-}
-function pdfGetBit_(d) {
-  if (!d.bitcount--) {
-    d.tag = d.source[d.sourceIndex++];
-    d.bitcount = 7;
-  }
-  var bit = d.tag & 1;
-  d.tag >>>= 1;
-  return bit;
-}
-function pdfReadBits_(d, num, base) {
-  if (!num) return base;
-  while (d.bitcount < 24) {
-    d.tag |= d.source[d.sourceIndex++] << d.bitcount;
-    d.bitcount += 8;
-  }
-  var val = d.tag & (0xffff >>> (16 - num));
-  d.tag >>>= num;
-  d.bitcount -= num;
-  return val + base;
-}
-function pdfDecodeSymbol_(d, t) {
-  while (d.bitcount < 24) {
-    d.tag |= d.source[d.sourceIndex++] << d.bitcount;
-    d.bitcount += 8;
-  }
-  var sum = 0, cur = 0, len = 0;
-  var tag = d.tag;
-  do {
-    cur = 2 * cur + (tag & 1);
-    tag >>>= 1;
-    ++len;
-    sum += t.table[len];
-    cur -= t.table[len];
-  } while (cur >= 0);
-  d.tag = tag;
-  d.bitcount -= len;
-  return t.trans[sum + cur];
-}
-function pdfDecodeTrees_(d, lt, dt) {
-  var hlit = pdfReadBits_(d, 5, 257);
-  var hdist = pdfReadBits_(d, 5, 1);
-  var hclen = pdfReadBits_(d, 4, 4);
-  var i, num, length;
-  for (i = 0; i < 19; ++i) pdfLengths_[i] = 0;
-  for (i = 0; i < hclen; ++i) pdfLengths_[pdfClcIdx_[i]] = pdfReadBits_(d, 3, 0);
-  pdfBuildTree_(pdfCodeTree_, pdfLengths_, 0, 19);
-  for (num = 0; num < hlit + hdist;) {
-    var sym = pdfDecodeSymbol_(d, pdfCodeTree_);
-    if (sym === 16) {
-      var prev = pdfLengths_[num - 1];
-      for (length = pdfReadBits_(d, 2, 3); length; --length) pdfLengths_[num++] = prev;
-    } else if (sym === 17) {
-      for (length = pdfReadBits_(d, 3, 3); length; --length) pdfLengths_[num++] = 0;
-    } else if (sym === 18) {
-      for (length = pdfReadBits_(d, 7, 11); length; --length) pdfLengths_[num++] = 0;
-    } else {
-      pdfLengths_[num++] = sym;
-    }
-  }
-  pdfBuildTree_(lt, pdfLengths_, 0, hlit);
-  pdfBuildTree_(dt, pdfLengths_, hlit, hdist);
-}
-function pdfInflateBlock_(d, lt, dt) {
-  while (1) {
-    var sym = pdfDecodeSymbol_(d, lt);
-    if (sym === 256) return 0;
-    if (sym < 256) {
-      d.dest[d.destLen++] = sym;
-    } else {
-      sym -= 257;
-      var length = pdfReadBits_(d, pdfLenBits_[sym], pdfLenBase_[sym]);
-      var dist = pdfDecodeSymbol_(d, dt);
-      var offs = d.destLen - pdfReadBits_(d, pdfDistBits_[dist], pdfDistBase_[dist]);
-      for (var i = offs; i < offs + length; ++i) d.dest[d.destLen++] = d.dest[i];
-    }
-  }
-}
-function pdfInflateStored_(d) {
-  while (d.bitcount > 8) {
-    d.sourceIndex--;
-    d.bitcount -= 8;
-  }
-  var length = d.source[d.sourceIndex + 1] * 256 + d.source[d.sourceIndex];
-  var inv = d.source[d.sourceIndex + 3] * 256 + d.source[d.sourceIndex + 2];
-  if (length !== (~inv & 65535)) return -3;
-  d.sourceIndex += 4;
-  for (var i = length; i; --i) d.dest[d.destLen++] = d.source[d.sourceIndex++];
-  d.bitcount = 0;
-  return 0;
-}
-function pdfInflate_(source, size) {
-  var dest = [];
-  if (size) dest.length = size;
-  var d = new PdfInf_(source, dest);
-  var bfinal, btype, res;
-  do {
-    bfinal = pdfGetBit_(d);
-    btype = pdfReadBits_(d, 2, 0);
-    if (btype === 0) res = pdfInflateStored_(d);
-    else if (btype === 1) res = pdfInflateBlock_(d, pdfSlTree_, pdfSdTree_);
-    else if (btype === 2) {
-      pdfDecodeTrees_(d, d.ltree, d.dtree);
-      res = pdfInflateBlock_(d, d.ltree, d.dtree);
-    } else res = -3;
-    if (res !== 0) throw new Error("Could not read the invoice logo.");
-  } while (!bfinal);
-  var out = [];
-  for (var i = 0; i < d.destLen; i++) out.push(dest[i]);
-  return out;
-}
-pdfBuildFixed_(pdfSlTree_, pdfSdTree_);
-pdfBuildBits_(pdfLenBits_, pdfLenBase_, 4, 3);
-pdfBuildBits_(pdfDistBits_, pdfDistBase_, 2, 1);
-pdfLenBits_[28] = 0;
-pdfLenBase_[28] = 258;
-
-
-function pngLogo_(bytes) {
-  try {
-    let pos = 8;
-    let width = 0;
-    let height = 0;
-    let bitDepth = 0;
-    let colorType = 0;
-    const idat = [];
-    let palette = null;
-    while (pos + 12 <= bytes.length) {
-      const len = bytes[pos] * 16777216 + bytes[pos + 1] * 65536 + bytes[pos + 2] * 256 + bytes[pos + 3];
-      const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
-      const start = pos + 8;
-      const data = bytes.slice(start, start + len);
-      pos = start + len + 4;
-      if (type === "IHDR") {
-        width = data[0] * 16777216 + data[1] * 65536 + data[2] * 256 + data[3];
-        height = data[4] * 16777216 + data[5] * 65536 + data[6] * 256 + data[7];
-        bitDepth = data[8];
-        colorType = data[9];
-      } else if (type === "PLTE") {
-        palette = data;
-      } else if (type === "IDAT") {
-        for (let i = 0; i < data.length; i++) idat.push(data[i]);
-      } else if (type === "IEND") {
-        break;
-      }
-    }
-    const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
-    if (bitDepth !== 8 || !channels || !width || !height) return null;
-    const inflated = pdfInflate_(idat.slice(2), height * (1 + width * channels));
-    const stride = width * channels;
-    const rgb = [];
-    let i = 0;
-    let prev = [];
-    for (let y = 0; y < height; y++) {
-      const filter = inflated[i++];
-      const row = [];
-      for (let x = 0; x < stride; x++) {
-        const raw = inflated[i++] || 0;
-        const left = x >= channels ? row[x - channels] : 0;
-        const up = prev[x] || 0;
-        const upLeft = x >= channels ? (prev[x - channels] || 0) : 0;
-        let value = raw;
-        if (filter === 1) value = (raw + left) & 255;
-        else if (filter === 2) value = (raw + up) & 255;
-        else if (filter === 3) value = (raw + ((left + up) >> 1)) & 255;
-        else if (filter === 4) {
-          const p = left + up - upLeft;
-          const pa = Math.abs(p - left);
-          const pb = Math.abs(p - up);
-          const pc = Math.abs(p - upLeft);
-          const pred = pa <= pb && pa <= pc ? left : (pb <= pc ? up : upLeft);
-          value = (raw + pred) & 255;
-        }
-        row.push(value);
-      }
-      prev = row;
-      for (let x = 0; x < width; x++) {
-        if (colorType === 2) {
-          rgb.push(row[x * 3], row[x * 3 + 1], row[x * 3 + 2]);
-        } else if (colorType === 6) {
-          const a = row[x * 4 + 3] / 255;
-          rgb.push(
-            Math.round(row[x * 4] * a + 255 * (1 - a)),
-            Math.round(row[x * 4 + 1] * a + 255 * (1 - a)),
-            Math.round(row[x * 4 + 2] * a + 255 * (1 - a))
-          );
-        } else if (colorType === 0) {
-          rgb.push(row[x], row[x], row[x]);
-        } else if (colorType === 3 && palette) {
-          const p = row[x] * 3;
-          rgb.push(palette[p] || 0, palette[p + 1] || 0, palette[p + 2] || 0);
-        } else if (colorType === 4) {
-          const a = row[x * 2 + 1] / 255;
-          const g = Math.round(row[x * 2] * a + 255 * (1 - a));
-          rgb.push(g, g, g);
-        }
-      }
-    }
-    const trimmed = pdfTrimRgb_(rgb, width, height);
-    return pdfShrinkRgb_(trimmed.rgb, trimmed.width, trimmed.height, 160);
-  } catch (err) {
-    return null;
-  }
-}
-
-function pdfTrimRgb_(rgb, width, height) {
-  let minX = width;
-  let minY = height;
-  let maxX = -1;
-  let maxY = -1;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 3;
-      if (rgb[i] < 248 || rgb[i + 1] < 248 || rgb[i + 2] < 248) {
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-      }
-    }
-  }
-  if (maxX < minX) return { rgb: rgb, width: width, height: height };
-  const pad = 1;
-  minX = Math.max(0, minX - pad);
-  minY = Math.max(0, minY - pad);
-  maxX = Math.min(width - 1, maxX + pad);
-  maxY = Math.min(height - 1, maxY + pad);
-  const nw = maxX - minX + 1;
-  const nh = maxY - minY + 1;
-  if (nw === width && nh === height) return { rgb: rgb, width: width, height: height };
-  const out = [];
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      const i = (y * width + x) * 3;
-      out.push(rgb[i], rgb[i + 1], rgb[i + 2]);
-    }
-  }
-  return { rgb: out, width: nw, height: nh };
-}
-
-function pdfShrinkRgb_(rgb, width, height, maxEdge) {
-  const scale = Math.max(width, height) / maxEdge;
-  if (scale <= 1) return { bytes: rgb, width: width, height: height, raw: true };
-  const nw = Math.max(1, Math.round(width / scale));
-  const nh = Math.max(1, Math.round(height / scale));
-  const out = [];
-  for (let y = 0; y < nh; y++) {
-    const sy = Math.min(height - 1, Math.floor(y * height / nh));
-    for (let x = 0; x < nw; x++) {
-      const sx = Math.min(width - 1, Math.floor(x * width / nw));
-      const i = (sy * width + sx) * 3;
-      out.push(rgb[i], rgb[i + 1], rgb[i + 2]);
-    }
-  }
-  return { bytes: out, width: nw, height: nh, raw: true };
+  return "https://docs.google.com/spreadsheets/d/" + ss.getId() + "/export?" + params.join("&");
 }
 
 function invoicePdfName_(code, isoDate) {
