@@ -230,9 +230,17 @@ function loadApi(workbook) {
         context.mailTouches += 1;
         return 100;
       },
-      sendEmail: function () { context.mailTouches += 1; }
+      sendEmail: function (message) {
+        context.mailTouches += 1;
+        context.lastEmail = message;
+      }
     },
-    Session: { getScriptTimeZone: function () { return "UTC"; } },
+    Session: {
+      getScriptTimeZone: function () { return "UTC"; },
+      getEffectiveUser: function () {
+        return { getEmail: function () { return "jane@everydaybusiness.ie"; } };
+      }
+    },
     Utilities: {
       formatDate: function (date, timezone, pattern) {
         if (Object.prototype.toString.call(date) !== "[object Date]" || isNaN(date.getTime())) return "";
@@ -538,7 +546,7 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
 test("invoice pdf is INV-Template from row 2 and does not call Drive", function (api, workbook) {
   const source = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
   assert(!/UrlFetchApp/.test(source), "PDF export still calls UrlFetchApp");
-  assert(!/getBlob\s*\(/.test(source), "PDF export still prints the spreadsheet");
+  assert(!/ss\.getBlob\s*\(/.test(source), "PDF export still prints the spreadsheet");
   assert(!/hideSheet\s*\(/.test(source), "PDF export still hides sheets");
   assert(!/moveActiveSheet\s*\(/.test(source), "PDF export still reorders tabs");
 
@@ -575,6 +583,8 @@ test("invoice pdf is INV-Template from row 2 and does not call Drive", function 
   template.getRange("G20").setValue("\u20ac540.00");
   template.getRange("E32").setValue("12.0");
   template.getRange("G32").setValue("\u20ac540.00");
+  template.getRange("A34").setValue("Please remit payment to the bank details below by date.");
+  template.getRange("G34").setValue("22/09/2026");
   template.getRange("A35").setValue("Bank Transfers payable to:");
   template.getRange("C35").setValue("Jonathon Reynolds");
   template.getRange("A36").setValue("IBAN");
@@ -614,7 +624,13 @@ test("invoice pdf is INV-Template from row 2 and does not call Drive", function 
   assert(pdf.indexOf("(Work Summary)") !== -1, "missing work summary");
   assert(pdf.indexOf("(Bank Transfers payable to:)") !== -1, "missing payment line");
   assert(pdf.indexOf("(IBAN)") !== -1, "missing IBAN label");
-  assert(pdf.indexOf("EUR 540.00") !== -1, "euro amount was dropped");
+  assert(pdf.indexOf("\\200540.00") !== -1, "euro amount was dropped");
+  assert(pdf.indexOf("EUR ") === -1, "amount was spelled as EUR");
+  const placed = pdfTextSpots(pdf);
+  assert(placed.INVOICE && placed.INVOICE.x > 250, "title was left aligned " + JSON.stringify(placed.INVOICE));
+  assert(placed["Please remit payment to the bank details below by date."] && placed["Please remit payment to the bank details below by date."].x < 80, "remit line moved");
+  assert(placed["22/09/2026"] && placed["22/09/2026"].x > 480, "due date overlaps the remit line " + JSON.stringify(placed["22/09/2026"]));
+  assert(placed["Jonathon Reynolds"] && placed["Jonathon Reynolds"].x > 400, "payee was not on the right " + JSON.stringify(placed["Jonathon Reynolds"]));
   assert(pdf.indexOf("Select Invoice") === -1, "picker row was included");
   assert(pdf.indexOf("(OLD)") === -1, "previous dropdown value was printed");
   assert(seenB1 === "INV-JR26-013", "B1 during read " + seenB1);
@@ -630,7 +646,60 @@ test("invoice pdf is INV-Template from row 2 and does not call Drive", function 
 
   const note = api.buildInvoicePdf_([["Note (draft)"], ["\u20ac45.00"]]);
   assert(note.indexOf("Note \\(draft\\)") !== -1, "parentheses were not escaped");
-  assert(note.indexOf("EUR 45.00") !== -1 && note.indexOf("\u20ac") === -1, "euro sign leaked into the PDF");
+  assert(note.indexOf("\\20045.00") !== -1 && note.indexOf("\u20ac") === -1, "euro sign leaked into the PDF");
+});
+
+function pdfTextSpots(pdf) {
+  const spots = {};
+  const lines = String(pdf).split("\n");
+  let x = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const move = lines[i].match(/^1 0 0 1 (-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) Tm$/);
+    if (move) x = Number(move[1]);
+    const text = lines[i].match(/^\((.*)\) Tj$/);
+    if (text) spots[text[1].replace(/\\200/g, "€").replace(/\\([()\\])/g, "$1")] = { x: x };
+  }
+  return spots;
+}
+
+test("a sheet logo is kept on the invoice", function (api) {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==", "base64");
+  const logo = api.logoFromBytes_(Array.from(png));
+  assert(logo && logo.raw && logo.width === 2 && logo.height === 2, JSON.stringify(logo && { w: logo.width, h: logo.height, raw: logo.raw }));
+  const rows = [];
+  for (let i = 0; i < 35; i++) rows.push(["", "", "", "", "", "", ""]);
+  rows[2][0] = "INVOICE";
+  const pdf = api.buildInvoicePdf_(rows, logo);
+  assert(pdf.indexOf("/Im1") !== -1, "logo was left off the PDF");
+});
+
+test("email sends the invoice to the client and a copy to us", function (api, workbook) {
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  template.getRange("A4").setValue("INVOICE");
+  template.getRange("A19").setValue("Date");
+  template.getRange("G19").setValue("Amount");
+  const config = createSheet("Config");
+  workbook.sheets.Config = config;
+  config.getRange("A6").setValue("Business Email");
+  config.getRange("B6").setValue("records@everydaybusiness.ie");
+  const sent = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "email", email: "client@bakewell.test" });
+  assert(sent.success, sent.error);
+  assert(api.lastEmail && api.lastEmail.to === "client@bakewell.test", JSON.stringify(api.lastEmail));
+  assert(api.lastEmail.bcc === "jane@everydaybusiness.ie", api.lastEmail.bcc);
+  assert(/jane@everydaybusiness.ie/.test(sent.message), sent.message);
+  assert(api.lastEmail.attachments && api.lastEmail.attachments.length === 1, "missing attachment");
+
+  const originalUser = api.Session.getEffectiveUser;
+  api.Session.getEffectiveUser = function () { return { getEmail: function () { return ""; } }; };
+  const fromConfig = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "email", email: "client@bakewell.test" });
+  assert(fromConfig.success, fromConfig.error);
+  assert(api.lastEmail.bcc === "records@everydaybusiness.ie", api.lastEmail.bcc);
+  api.Session.getEffectiveUser = originalUser;
+
+  const same = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "email", email: "jane@everydaybusiness.ie" });
+  assert(same.success, same.error);
+  assert(!api.lastEmail.bcc, "a copy was addressed to the same inbox");
 });
 
 test("a failed pdf export restores the invoice selected in B1", function (api, workbook) {
