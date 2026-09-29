@@ -142,21 +142,37 @@ function parseA1(a1) {
 }
 
 function createWorkbook() {
-  const sheets = {
-    "ClientRecords": createSheet("ClientRecords"),
-    "Time&Attendance": createSheet("Time&Attendance"),
-    "InvoiceList": createSheet("InvoiceList")
-  };
+  const order = [];
+  let active = null;
+  const sheets = new Proxy({}, {
+    set: function (target, prop, value) {
+      target[prop] = value;
+      if (order.indexOf(value) === -1) order.push(value);
+      value.getIndex = function () { return order.indexOf(value) + 1; };
+      value.activate = function () { active = value; };
+      return true;
+    },
+    get: function (target, prop) { return target[prop]; }
+  });
+  sheets["ClientRecords"] = createSheet("ClientRecords");
+  sheets["Time&Attendance"] = createSheet("Time&Attendance");
+  sheets["InvoiceList"] = createSheet("InvoiceList");
   sheets["Time&Attendance"].getRange(1, 4).setValue("ClientID");
   sheets["InvoiceList"].getRange(1, 8).setValue("Invoice Date");
+  active = sheets["Time&Attendance"];
   return {
     getSheetByName: function (name) { return sheets[name] || null; },
-    getSheets: function () {
-      return Object.keys(sheets).map(function (name) { return sheets[name]; });
-    },
+    getSheets: function () { return order.slice(); },
+    getActiveSheet: function () { return active; },
     getSpreadsheetTimeZone: function () { return "UTC"; },
     getId: function () { return "workbook"; },
-    setActiveSheet: function () {},
+    setActiveSheet: function (sheet) { active = sheet; },
+    moveActiveSheet: function (pos) {
+      const from = order.indexOf(active);
+      if (from < 0) throw new Error("active sheet is not in the workbook");
+      order.splice(from, 1);
+      order.splice(Math.max(0, pos - 1), 0, active);
+    },
     getBlob: function () {
       return {
         setName: function () { return this; },
@@ -209,7 +225,14 @@ function loadApi(workbook) {
         return y + "-" + m + "-" + d;
       },
       sleep: function () {},
-      base64Encode: function (bytes) { return Buffer.from(bytes).toString("base64"); }
+      base64Encode: function (bytes) { return Buffer.from(bytes).toString("base64"); },
+      newBlob: function (bytes, type) {
+        return {
+          setName: function () { return this; },
+          getBytes: function () { return bytes; },
+          getContentType: function () { return type || "application/pdf"; }
+        };
+      }
     },
     ContentService: { MimeType: { JSON: "json" }, createTextOutput: function () { return { setMimeType: function () { return {}; } }; } },
     console: console,
@@ -498,10 +521,16 @@ test("invoice pdf hides other sheets and the picker without UrlFetch", function 
   template.hideRows(2, 1);
   template.hideColumns(9, 1);
   template.getRange("B1").setValue("OLD");
+  const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
+  assert(orderBefore[0] !== "INV-Template", "template was already the first tab");
+  assert(orderBefore.indexOf("Time&Attendance") < orderBefore.indexOf("INV-Template"), "time sheet order");
 
   let during = null;
   workbook.getBlob = function () {
     during = {
+      first: workbook.getSheets()[0].getName(),
+      active: workbook.getActiveSheet().getName(),
+      timeHidden: workbook.sheets["Time&Attendance"].isSheetHidden(),
       templateHidden: template.isSheetHidden(),
       archiveHidden: archive.isSheetHidden(),
       clientsHidden: workbook.sheets.ClientRecords.isSheetHidden(),
@@ -532,6 +561,9 @@ test("invoice pdf hides other sheets and the picker without UrlFetch", function 
     + String(new Date().getDate()).padStart(2, "0") + ".pdf", saved.fileName);
   assert(saved.pdfBase64 === Buffer.from([37, 80, 68, 70]).toString("base64"), "pdf bytes");
   assert(during, "getBlob was not called");
+  assert(during.first === "INV-Template", "PDF first sheet was " + during.first);
+  assert(during.active === "INV-Template", "PDF active sheet was " + during.active);
+  assert(during.timeHidden, "Time&Attendance was included in the PDF");
   assert(during.b1 === "INV-JR26-013", "B1 during export " + during.b1);
   assert(!during.templateHidden, "template was hidden");
   assert(during.archiveHidden, "an already hidden sheet was shown");
@@ -551,12 +583,15 @@ test("invoice pdf hides other sheets and the picker without UrlFetch", function 
   assert(!template.isRowHiddenByUser(1) && template.isRowHiddenByUser(2) && !template.isRowHiddenByUser(3), "picker restore");
   assert(!template.isRowHiddenByUser(37) && !template.isRowHiddenByUser(1000), "tail rows stayed hidden");
   assert(!template.isColumnHiddenByUser(8) && template.isColumnHiddenByUser(9) && !template.isColumnHiddenByUser(26), "column restore");
+  assert(workbook.getSheets().map(function (item) { return item.getName(); }).join("|") === orderBefore.join("|"), "tab order was not restored");
+  assert(workbook.getActiveSheet().getName() === "Time&Attendance", "active tab was left on the invoice");
 });
 
 test("a failed pdf export restores the template view", function (api, workbook) {
   const template = createSheet("INV-Template");
   workbook.sheets["INV-Template"] = template;
   template.getRange("B1").setValue("KEEP");
+  const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
   workbook.getBlob = function () { throw new Error("boom"); };
   const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(!failed.success, "failure was treated as success");
@@ -566,6 +601,8 @@ test("a failed pdf export restores the template view", function (api, workbook) 
   assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords stayed hidden after failure");
   assert(!template.isRowHiddenByUser(1) && !template.isRowHiddenByUser(37), "rows stayed hidden after failure");
   assert(!template.isColumnHiddenByUser(8), "columns stayed hidden after failure");
+  assert(workbook.getSheets().map(function (item) { return item.getName(); }).join("|") === orderBefore.join("|"), "tab order changed after failure");
+  assert(workbook.getActiveSheet().getName() === "Time&Attendance", "active tab changed after failure");
 });
 
 test("drive and email permission errors tell Jane how to authorize", function (api) {
