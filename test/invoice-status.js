@@ -687,11 +687,38 @@ test("a sheet logo is kept on the invoice", function (api) {
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==", "base64");
   const logo = api.logoFromBytes_(Array.from(png));
   assert(logo && logo.raw && logo.width === 2 && logo.height === 2, JSON.stringify(logo && { w: logo.width, h: logo.height, raw: logo.raw }));
+  assert(logo.bytes[0] === 255 && logo.bytes[1] === 0 && logo.bytes[2] === 0, "logo pixels were blank");
   const rows = [];
   for (let i = 0; i < 35; i++) rows.push(["", "", "", "", "", "", ""]);
   rows[2][0] = "INVOICE";
   const pdf = api.buildInvoicePdf_(rows, logo);
   assert(pdf.indexOf("/Im1") !== -1, "logo was left off the PDF");
+});
+
+test("bank details stay clear of their labels", function (api) {
+  const rows = [];
+  for (let i = 0; i < 35; i++) rows.push(["", "", "", "", "", "", ""]);
+  rows[32][0] = "Please remit payment to the bank details below by date.";
+  rows[32][1] = "22/09/2026";
+  rows[33][0] = "Bank Transfers payable to:";
+  rows[33][1] = "Bank Transfers payable to:";
+  rows[33][2] = "Jonathon Reynolds";
+  rows[34][0] = "IBAN";
+  rows[34][1] = "IE89 REVO 9903 6056 2184 91";
+  const pdf = api.buildInvoicePdf_(rows, null);
+  const spots = pdfTextSpots(pdf);
+  const remit = spots["Please remit payment to the bank details below by date."];
+  const due = spots["22/09/2026"];
+  const label = spots["Bank Transfers payable to:"];
+  const payee = spots["Jonathon Reynolds"];
+  const ibanLabel = spots.IBAN;
+  const iban = spots["IE89 REVO 9903 6056 2184 91"];
+  assert(remit && due && due.x >= remit.x + 150, "due date covers the remit line " + JSON.stringify({ remit: remit, due: due }));
+  assert(label && payee && payee.x >= label.x + 70, "payee covers the bank label " + JSON.stringify({ label: label, payee: payee }));
+  assert(ibanLabel && iban && iban.x >= ibanLabel.x + 40, "IBAN covers its label " + JSON.stringify({ ibanLabel: ibanLabel, iban: iban }));
+  assert(pdf.split("(Bank Transfers payable to:) Tj").length - 1 === 1, "bank label was drawn twice");
+  assert(pdf.split("(Jonathon Reynolds) Tj").length - 1 === 1, "payee was drawn more than once");
+  assert(pdf.split("(IE89 REVO 9903 6056 2184 91) Tj").length - 1 === 1, "IBAN was drawn more than once");
 });
 
 test("email sends the invoice to the client and a copy to us", function (api, workbook) {
