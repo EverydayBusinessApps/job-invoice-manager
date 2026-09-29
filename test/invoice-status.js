@@ -259,9 +259,9 @@ function loadApi(workbook) {
         return {
           getAuthorizationUrl: function () { return "https://accounts.google.com/o/oauth2/auth?everydaywork=1"; }
         };
-      }
+      },
+      getOAuthToken: function () { return "token"; }
     },
-    Session: { getScriptTimeZone: function () { return "UTC"; } },
     Utilities: {
       formatDate: function (date, timezone, pattern) {
         if (Object.prototype.toString.call(date) !== "[object Date]" || isNaN(date.getTime())) return "";
@@ -285,9 +285,28 @@ function loadApi(workbook) {
       }
     },
     ContentService: { MimeType: { JSON: "json" }, createTextOutput: function () { return { setMimeType: function () { return {}; } }; } },
+    UrlFetchApp: {
+      fetch: function (url, options) {
+        context.fetchTouches += 1;
+        context.lastFetch = { url: url, options: options };
+        if (context.fetchError) throw new Error(context.fetchError);
+        const bytes = context.fetchBytes || [37, 80, 68, 70, 45, 49, 46, 52, 10, 37, 37, 69, 79, 70];
+        return {
+          getResponseCode: function () { return context.fetchCode || 200; },
+          getBlob: function () {
+            return {
+              setName: function () { return this; },
+              getBytes: function () { return bytes; },
+              getContentType: function () { return "application/pdf"; }
+            };
+          }
+        };
+      }
+    },
     console: console,
     driveTouches: 0,
-    mailTouches: 0
+    mailTouches: 0,
+    fetchTouches: 0
   };
   context.global = context;
   vm.createContext(context);
@@ -564,12 +583,13 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
   assert(/Draft/.test(again.error), again.error);
 });
 
-test("invoice pdf is INV-Template from row 2 and does not call Drive", function (api, workbook) {
+test("invoice pdf prints INV-Template from row 2 and does not call Drive", function (api, workbook) {
   const source = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
-  assert(!/UrlFetchApp/.test(source), "PDF export still calls UrlFetchApp");
-  assert(!/ss\.getBlob\s*\(/.test(source), "PDF export still prints the spreadsheet");
+  assert(/UrlFetchApp\.fetch/.test(source), "PDF export no longer prints the sheet");
+  assert(!/ss\.getBlob\s*\(/.test(source), "PDF export still prints the whole spreadsheet");
   assert(!/hideSheet\s*\(/.test(source), "PDF export still hides sheets");
   assert(!/moveActiveSheet\s*\(/.test(source), "PDF export still reorders tabs");
+  assert(!/buildInvoicePdf_/.test(source), "PDF export still draws its own page");
 
   const template = createSheet("INV-Template");
   const archive = createSheet("Archive");
@@ -579,146 +599,46 @@ test("invoice pdf is INV-Template from row 2 and does not call Drive", function 
   template.hideRows(2, 1);
   template.getRange("A1").setValue("Select Invoice To print");
   template.getRange("B1").setValue("OLD");
-  template.getRange("A4").setValue("INVOICE");
-  template.getRange("F6").setValue("Invoice ID");
-  template.getRange("G6").setValue("INV-JR26-013");
-  template.getRange("B7").setValue("JR Engineering");
-  template.getRange("F7").setValue("Invoice Date");
-  template.getRange("G7").setValue("28/09/2026");
-  template.getRange("F10").setValue("Bill To");
-  template.getRange("F11").setValue("Panelto Foods");
-  template.getRange("A17").setValue("Work Summary");
-  template.getRange("A19").setValue("Date");
-  template.getRange("B19").setValue("Details");
-  template.getRange("C19").setValue("Start");
-  template.getRange("D19").setValue("Finish");
-  template.getRange("E19").setValue("Total hours");
-  template.getRange("F19").setValue("Hourly Rate");
-  template.getRange("G19").setValue("Amount");
-  template.getRange("A20").setValue("Thu 17/09/26");
-  template.getRange("B20").setValue("Maintenance Cover");
-  template.getRange("C20").setValue("06:00");
-  template.getRange("D20").setValue("18:00");
-  template.getRange("E20").setValue("12.0");
-  template.getRange("F20").setValue("\u20ac45.00");
-  template.getRange("G20").setValue("\u20ac540.00");
-  template.getRange("E32").setValue("12.0");
-  template.getRange("G32").setValue("\u20ac540.00");
-  template.getRange("A34").setValue("Please remit payment to the bank details below by date.");
-  template.getRange("G34").setValue("22/09/2026");
-  template.getRange("A35").setValue("Bank Transfers payable to:");
-  template.getRange("C35").setValue("Jonathon Reynolds");
-  template.getRange("A36").setValue("IBAN");
-  template.getRange("C36").setValue("IE89 REVO 9903 6056 2184 91");
   const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
   const activeBefore = workbook.getActiveSheet().getName();
   let seenB1 = null;
-  const originalRange = template.getRange;
-  template.getRange = function (rowOrA1) {
-    const range = originalRange.apply(this, arguments);
-    if (rowOrA1 === "A2:G36") {
-      const read = range.getDisplayValues;
-      range.getDisplayValues = function () {
-        seenB1 = originalRange.call(template, "B1").getValue();
-        return read.call(range);
-      };
-    }
-    return range;
+  let rowHiddenDuringPrint = null;
+  const originalFetch = api.UrlFetchApp.fetch;
+  api.UrlFetchApp.fetch = function (url, options) {
+    seenB1 = template.getRange("B1").getValue();
+    rowHiddenDuringPrint = template.isRowHiddenByUser(1);
+    return originalFetch.call(this, url, options);
   };
   workbook.getBlob = function () { throw new Error("getBlob should not run"); };
   const touches = api.driveTouches;
 
   const saved = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(saved.success, saved.error);
+  assert(/INV-Template print/.test(saved.message), saved.message);
   assert(saved.fileName === "INV-JR26-013_" + new Date().getFullYear() + "-"
     + String(new Date().getMonth() + 1).padStart(2, "0") + "-"
     + String(new Date().getDate()).padStart(2, "0") + ".pdf", saved.fileName);
   const pdf = Buffer.from(saved.pdfBase64, "base64").toString("latin1");
   assert(pdf.indexOf("%PDF-1.4") === 0, "pdf header");
-  assert(pdf.indexOf("%%EOF") !== -1, "pdf trailer");
-  assert(pdf.indexOf("(INVOICE)") !== -1, "missing invoice title");
-  assert(pdf.indexOf("(JR Engineering)") !== -1, "missing business name");
-  assert(pdf.indexOf("(Invoice ID)") !== -1, "missing invoice label");
-  assert(pdf.indexOf("(INV-JR26-013)") !== -1, "missing selected invoice");
-  assert(pdf.indexOf("(Panelto Foods)") !== -1, "missing bill to");
-  assert(pdf.indexOf("(Maintenance Cover)") !== -1, "missing line");
-  assert(pdf.indexOf("(Work Summary)") !== -1, "missing work summary");
-  assert(pdf.indexOf("(Bank Transfers payable to:)") !== -1, "missing payment line");
-  assert(pdf.indexOf("(IBAN)") !== -1, "missing IBAN label");
-  assert(pdf.indexOf("\\200540.00") !== -1, "euro amount was dropped");
-  assert(pdf.indexOf("EUR ") === -1, "amount was spelled as EUR");
-  const placed = pdfTextSpots(pdf);
-  assert(placed.INVOICE && placed.INVOICE.x > 250, "title was left aligned " + JSON.stringify(placed.INVOICE));
-  assert(placed["Please remit payment to the bank details below by date."] && placed["Please remit payment to the bank details below by date."].x < 80, "remit line moved");
-  assert(placed["22/09/2026"] && placed["22/09/2026"].x > 480, "due date overlaps the remit line " + JSON.stringify(placed["22/09/2026"]));
-  assert(placed["Jonathon Reynolds"] && placed["Jonathon Reynolds"].x > 400, "payee was not on the right " + JSON.stringify(placed["Jonathon Reynolds"]));
-  assert(pdf.indexOf("Select Invoice") === -1, "picker row was included");
-  assert(pdf.indexOf("(OLD)") === -1, "previous dropdown value was printed");
-  assert(seenB1 === "INV-JR26-013", "B1 during read " + seenB1);
+  assert(api.lastFetch && api.lastFetch.url.indexOf("/spreadsheets/d/workbook/export?") !== -1, api.lastFetch && api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("gid=" + template.getSheetId()) !== -1, api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("gid=" + workbook.sheets["Time&Attendance"].getSheetId()) === -1, api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("r1=1") !== -1 && api.lastFetch.url.indexOf("r2=36") !== -1, api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("c1=0") !== -1 && api.lastFetch.url.indexOf("c2=7") !== -1, api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("size=a4") !== -1, api.lastFetch.url);
+  assert(api.lastFetch.options.headers.Authorization === "Bearer token", JSON.stringify(api.lastFetch.options));
+  assert(seenB1 === "INV-JR26-013", "B1 during print " + seenB1);
+  assert(rowHiddenDuringPrint === false, "picker row was hidden during the print");
   assert(template.getRange("B1").getValue() === "OLD", "B1 was not restored");
+  assert(!template.isRowHiddenByUser(1), "picker row was hidden");
+  assert(template.isRowHiddenByUser(2), "row 2 was unhidden");
   assert(api.driveTouches === touches, "download called Drive");
   assert(archive.isSheetHidden(), "Archive was unhidden");
   assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords was hidden");
   assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet was hidden");
   assert(!template.isSheetHidden(), "template was hidden");
-  assert(template.isRowHiddenByUser(2) && !template.isRowHiddenByUser(1), "template rows were changed");
   assert(workbook.getSheets().map(function (item) { return item.getName(); }).join("|") === orderBefore.join("|"), "tab order changed");
   assert(workbook.getActiveSheet().getName() === activeBefore, "active tab changed");
-
-  const note = api.buildInvoicePdf_([["Note (draft)"], ["\u20ac45.00"]]);
-  assert(note.indexOf("Note \\(draft\\)") !== -1, "parentheses were not escaped");
-  assert(note.indexOf("\\20045.00") !== -1 && note.indexOf("\u20ac") === -1, "euro sign leaked into the PDF");
-});
-
-function pdfTextSpots(pdf) {
-  const spots = {};
-  const lines = String(pdf).split("\n");
-  let x = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const move = lines[i].match(/^1 0 0 1 (-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) Tm$/);
-    if (move) x = Number(move[1]);
-    const text = lines[i].match(/^\((.*)\) Tj$/);
-    if (text) spots[text[1].replace(/\\200/g, "€").replace(/\\([()\\])/g, "$1")] = { x: x };
-  }
-  return spots;
-}
-
-test("a sheet logo is kept on the invoice", function (api) {
-  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==", "base64");
-  const logo = api.logoFromBytes_(Array.from(png));
-  assert(logo && logo.raw && logo.width === 2 && logo.height === 2, JSON.stringify(logo && { w: logo.width, h: logo.height, raw: logo.raw }));
-  assert(logo.bytes[0] === 255 && logo.bytes[1] === 0 && logo.bytes[2] === 0, "logo pixels were blank");
-  const rows = [];
-  for (let i = 0; i < 35; i++) rows.push(["", "", "", "", "", "", ""]);
-  rows[2][0] = "INVOICE";
-  const pdf = api.buildInvoicePdf_(rows, logo);
-  assert(pdf.indexOf("/Im1") !== -1, "logo was left off the PDF");
-});
-
-test("bank details stay clear of their labels", function (api) {
-  const rows = [];
-  for (let i = 0; i < 35; i++) rows.push(["", "", "", "", "", "", ""]);
-  rows[32][0] = "Please remit payment to the bank details below by date.";
-  rows[32][1] = "22/09/2026";
-  rows[33][0] = "Bank Transfers payable to:";
-  rows[33][1] = "Bank Transfers payable to:";
-  rows[33][2] = "Jonathon Reynolds";
-  rows[34][0] = "IBAN";
-  rows[34][1] = "IE89 REVO 9903 6056 2184 91";
-  const pdf = api.buildInvoicePdf_(rows, null);
-  const spots = pdfTextSpots(pdf);
-  const remit = spots["Please remit payment to the bank details below by date."];
-  const due = spots["22/09/2026"];
-  const label = spots["Bank Transfers payable to:"];
-  const payee = spots["Jonathon Reynolds"];
-  const ibanLabel = spots.IBAN;
-  const iban = spots["IE89 REVO 9903 6056 2184 91"];
-  assert(remit && due && due.x >= remit.x + 150, "due date covers the remit line " + JSON.stringify({ remit: remit, due: due }));
-  assert(label && payee && payee.x >= label.x + 70, "payee covers the bank label " + JSON.stringify({ label: label, payee: payee }));
-  assert(ibanLabel && iban && iban.x >= ibanLabel.x + 40, "IBAN covers its label " + JSON.stringify({ ibanLabel: ibanLabel, iban: iban }));
-  assert(pdf.split("(Bank Transfers payable to:) Tj").length - 1 === 1, "bank label was drawn twice");
-  assert(pdf.split("(Jonathon Reynolds) Tj").length - 1 === 1, "payee was drawn more than once");
-  assert(pdf.split("(IE89 REVO 9903 6056 2184 91) Tj").length - 1 === 1, "IBAN was drawn more than once");
 });
 
 test("email sends the invoice to the client and a copy to us", function (api, workbook) {
@@ -766,9 +686,9 @@ test("a failed pdf export restores the invoice selected in B1", function (api, w
   const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
   const originalRange = template.getRange;
   template.getRange = function (rowOrA1) {
-    if (rowOrA1 === "A2:G36") throw new Error("boom");
     return originalRange.apply(this, arguments);
   };
+  api.fetchError = "boom";
   workbook.getBlob = function () { throw new Error("getBlob should not run"); };
   const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(!failed.success, "failure was treated as success");
@@ -789,27 +709,27 @@ test("drive and email permission errors tell Jane how to authorize", function (a
   const email = api.invoicePdfError_(new Error("Specified permissions are not sufficient for MailApp"), "email");
   assert(/Allow email sending/.test(email) && /authorizeEverydayWork/.test(email), email);
   const download = api.invoicePdfError_(new Error("You do not have permission to call UrlFetchApp.fetch"), "download");
-  assert(!/authorizeEverydayWork/.test(download), download);
-  const failure = api.pdfPermissionResult_(new Error("You do not have permission to call MailApp.sendEmail"), "email", null);
-  assert(failure.authUrl.indexOf("https://accounts.google.com/") === 0, failure.authUrl);
-  assert(!api.pdfPermissionResult_(new Error("boom"), "download", null).authUrl, "download offered an allow link");
+  assert(/authorizeEverydayWork/.test(download), download);
+  assert(/Manage deployments/.test(download), download);
   api.authorizeEverydayWork();
   assert(api.driveTouches === 1 && api.mailTouches === 1, "authorize did not touch Drive and Gmail");
+  assert(api.fetchTouches === 1, "authorize did not request the sheet print");
+  assert(/format=pdf/.test(api.lastFetch.url), api.lastFetch.url);
 });
 
-test("email without mail permission still returns the invoice PDF and an allow link", function (api, workbook) {
+test("email without mail permission explains how to allow it", function (api, workbook) {
   const template = createSheet("INV-Template");
   workbook.sheets["INV-Template"] = template;
-  api.MailApp.sendEmail = function () {
-    throw new Error("You do not have permission to call MailApp.sendEmail. Required permissions: https://www.googleapis.com/auth/script.send_mail");
+  api.GmailApp.sendEmail = function () {
+    throw new Error("You do not have permission to call GmailApp.sendEmail. Required permissions: https://www.googleapis.com/auth/gmail.send");
   };
   const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "email", email: "accounts@example.com" });
   assert(!failed.success, "mail failure was treated as success");
-  assert(/script\.send_mail/.test(failed.error), failed.error);
-  assert(failed.authUrl.indexOf("https://accounts.google.com/") === 0, failed.authUrl);
-  assert(failed.pdfBase64 === Buffer.from([37, 80, 68, 70]).toString("base64"), "pdf bytes missing");
+  assert(/gmail\.send/.test(failed.error), failed.error);
+  assert(/Allow email sending/.test(failed.error), failed.error);
   assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet stayed hidden");
   assert(!template.isRowHiddenByUser(1), "picker rows stayed hidden");
+  assert(template.getRange("B1").getValue() === "", "B1 was left on the selected invoice");
 });
 
 if (failures.length) {

@@ -982,7 +982,7 @@ window.Alpine.data('appState', () => ({
     }
   },
   previewPdfNote() {
-    this.setFeedback("The PDF is built from INV-Template after Code.gs is deployed.", false);
+    this.setFeedback("Preview cannot print INV-Template. After Code.gs is deployed, the PDF is the printed sheet, including the logo and bank details.", false);
   },
   async saveInvoicePdf() {
     if (!this.detailId) return;
