@@ -295,6 +295,7 @@ window.Alpine.data('appState', () => ({
   overnight: false,
   overnightLabel: '',
   previewMode: /(?:\?|&)preview=1(?:&|$)/.test(typeof location !== "undefined" ? location.search : ""),
+  mailAuthUrl: "",
   unbilled: {},
   dashboardLive: false,
   dashboardNote: "",
@@ -993,7 +994,7 @@ window.Alpine.data('appState', () => ({
         this.driveUrl = res.url || "";
         this.setFeedback(res.message || "Saved to the Invoices folder.", false);
       } else {
-        this.setFeedback(this.failMessage(res, "Could not save the PDF."), true);
+        this.showPdfError(res, "Could not save the PDF.");
       }
     } catch (err) {
       this.setFeedback("Could not save the PDF.", true);
@@ -1027,7 +1028,7 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "email", email: email });
       if (res && res.success) this.setFeedback(res.message || "Invoice emailed.", false);
-      else this.setFeedback(this.failMessage(res, "Could not email the PDF."), true);
+      else this.showPdfError(res, "Could not email the PDF.");
     } catch (err) {
       this.setFeedback("Could not email the PDF.", true);
     }
@@ -1102,5 +1103,13 @@ window.Alpine.data('appState', () => ({
     }
   },
   setFeedback(msg, isErr) { this.feedback.text = msg; this.feedback.isError = isErr; },
-  clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; }
+  showPdfError(res, fallback) {
+    this.setFeedback(this.failMessage(res, fallback), true);
+    this.mailAuthUrl = (res && res.authUrl) || "";
+    if (res && res.pdfBase64) this.savePdfFile(res.fileName, res.pdfBase64);
+  },
+  openMailAuth() {
+    if (this.mailAuthUrl) window.open(this.mailAuthUrl, "_blank", "noopener");
+  },
+  clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; this.mailAuthUrl = ""; }
 }));

@@ -995,13 +995,25 @@ function readInvoiceLines_(ss, invoice) {
 /**
  * Run once from the Apps Script editor to approve Drive and Gmail.
  * Download does not need this. Save to Drive and Email do.
- * Click Run, choose Allow, then deploy a new web app version.
+ * Click Run, choose Allow, then use Deploy > New deployment > Web app.
+ * A new version of the current deployment keeps the old permission.
  */
 function authorizeEverydayWork() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const fileName = DriveApp.getFileById(ss.getId()).getName();
   const remaining = MailApp.getRemainingDailyQuota();
-  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining);
+  const authUrl = scriptAuthUrl_();
+  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + (authUrl ? " Allow link: " + authUrl : ""));
+}
+
+function scriptAuthUrl_() {
+  try {
+    if (typeof ScriptApp === "undefined" || !ScriptApp.getAuthorizationInfo || !ScriptApp.AuthMode) return "";
+    const info = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+    return String((info && info.getAuthorizationUrl && info.getAuthorizationUrl()) || "");
+  } catch (err) {
+    return "";
+  }
 }
 
 /**
@@ -1033,6 +1045,7 @@ function exportInvoicePdf(payload) {
   }
 
   const previous = sheet.getRange("B1").getValue();
+  let built = null;
   try {
     widenInvoiceTotals_(sheet);
     sheet.getRange("B1").setValue(code);
@@ -1043,6 +1056,7 @@ function exportInvoicePdf(payload) {
     const today = Utilities.formatDate(new Date(), timezone, "yyyy-MM-dd");
     const fileName = invoicePdfName_(code, today);
     const blob = renderInvoicePdf_(ss, sheet).setName(fileName);
+    built = { fileName: fileName, blob: blob };
 
     if (mode === "download") {
       return {
@@ -1081,7 +1095,7 @@ function exportInvoicePdf(payload) {
       message: "Saved " + stored + " to the Invoices folder on Google Drive."
     };
   } catch (err) {
-    return { success: false, error: invoicePdfError_(err, mode) };
+    return pdfPermissionResult_(err, mode, built);
   } finally {
     sheet.getRange("B1").setValue(previous);
     SpreadsheetApp.flush();
@@ -1101,9 +1115,23 @@ function invoicePdfError_(err, mode) {
   const denied = /permission|authorization/i.test(text);
   if (denied && (mode === "drive" || mode === "email")) {
     return "Could not create the invoice PDF. " + text
-      + " In the Apps Script editor, select authorizeEverydayWork, click Run, choose Allow, then deploy a new web app version.";
+      + " Choose Allow email sending if it is shown, then try again."
+      + " If it is not shown, in Apps Script choose Deploy, then New deployment, then Web app."
+      + " A new version of the current deployment does not add email permission."
+      + " You can also run authorizeEverydayWork, choose Allow, and create that new deployment.";
   }
   return "Could not create the invoice PDF. " + text;
+}
+
+function pdfPermissionResult_(err, mode, built) {
+  const denied = /permission|authorization/i.test(String(err && err.message ? err.message : err));
+  const result = { success: false, error: invoicePdfError_(err, mode), authUrl: "" };
+  if (denied && (mode === "drive" || mode === "email")) result.authUrl = scriptAuthUrl_();
+  if (built && mode === "email" && built.blob) {
+    result.fileName = built.fileName;
+    result.pdfBase64 = Utilities.base64Encode(built.blob.getBytes());
+  }
+  return result;
 }
 
 /**

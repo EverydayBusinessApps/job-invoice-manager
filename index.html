@@ -7,7 +7,7 @@
   
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=3">
-  <script defer src="app.js?v=3"></script>
+  <script defer src="app.js?v=4"></script>
 </head>
 <body>
 
@@ -28,6 +28,7 @@
 
     <main>
       <div x-show="feedback.text" :class="feedback.isError ? 'alert alert-error' : 'alert alert-success'" x-text="feedback.text"></div>
+      <button type="button" class="btn-alt" x-show="mailAuthUrl" data-action="openMailAuth">Allow email sending</button>
 
       <!-- VIEW: DASHBOARD -->
       <div x-show="currentTab === 'dashboard'">
