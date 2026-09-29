@@ -1,6 +1,6 @@
 # job-invoice-manager
 
-# Everyday Job & Invoice Manager (FlexiTrack Pro)
+# EverydayWork
 
 A high-performance, mobile-first service delivery ledger and automated billing solution engineered for autonomous B2B and B2C professionals operating on hourly, daily, or flat-rate parameters.
 

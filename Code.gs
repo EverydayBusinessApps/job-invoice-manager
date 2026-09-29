@@ -1,5 +1,5 @@
 /**
- * Everyday Job & Invoice Manager (Engineering Trade Custom Build)
+ * EverydayWork (Engineering Trade Custom Build)
  * Production REST API Gateway
  * Copyright (c) 2026 EverydayBusinessApps. All Rights Reserved.
  */
@@ -7,7 +7,7 @@
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({ 
     success: true, 
-    message: "Engineering API Operational. Awaiting data vectors." 
+    message: "EverydayWork API operational. Awaiting data vectors." 
   })).setMimeType(ContentService.MimeType.JSON);
 }
 

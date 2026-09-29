@@ -1,5 +1,5 @@
 /**
- * FlexiTrack Custom Polyfill Core & Controller
+ * EverydayWork Custom Polyfill Core & Controller
  * Built for EverydayBusinessApps
  */
 
