@@ -1043,18 +1043,23 @@ function invoicePdfError_(err, mode) {
 }
 
 /**
- * Build a PDF from the spreadsheet the web app can already read.
- * UrlFetchApp needs script.external_request, which an existing deployment does not have.
- * Hiding the other sheets and the picker keeps the file to the invoice page.
- * A long tail is hidden in one call so the export stays inside the web app time limit.
+ * Build a PDF of INV-Template from the spreadsheet the web app can already read.
+ * getBlob() prints the first sheet, so Time & Attendance was the file Jane received.
+ * The template moves to the first tab, every other sheet is hidden, and the PDF
+ * bytes are read before those tabs are put back.
  */
 function renderInvoicePdf_(ss, sheet) {
+  if (sheet.getName && sheet.getName() !== "INV-Template") {
+    throw new Error("The invoice PDF has to be INV-Template, not " + sheet.getName() + ".");
+  }
   const state = {
     showedTemplate: false,
     hiddenSheets: [],
     picker: null,
     tail: null,
-    columns: null
+    columns: null,
+    originalIndex: sheet.getIndex ? sheet.getIndex() : 1,
+    previousSheet: ss.getActiveSheet ? ss.getActiveSheet() : null
   };
   try {
     if (sheet.isSheetHidden()) {
@@ -1074,17 +1079,26 @@ function renderInvoicePdf_(ss, sheet) {
     if (maxRows > 36) state.tail = concealForPdf_(sheet, 37, maxRows - 36, "row");
     const maxCols = sheet.getMaxColumns();
     if (maxCols > 7) state.columns = concealForPdf_(sheet, 8, maxCols - 7, "column");
+    if (sheet.activate) sheet.activate();
     if (ss.setActiveSheet) ss.setActiveSheet(sheet);
+    if (state.originalIndex !== 1) ss.moveActiveSheet(1);
     SpreadsheetApp.flush();
-    const blob = ss.getBlob();
-    if (!blob) throw new Error("The spreadsheet did not return a PDF.");
-    const type = String((blob.getContentType && blob.getContentType()) || "");
+    Utilities.sleep(1000);
+    const raw = ss.getBlob();
+    if (!raw) throw new Error("The spreadsheet did not return a PDF.");
+    const type = String((raw.getContentType && raw.getContentType()) || "");
     if (type && type.indexOf("pdf") === -1 && type.indexOf("octet-stream") === -1) {
       throw new Error("The spreadsheet did not return a PDF.");
     }
-    return blob;
+    const bytes = raw.getBytes();
+    if (!bytes || !bytes.length) throw new Error("The spreadsheet did not return a PDF.");
+    const first = ss.getSheets()[0];
+    if (!first || first.getSheetId() !== sheet.getSheetId()) {
+      throw new Error("The invoice PDF was not taken from INV-Template.");
+    }
+    return Utilities.newBlob(bytes, type || "application/pdf");
   } finally {
-    restoreInvoicePdfView_(sheet, state);
+    restoreInvoicePdfView_(ss, sheet, state);
   }
 }
 
@@ -1140,13 +1154,23 @@ function showSpan_(sheet, spans, axis) {
   for (let i = spans.length - 1; i >= 0; i--) show(spans[i].start, spans[i].count);
 }
 
-function restoreInvoicePdfView_(sheet, state) {
+function restoreInvoicePdfView_(ss, sheet, state) {
   if (state.columns) revealForPdf_(sheet, state.columns, "column");
   if (state.tail) revealForPdf_(sheet, state.tail, "row");
   if (state.picker) revealForPdf_(sheet, state.picker, "row");
   const hiddenSheets = state.hiddenSheets || [];
   for (let i = 0; i < hiddenSheets.length; i++) hiddenSheets[i].showSheet();
+  if (state.originalIndex && sheet.getIndex && sheet.getIndex() !== state.originalIndex) {
+    if (sheet.activate) sheet.activate();
+    if (ss.setActiveSheet) ss.setActiveSheet(sheet);
+    ss.moveActiveSheet(state.originalIndex);
+  }
   if (state.showedTemplate) sheet.hideSheet();
+  const previous = state.previousSheet;
+  if (previous && previous.getSheetId() !== sheet.getSheetId() && !previous.isSheetHidden()) {
+    if (previous.activate) previous.activate();
+    else if (ss.setActiveSheet) ss.setActiveSheet(previous);
+  }
 }
 
 function invoicePdfName_(code, isoDate) {
