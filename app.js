@@ -266,6 +266,7 @@ function sampleDashboard() {
       row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
       row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", status: "Bad debt", kind: "bad", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
     ],
+    clients: [{ name: "Acme" }, { name: "Other Co" }],
     unbilled: { "Other Co": { totalHours: 1, totalAmount: 50 } }
   };
 }
@@ -749,6 +750,9 @@ window.Alpine.data('appState', () => ({
       this.dashboardNote = "Sample figures for the layout. Live totals appear after Code.gs is pasted into Apps Script and deployed.";
       const sample = sampleDashboard();
       this.unbilled = sample.unbilled || {};
+      this.applyClientList(sample.clients || []);
+      this.invoices = this.mapInvoices(sample.invoices);
+      this.refreshClientInvoices();
       this.applyDashboard(sample, true);
       return;
     }
