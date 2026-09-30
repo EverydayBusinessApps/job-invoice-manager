@@ -97,9 +97,9 @@ function invoiceLabel_(id, status, dateStr) {
 
 /**
  * InvoiceList column I (Invoice Status):
- * Draft when the first time entry opens the invoice, Invoiced when
- * Compile Account Statement & Invoice runs, then Paid, Unpaid, or Bad debt
- * from the billing desk. Time can only be added while the status is Draft.
+ * Draft when the first time entry opens the invoice, Invoiced when that
+ * invoice is marked Invoiced, then Paid, Unpaid, or Bad debt from the
+ * same open invoice. Time can only be added while the status is Draft.
  */
 function displayStatus_(status) {
   const value = String(status || "").trim();
@@ -468,7 +468,7 @@ function updateInvoiceStatus(payload) {
 }
 
 /**
- * Compile one draft: InvoiceList column I becomes Invoiced.
+ * Mark one draft Invoiced: InvoiceList column I becomes Invoiced.
  * A blank invoice date is stamped today so the period stats can place it.
  */
 function compileSingleInvoice(payload) {
@@ -484,7 +484,7 @@ function compileSingleInvoice(payload) {
 
   const status = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
   if (status !== "Draft") {
-    return { success: false, error: "Only a Draft invoice can be compiled. Invoice " + invoiceId + " is " + status + "." };
+    return { success: false, error: "Only a Draft invoice can be marked Invoiced. Invoice " + invoiceId + " is " + status + "." };
   }
 
   invoiceSheet.getRange(row, 9).setValue("Invoiced");
