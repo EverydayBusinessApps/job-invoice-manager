@@ -1,7 +1,7 @@
 [x-cloak] { display: none !important; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding-bottom: 5rem; color: #1e293b; -webkit-font-smoothing: antialiased; }
-.shell { max-width: 28rem; margin: 0 auto; min-height: 100vh; flex-direction: column; display: flex; background-color: #ffffff; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
-header { background-color: #00263B; color: #FAFFE4; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.35rem 0.75rem; position: sticky; top: 0; z-index: 50; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background-color: #f4f6f8; margin: 0; padding-bottom: 5rem; color: #1e293b; -webkit-font-smoothing: antialiased; }
+.shell { max-width: 28rem; margin: 0 auto; min-height: 100vh; flex-direction: column; display: flex; background-color: #f4f6f8; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
+header { background-color: #00263B; color: #FAFFE4; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.35rem 0.75rem; position: sticky; top: 0; z-index: 50; border-bottom: 3px solid #AA9251; }
 .wait-label { flex: 1 0 100%; margin: 0; font-size: 0.75rem; font-weight: 700; color: #FAFFE4; font-family: inherit; line-height: 1.4; overflow-wrap: anywhere; }
 header h1 { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -0.025em; }
 header p { margin: 0; font-size: 10px; color: #FAFFE4; font-family: monospace; font-weight: bold; letter-spacing: 0.05em; }
@@ -12,7 +12,20 @@ header .icon-btn.cog-on { background: #01344f; }
 .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; display: inline-block; background-color: #34d399; }
 .dot.syncing { background-color: #FAFFE4; animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
 .banner { background-color: #00263B; border-bottom: 1px solid #01344f; padding: 0.5rem 0.75rem; text-align: left; font-size: 0.75rem; font-weight: 600; color: #FAFFE4; line-height: 1.4; overflow-wrap: anywhere; }
-main { padding: 1rem; flex: 1; display: flex; flex-direction: column; gap: 1rem; }
+main { padding: 1rem; flex: 1; display: flex; flex-direction: column; gap: 1rem; background-color: #f4f6f8; }
+.home-board { display: flex; flex-direction: column; gap: 0.85rem; }
+.home-heading { margin: 0.15rem 0 0; font-size: 1.15rem; font-weight: 700; color: #0f172a; }
+.pile-list { display: flex; flex-direction: column; gap: 0.75rem; }
+button.pile { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; width: 100%; text-align: left; background: #ffffff; color: #0f172a; border: 1px solid #e6eaee; border-radius: 0.9rem; padding: 0.95rem 1rem; font-weight: 700; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
+button.pile.pile-alt { background: #00263B; color: #FAFFE4; border-color: #00263B; }
+.pile-copy { display: flex; flex-direction: column; min-width: 0; }
+button.pile .metric-value { font-size: 1.55rem; margin-top: 0.3rem; }
+.pile-hint { display: block; margin-top: 0.2rem; font-size: 0.72rem; font-weight: 600; color: #64748b; }
+button.pile.pile-alt .metric-title,
+button.pile.pile-alt .metric-sub,
+button.pile.pile-alt .pile-hint { color: #FAFFE4; }
+.pile-chevron { flex-shrink: 0; color: #00263B; }
+button.pile.pile-alt .pile-chevron { color: #AA9251; }
 section { background: #ffffff; border: 1px solid #f1f5f9; border-radius: 1rem; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
 section + section { margin-top: 1rem; }
 .card-title { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; padding-bottom: 0.5rem; border-bottom: 1px solid #f1f5f9; }
@@ -77,7 +90,9 @@ button.btn-unpaid:disabled {
   cursor: not-allowed;
 }
 header .refresh-btn:disabled { background: transparent; color: #FAFFE4; opacity: 0.45; }
+nav button { position: relative; }
 nav button.nav-on { color: #FAFFE4; font-weight: 700; }
+nav button.nav-on::before { content: ""; position: absolute; top: 0; left: 50%; width: 1.5rem; height: 3px; transform: translateX(-50%); background: #AA9251; border-radius: 2px; }
 .metric-box.alt .metric-title,
 .metric-box.alt .metric-sub,
 button.metric-box.alt .metric-title,

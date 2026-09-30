@@ -422,7 +422,7 @@ window.Alpine.data('appState', () => ({
   periodMonthClass: "seg-on",
   periodQuarterClass: "",
   periodYearClass: "",
-  periodNote: "Hours and value are for this month only. The totals above are everything still open.",
+  periodNote: "Hours and value are for this month only.",
   tabDashClass: "nav-on",
   tabClientsClass: "",
   tabTrackerClass: "",
@@ -1151,10 +1151,10 @@ window.Alpine.data('appState', () => ({
     this.activeAvg = this.money(period.avgRate);
     this.activeTop = period.topClient ? (period.topClient + " · " + this.hoursText(period.topClientHours) + " h") : "—";
     const notes = {
-      week: "Hours and value are for this week only. The totals above are everything still open.",
-      month: "Hours and value are for this month only. The totals above are everything still open.",
-      quarter: "Hours and value are for this quarter only. The totals above are everything still open.",
-      year: "Hours and value are for this financial year. The totals above are everything still open."
+      week: "Hours and value are for this week only.",
+      month: "Hours and value are for this month only.",
+      quarter: "Hours and value are for this quarter only.",
+      year: "Hours and value are for this financial year."
     };
     this.periodNote = notes[this.period] || notes.month;
     this.syncSummary();
@@ -1402,10 +1402,10 @@ window.Alpine.data('appState', () => ({
     this.invoiceFilter = kind;
     this.listScope = periodScoped ? "period" : "open";
     const titles = {
-      due: "Still to collect",
-      send: "Still to send",
-      draft: "Still to send",
-      done: "Done"
+      due: "Invoices to collect",
+      send: "Invoices to send",
+      draft: "Invoices to send",
+      done: "Finished invoices"
     };
     this.listTitle = (titles[kind] || "Invoices") + (periodScoped && this.activeLabel ? " · " + this.activeLabel : "");
     const hints = {
