@@ -100,7 +100,7 @@
                 <div class="inv-amount" x-text="inv.amount"></div>
                 <div class="inv-actions">
                   <button type="button" x-show="listShowsSend" data-action="markListInvoiced" :data-id="inv.id" data-disable-when="saving">Mark invoiced</button>
-                  <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Open</button>
+                  <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Generate and send</button>
                   <button type="button" x-show="listShowsCollect" data-action="markListPaid" :data-id="inv.id" data-disable-when="saving">Mark paid</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="markListWrittenOff" :data-id="inv.id" data-disable-when="saving">Write off</button>
                   <button type="button" class="btn-line btn-auto" x-show="listShowsDone" data-action="undoListStatus" :data-id="inv.id" data-disable-when="saving">Undo</button>
