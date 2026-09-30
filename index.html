@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=14">
-  <script defer src="app.js?v=21"></script>
+  <link rel="stylesheet" href="style.css?v=15">
+  <script defer src="app.js?v=22"></script>
 </head>
 <body>
 
@@ -35,60 +35,38 @@
 
       <!-- VIEW: DASHBOARD -->
       <div x-show="currentTab === 'dashboard'">
-        <div x-show="dashView === 'home'">
-        <section>
-          <div class="card-title">Needs attention</div>
-          <p class="shift-note">Not sent yet, waiting on payment, and finished.</p>
-          <div class="grid-2">
-            <button type="button" class="metric-box" data-action="openList" data-id="send">
-              <span class="metric-title">Still to send</span>
-              <span class="metric-value" x-text="openSendAmount"></span>
-              <span class="metric-sub" x-text="openSendCount"></span>
+        <div x-show="dashView === 'home'" class="home-board">
+          <button type="button" data-action="setTrackerTab">Log a job</button>
+          <h2 class="home-heading">Invoices</h2>
+          <div class="pile-list">
+            <button type="button" class="pile" data-action="openList" data-id="send">
+              <span class="pile-copy">
+                <span class="metric-title">Invoices to send</span>
+                <span class="metric-value" x-text="openSendAmount"></span>
+                <span class="metric-sub" x-text="openSendCount"></span>
+                <span class="pile-hint">Finish these and mark them invoiced</span>
+              </span>
+              <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
-            <button type="button" class="metric-box alt" data-action="openList" data-id="due">
-              <span class="metric-title">Still to collect</span>
-              <span class="metric-value" x-text="openCollectAmount"></span>
-              <span class="metric-sub" x-text="openCollectCount"></span>
+            <button type="button" class="pile pile-alt" data-action="openList" data-id="due">
+              <span class="pile-copy">
+                <span class="metric-title">Invoices to collect</span>
+                <span class="metric-value" x-text="openCollectAmount"></span>
+                <span class="metric-sub" x-text="openCollectCount"></span>
+                <span class="pile-hint">Sent, waiting on payment</span>
+              </span>
+              <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
-            <button type="button" class="metric-box" data-action="openList" data-id="done">
-              <span class="metric-title">Done</span>
-              <span class="metric-value" x-text="openDoneAmount"></span>
-              <span class="metric-sub" x-text="openDoneCount"></span>
+            <button type="button" class="pile" data-action="openList" data-id="done">
+              <span class="pile-copy">
+                <span class="metric-title">Finished invoices</span>
+                <span class="metric-value" x-text="openDoneAmount"></span>
+                <span class="metric-sub" x-text="openDoneCount"></span>
+                <span class="pile-hint">Paid or written off</span>
+              </span>
+              <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
           </div>
-        </section>
-
-        <section>
-          <div class="card-title" x-text="activeLabel"></div>
-          <div class="grid-2">
-            <button type="button" class="seg" :class="periodWeekClass ? 'seg-on' : ''" data-action="setPeriod" data-id="week">Week</button>
-            <button type="button" class="seg" :class="periodMonthClass ? 'seg-on' : ''" data-action="setPeriod" data-id="month">Month</button>
-            <button type="button" class="seg" :class="periodQuarterClass ? 'seg-on' : ''" data-action="setPeriod" data-id="quarter">Quarter</button>
-            <button type="button" class="seg" :class="periodYearClass ? 'seg-on' : ''" data-action="setPeriod" data-id="year">Financial year</button>
-          </div>
-          <div class="grid-2">
-            <div class="metric-box">
-              <span class="metric-title">Hours worked</span>
-              <span class="metric-value" x-text="activeHours"></span>
-              <span class="metric-sub" x-text="activeShifts"></span>
-            </div>
-            <div class="metric-box">
-              <span class="metric-title">Work value</span>
-              <span class="metric-value" x-text="activeBillable"></span>
-              <span class="metric-sub" x-text="activeClients"></span>
-            </div>
-            <div class="metric-box">
-              <span class="metric-title">Average rate</span>
-              <span class="metric-value" x-text="activeAvg"></span>
-              <span class="metric-sub">Per hour worked</span>
-            </div>
-            <div class="metric-box">
-              <span class="metric-title">Top client</span>
-              <span class="metric-value metric-value-sm" x-text="activeTop"></span>
-            </div>
-          </div>
-          <p class="shift-note" x-text="periodNote"></p>
-        </section>
         </div>
 
         <div x-show="dashView === 'list'">
@@ -318,6 +296,37 @@
 
       <!-- VIEW: FINANCIAL SUMMARY -->
       <div x-show="currentTab === 'summary'">
+        <section>
+          <div class="card-title" x-text="activeLabel"></div>
+          <div class="grid-2">
+            <button type="button" class="seg" :class="periodWeekClass ? 'seg-on' : ''" data-action="setPeriod" data-id="week">Week</button>
+            <button type="button" class="seg" :class="periodMonthClass ? 'seg-on' : ''" data-action="setPeriod" data-id="month">Month</button>
+            <button type="button" class="seg" :class="periodQuarterClass ? 'seg-on' : ''" data-action="setPeriod" data-id="quarter">Quarter</button>
+            <button type="button" class="seg" :class="periodYearClass ? 'seg-on' : ''" data-action="setPeriod" data-id="year">Financial year</button>
+          </div>
+          <div class="grid-2">
+            <div class="metric-box">
+              <span class="metric-title">Hours worked</span>
+              <span class="metric-value" x-text="activeHours"></span>
+              <span class="metric-sub" x-text="activeShifts"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Work value</span>
+              <span class="metric-value" x-text="activeBillable"></span>
+              <span class="metric-sub" x-text="activeClients"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Average rate</span>
+              <span class="metric-value" x-text="activeAvg"></span>
+              <span class="metric-sub">Per hour worked</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Top client</span>
+              <span class="metric-value metric-value-sm" x-text="activeTop"></span>
+            </div>
+          </div>
+          <p class="shift-note" x-text="periodNote"></p>
+        </section>
         <section>
           <div class="card-title">Financial summary</div>
           <p class="shift-note">This is an indication only, for a sole trader on 2026 Irish rates. It is not a substitute for accountancy.</p>
