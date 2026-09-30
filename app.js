@@ -282,6 +282,79 @@ function sampleDashboard() {
   };
 }
 
+function displayIsoDate(iso) {
+  const match = String(iso || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const dt = new Date(year, month - 1, day);
+  if (dt.getFullYear() !== year || dt.getMonth() !== month - 1 || dt.getDate() !== day) return "";
+  return String(day).padStart(2, "0") + "/" + String(month).padStart(2, "0") + "/" + year;
+}
+
+function invoiceHoursLabel(n) {
+  const value = Math.round((Number(n) || 0) * 10) / 10;
+  const text = Math.abs(value - Math.round(value)) < 0.05 ? String(Math.round(value)) : value.toFixed(1);
+  return text + " h";
+}
+
+function briefWorkText(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (clean.length <= 90) return clean;
+  const cut = clean.slice(0, 87);
+  const space = cut.lastIndexOf(" ");
+  return (space > 40 ? cut.slice(0, space) : cut).trim() + "…";
+}
+
+function invoiceCardFacts(row) {
+  const source = row || {};
+  const lines = Array.isArray(source.lines) ? source.lines : [];
+  const dates = [];
+  lines.forEach((line) => {
+    const iso = String((line && line.date) || "").trim();
+    if (iso) dates.push(iso);
+  });
+  if (!dates.length && source.servicePeriod) {
+    String(source.servicePeriod).split(/\s+[–-]\s+/).forEach((part) => {
+      const iso = part.trim();
+      if (iso) dates.push(iso);
+    });
+  }
+  const valid = dates.filter((iso) => displayIsoDate(iso)).sort();
+  let period = "—";
+  if (valid.length) {
+    const start = displayIsoDate(valid[0]);
+    const end = displayIsoDate(valid[valid.length - 1]);
+    period = start === end ? start : (start + " – " + end);
+  }
+  const distinct = [];
+  const seen = {};
+  lines.forEach((line) => {
+    const text = String((line && line.details) || "").replace(/\s+/g, " ").trim();
+    if (!text || text === "—") return;
+    const key = text.toLowerCase();
+    if (seen[key]) return;
+    seen[key] = true;
+    distinct.push(text);
+  });
+  const job = String(source.jobDetails || "").replace(/\s+/g, " ").trim();
+  let work = "";
+  if (distinct.length > 1) work = distinct.join(", ");
+  else if (job && job !== "—") work = job;
+  else if (distinct.length === 1) work = distinct[0];
+  let hours = source.hours;
+  if (hours == null || hours === "") {
+    hours = lines.reduce((sum, line) => sum + (Number(line && line.hours) || 0), 0);
+  }
+  return {
+    period: period,
+    when: displayIsoDate(source.date) || "—",
+    hours: invoiceHoursLabel(hours),
+    work: work ? briefWorkText(work) : "—"
+  };
+}
+
 function yearEndParts(value) {
   const text = String(value || "").trim().replace(/(\d+)(st|nd|rd|th)\b/gi, "$1");
   const months = {
@@ -1241,10 +1314,15 @@ window.Alpine.data('appState', () => ({
     this.visibleInvoices = rows.map((row) => {
       const code = row.code || row.id;
       const status = row.status || "Draft";
+      const facts = invoiceCardFacts(row);
       return {
         id: row.id,
         client: row.clientName || "No client",
         line: showStatus ? (code + " · " + status) : code,
+        period: facts.period,
+        when: facts.when,
+        hours: facts.hours,
+        work: facts.work,
         amount: this.money(row.total)
       };
     });
