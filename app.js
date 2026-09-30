@@ -247,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => window.Alpine.start());
 function sampleDashboard() {
   const row = (extra) => Object.assign({
     email: "", terms: 0, rate: 0, jobDetails: "", servicePeriod: "", lines: [],
-    inMonth: false, inQuarter: true, inYear: true, overdue: false, daysOverdue: 0
+    inWeek: false, inMonth: false, inQuarter: true, inYear: true, overdue: false, daysOverdue: 0
   }, extra);
   return {
     success: true,
@@ -260,13 +260,14 @@ function sampleDashboard() {
       writtenOffAmount: 80, writtenOffCount: 1
     },
     periods: {
+      week: { label: "21 Sep – 27 Sep 2026", hours: 2, shifts: 1, clients: 1, billable: 40, avgRate: 20, topClient: "Other Co", topClientHours: 2, paid: 0, paidCount: 0, sent: 40, sentCount: 1, due: 40, dueCount: 1, draft: 0, draftCount: 0, overdue: 0, overdueCount: 0, badDebt: 0, badDebtCount: 0 },
       month: { label: "September 2026", hours: 7, shifts: 3, clients: 2, billable: 290, avgRate: 41.43, topClient: "Acme", topClientHours: 4, paid: 0, paidCount: 0, sent: 240, sentCount: 2, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 0, badDebtCount: 0 },
       quarter: { label: "Q3 2026", hours: 12, shifts: 5, clients: 2, billable: 470, avgRate: 39.17, topClient: "Acme", topClientHours: 9, paid: 100, paidCount: 1, sent: 420, sentCount: 4, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 80, badDebtCount: 1 },
-      year: { label: "2026", hours: 12, shifts: 5, clients: 2, billable: 470, avgRate: 39.17, topClient: "Acme", topClientHours: 9, paid: 100, paidCount: 1, sent: 420, sentCount: 4, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 80, badDebtCount: 1 }
+      year: { label: "1 Nov 2025 – 31 Oct 2026", hours: 12, shifts: 5, clients: 2, billable: 470, avgRate: 39.17, topClient: "Acme", topClientHours: 9, paid: 100, paidCount: 1, sent: 420, sentCount: 4, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 80, badDebtCount: 1 }
     },
     invoices: [
       row({ id: "INV-JR26-002", code: "INV-JR26-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
-      row({ id: "INV-JR26-005", code: "INV-JR26-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
+      row({ id: "INV-JR26-005", code: "INV-JR26-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inWeek: true, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
       row({ id: "INV-JR26-003", code: "INV-JR26-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
       row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", contact: "Ann Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
@@ -279,6 +280,38 @@ function sampleDashboard() {
     ],
     unbilled: { "Other Co": { totalHours: 1, totalAmount: 50 } }
   };
+}
+
+function yearEndParts(value) {
+  const text = String(value || "").trim().replace(/(\d+)(st|nd|rd|th)\b/gi, "$1");
+  const months = {
+    january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3,
+    april: 4, apr: 4, may: 5, june: 6, jun: 6, july: 7, jul: 7,
+    august: 8, aug: 8, september: 9, sept: 9, sep: 9, october: 10, oct: 10,
+    november: 11, nov: 11, december: 12, dec: 12
+  };
+  const lengths = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let month = 0;
+  let day = 0;
+  const named = text.match(/^(\d{1,2})\s+([A-Za-z]+)(?:\s+\d{4})?$/);
+  const namedRev = text.match(/^([A-Za-z]+)\s+(\d{1,2})(?:\s+\d{4})?$/);
+  const slash = text.match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.]\d{2,4})?$/);
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (named && months[named[2].toLowerCase()]) {
+    day = Number(named[1]);
+    month = months[named[2].toLowerCase()];
+  } else if (namedRev && months[namedRev[1].toLowerCase()]) {
+    month = months[namedRev[1].toLowerCase()];
+    day = Number(namedRev[2]);
+  } else if (slash) {
+    day = Number(slash[1]);
+    month = Number(slash[2]);
+  } else if (iso) {
+    month = Number(iso[2]);
+    day = Number(iso[3]);
+  }
+  if (!month || day < 1 || day > lengths[month]) return null;
+  return { month: month, day: day };
 }
 
 // ==========================================
@@ -340,9 +373,11 @@ window.Alpine.data('appState', () => ({
   listHint: "",
   listEmpty: false,
   listEmptyLabel: "Nothing in this list.",
+  periodWeekClass: "",
   periodMonthClass: "seg-on",
   periodQuarterClass: "",
   periodYearClass: "",
+  periodNote: "Hours and value are for this month only. The totals above are everything still open.",
   tabDashClass: "nav-on",
   tabClientsClass: "",
   tabTrackerClass: "",
@@ -353,15 +388,13 @@ window.Alpine.data('appState', () => ({
   extraSettings: [],
   settingsMeta: {},
   settingsShow: {
-    rate: false, currency: false, name: false, address: false, email: false,
-    website: false, phone: false, bank: false, iban: false,
-    na: false, half: false, hour: false, hourHalf: false, two: false
+    rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
+    website: false, phone: false, bank: false, iban: false
   },
   settingsForm: {
-    rate: "", currency: "", name: "", address: "", email: "",
+    rate: "", yearEnd: "", currency: "", name: "", address: "", email: "",
     website: "", phone: "", bank: "", iban: ""
   },
-  breakForm: { na: "", half: "", hour: "", hourHalf: "", two: "" },
   asOf: "",
   openSendAmount: "€0.00",
   openSendCount: "0 invoices",
@@ -1029,6 +1062,7 @@ window.Alpine.data('appState', () => ({
     return Number(parts[2]) + " " + month + " " + parts[0];
   },
   syncPeriodClasses() {
+    this.periodWeekClass = this.period === "week" ? "seg-on" : "";
     this.periodMonthClass = this.period === "month" ? "seg-on" : "";
     this.periodQuarterClass = this.period === "quarter" ? "seg-on" : "";
     this.periodYearClass = this.period === "year" ? "seg-on" : "";
@@ -1042,6 +1076,13 @@ window.Alpine.data('appState', () => ({
     this.activeBillable = this.money(period.billable);
     this.activeAvg = this.money(period.avgRate);
     this.activeTop = period.topClient ? (period.topClient + " · " + this.hoursText(period.topClientHours) + " h") : "—";
+    const notes = {
+      week: "Hours and value are for this week only. The totals above are everything still open.",
+      month: "Hours and value are for this month only. The totals above are everything still open.",
+      quarter: "Hours and value are for this quarter only. The totals above are everything still open.",
+      year: "Hours and value are for this financial year. The totals above are everything still open."
+    };
+    this.periodNote = notes[this.period] || notes.month;
   },
   dueNote(row) {
     if (!row || !row.dueDate) return row && row.kind === "draft" ? "Not sent" : "";
@@ -1063,7 +1104,8 @@ window.Alpine.data('appState', () => ({
     return bits.join(" · ");
   },
   syncVisibleInvoices() {
-    const flag = this.period === "quarter" ? "inQuarter" : this.period === "year" ? "inYear" : "inMonth";
+    const flags = { week: "inWeek", month: "inMonth", quarter: "inQuarter", year: "inYear" };
+    const flag = flags[this.period] || "inMonth";
     let rows = this.invoiceRows || [];
     if (this.listScope === "period") rows = rows.filter((row) => row[flag]);
     const filter = this.invoiceFilter;
@@ -1252,7 +1294,7 @@ window.Alpine.data('appState', () => ({
     }
   },
   setPeriod(id) {
-    if (id !== "month" && id !== "quarter" && id !== "year") return;
+    if (id !== "week" && id !== "month" && id !== "quarter" && id !== "year") return;
     this.period = id;
     this.syncPeriodClasses();
     this.syncActive();
@@ -1583,6 +1625,7 @@ window.Alpine.data('appState', () => ({
       logo: "",
       settings: [
         row(2, "Default Hourly Rate", "65"),
+        row(3, "Financial Year End", "31st October"),
         row(4, "Default Currency", "EUR"),
         row(5, "Business Name", "Everyday Business"),
         row(6, "Business Address", "Ireland"),
@@ -1591,13 +1634,6 @@ window.Alpine.data('appState', () => ({
         row(9, "Business Phone", "00353 123 45678"),
         row(11, "Bank Account Name", "Everyday Business"),
         row(12, "IBAN", "IEXX XXXX XXXX XXXX XXXX XX")
-      ],
-      breaks: [
-        row(16, "na", "00:00"),
-        row(17, "half hour", "00:30"),
-        row(18, "hour", "01:00"),
-        row(19, "hour and half", "01:30"),
-        row(20, "two hours", "02:00")
       ]
     };
   },
@@ -1605,6 +1641,7 @@ window.Alpine.data('appState', () => ({
     const name = String(label || "").trim().toLowerCase();
     const settings = {
       "default hourly rate": "rate",
+      "financial year end": "yearEnd",
       "default currency": "currency",
       "business name": "name",
       "business address": "address",
@@ -1614,16 +1651,13 @@ window.Alpine.data('appState', () => ({
       "bank account name": "bank",
       iban: "iban"
     };
-    const breaks = { na: "na", "half hour": "half", hour: "hour", "hour and half": "hourHalf", "two hours": "two" };
     if (settings[name]) return { key: settings[name], kind: "setting" };
-    if (breaks[name]) return { key: breaks[name], kind: "break" };
     return null;
   },
   applySettings(res) {
     const show = {
-      rate: false, currency: false, name: false, address: false, email: false,
-      website: false, phone: false, bank: false, iban: false,
-      na: false, half: false, hour: false, hourHalf: false, two: false
+      rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
+      website: false, phone: false, bank: false, iban: false
     };
     const meta = {};
     const extra = [];
@@ -1636,13 +1670,6 @@ window.Alpine.data('appState', () => ({
       show[mapped.key] = true;
       meta[mapped.key] = { row: row.row, label: row.label, kind: "setting" };
       this.settingsForm[mapped.key] = row.value == null ? "" : String(row.value);
-    });
-    (Array.isArray(res && res.breaks) ? res.breaks : []).forEach((row) => {
-      const mapped = this.settingKey(row && row.label);
-      if (!mapped || mapped.kind !== "break") return;
-      show[mapped.key] = true;
-      meta[mapped.key] = { row: row.row, label: row.label, kind: "break" };
-      this.breakForm[mapped.key] = row.value == null ? "" : String(row.value);
     });
     this.settingsShow = show;
     this.settingsMeta = meta;
@@ -1724,19 +1751,15 @@ window.Alpine.data('appState', () => ({
   },
   settingsPayload() {
     const settings = [];
-    const breaks = [];
     Object.keys(this.settingsMeta || {}).forEach((key) => {
       const meta = this.settingsMeta[key];
       if (!meta || !meta.row) return;
-      const value = meta.kind === "break" ? this.breakForm[key] : this.settingsForm[key];
-      const item = { row: meta.row, label: meta.label, value: value };
-      if (meta.kind === "break") breaks.push(item);
-      else settings.push(item);
+      settings.push({ row: meta.row, label: meta.label, value: this.settingsForm[key] });
     });
     (this.extraSettings || []).forEach((row) => {
       if (row && row.row && row.label) settings.push({ row: row.row, label: row.label, value: row.value });
     });
-    const payload = { settings: settings, breaks: breaks };
+    const payload = { settings: settings };
     if (this.logoDirty && this.logoPreview) payload.logo = this.logoPreview;
     return payload;
   },
@@ -1745,13 +1768,8 @@ window.Alpine.data('appState', () => ({
     if (this.settingsShow.rate && rate && !/^\d+(\.\d+)?$/.test(rate)) return "Default hourly rate must be a number.";
     const email = (this.settingsForm.email || "").trim();
     if (this.settingsShow.email && email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Business email needs to look like an email address.";
-    const breaks = payload.breaks || [];
-    for (let i = 0; i < breaks.length; i++) {
-      const text = String(breaks[i].value || "").trim();
-      if (!/^\d{1,2}:\d{2}$/.test(text)) return "Enter " + breaks[i].label + " as hours and minutes, for example 00:30.";
-      const parts = text.split(":");
-      if (Number(parts[0]) > 23 || Number(parts[1]) > 59) return "Enter " + breaks[i].label + " as hours and minutes, for example 00:30.";
-    }
+    const yearEnd = (this.settingsForm.yearEnd || "").trim();
+    if (this.settingsShow.yearEnd && yearEnd && !yearEndParts(yearEnd)) return "Financial year end needs a day and month, for example 31 October.";
     return "";
   },
   settingsSavedMessage() {
@@ -1772,7 +1790,6 @@ window.Alpine.data('appState', () => ({
       if (res && /Invalid API action/.test(String(res.error || ""))) {
         const blank = this.sampleSettings();
         blank.settings.forEach((row) => { row.value = ""; });
-        blank.breaks.forEach((row) => { row.value = ""; });
         this.applySettings(blank);
         this.setFeedback("Could not read settings. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
         return;
@@ -1793,7 +1810,7 @@ window.Alpine.data('appState', () => ({
     if (this.saving) return;
     this.clearFeedback();
     const payload = this.settingsPayload();
-    if (!payload.settings.length && !payload.breaks.length && !payload.logo) {
+    if (!payload.settings.length && !payload.logo) {
       this.setFeedback("Could not save settings. Open Settings again so the Config sheet can load.", true);
       return;
     }
