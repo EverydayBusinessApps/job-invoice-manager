@@ -21,8 +21,8 @@ input:disabled, textarea:disabled, select:disabled { background-color: #f1f5f9; 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
 input[type="time"], input[type="date"], input[type="file"] { min-height: 2.75rem; }
-.logo-frame { display: none; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.75rem; }
-.logo-frame img { display: block; max-width: 100%; max-height: 7rem; margin: 0 auto; object-fit: contain; }
+.logo-frame { display: block; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.75rem; }
+.logo-frame img { display: block; max-width: 100%; max-height: 12rem; margin: 0 auto; object-fit: contain; }
 .shift-note { margin: 0; font-size: 0.75rem; font-weight: 600; color: #FAFFE4; background: #00263B; border-radius: 0.75rem; padding: 0.5rem 0.75rem; }
 button { width: 100%; background-color: #00263B; color: #FAFFE4; font-weight: 600; padding: 1rem; border-radius: 0.75rem; border: none; font-size: 0.875rem; cursor: pointer; }
 button:disabled { background-color: #f1f5f9; color: #94a3b8; cursor: not-allowed; }

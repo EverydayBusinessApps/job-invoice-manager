@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=11">
-  <script defer src="app.js?v=16"></script>
+  <link rel="stylesheet" href="style.css?v=12">
+  <script defer src="app.js?v=17"></script>
 </head>
 <body>
 
@@ -320,7 +320,7 @@
           <div class="form-group">
             <label>Logo</label>
             <div id="logo-wrap" class="logo-frame">
-              <img id="logo-preview" alt="Logo">
+              <img id="logo-preview" alt="Logo" src="logo.png?v=1">
             </div>
             <p class="shift-note" x-show="logoEmpty">No logo on the invoice yet. Choose a PNG or JPEG and save settings.</p>
             <input id="logo-file" type="file" accept="image/png,image/jpeg" @change="onLogoPicked" data-disable-when="saving">

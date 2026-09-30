@@ -347,9 +347,9 @@ window.Alpine.data('appState', () => ({
   tabClientsClass: "",
   tabTrackerClass: "",
   tabSettingsClass: "",
-  logoPreview: "",
+  logoPreview: "logo.png?v=1",
   logoDirty: false,
-  logoEmpty: true,
+  logoEmpty: false,
   extraSettings: [],
   settingsMeta: {},
   settingsShow: {
@@ -1648,8 +1648,10 @@ window.Alpine.data('appState', () => ({
     this.settingsMeta = meta;
     this.extraSettings = extra;
     this.renderExtraSettings(extra);
-    this.logoPreview = (res && res.logo) || "";
-    this.logoDirty = false;
+    if (res && res.logo) {
+      this.logoPreview = res.logo;
+      this.logoDirty = false;
+    }
     if (this.settingsForm.name) this.businessName = this.settingsForm.name;
     this.syncLogoPreview();
   },

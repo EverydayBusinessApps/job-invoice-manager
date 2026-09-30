@@ -1190,6 +1190,32 @@ test("settings read the Config sheet and leave status rows alone", function (api
   assert(!badEmail.success && /email/.test(badEmail.error), badEmail.error);
 });
 
+test("the settings logo is the image on INV-Template", function (api) {
+  function textBlob(name, text) {
+    return {
+      getName: function () { return name; },
+      getDataAsString: function () { return text; }
+    };
+  }
+  function imageBlob(name) {
+    return {
+      getName: function () { return name; },
+      getBytes: function () { return [9, 8, 7]; },
+      getContentType: function () { return "image/png"; }
+    };
+  }
+  const files = {};
+  files["xl/workbook.xml"] = textBlob("xl/workbook.xml", '<sheet name="INV-Template" sheetId="4" r:id="rId8"/>');
+  files["xl/_rels/workbook.xml.rels"] = textBlob("xl/_rels/workbook.xml.rels", 'Id="rId8" Type="worksheet" Target="worksheets/sheet4.xml"');
+  files["xl/worksheets/_rels/sheet4.xml.rels"] = textBlob("xl/worksheets/_rels/sheet4.xml.rels", 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing4.xml"');
+  files["xl/drawings/_rels/drawing4.xml.rels"] = textBlob("xl/drawings/_rels/drawing4.xml.rels", 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"');
+  files["xl/media/image1.png"] = imageBlob("xl/media/image1.png");
+  files["xl/media/other.png"] = imageBlob("xl/media/other.png");
+  const url = api.logoDataUrlFromFiles_(files);
+  assert(url.indexOf("data:image/png;base64,") === 0, url);
+  assert(url === "data:image/png;base64," + Buffer.from([9, 8, 7]).toString("base64"), url);
+});
+
 test("a logo replaces the image already on the invoice", function (api, workbook) {
   seedConfig(workbook);
   const template = createSheet("INV-Template");

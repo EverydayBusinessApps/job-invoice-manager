@@ -1566,7 +1566,7 @@ function fetchSettings() {
   const ss = workbook_();
   const read = readConfigSheet_(ss);
   if (!read.success) return read;
-  read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"));
+  read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"), ss);
   return read;
 }
 
@@ -1691,7 +1691,7 @@ function saveSettings_(payload) {
   }
   const read = readConfigSheet_(ss);
   const name = clientText_(config.getRange("B5").getValue());
-  read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"));
+  read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"), ss);
   read.message = "Saved settings" + (name ? " for " + name : "") + "." + logoNote;
   read.success = true;
   return read;
@@ -1708,7 +1708,13 @@ function logoBlob_(dataUrl) {
   return Utilities.newBlob(bytes, mime, "everydaywork-logo." + ext);
 }
 
-function readInvoiceLogo_(sheet) {
+function readInvoiceLogo_(sheet, ss) {
+  const fromImages = logoFromImages_(sheet);
+  if (fromImages) return fromImages;
+  return logoFromWorkbookFile_(ss || (sheet && typeof sheet.getParent === "function" ? sheet.getParent() : null));
+}
+
+function logoFromImages_(sheet) {
   if (!sheet || typeof sheet.getImages !== "function") return "";
   let images;
   try {
@@ -1716,17 +1722,88 @@ function readInvoiceLogo_(sheet) {
   } catch (err) {
     return "";
   }
-  if (!images.length || typeof images[0].getBlob !== "function") return "";
+  for (let i = 0; i < images.length; i++) {
+    if (typeof images[i].getBlob !== "function") continue;
+    const url = blobToDataUrl_(images[i].getBlob());
+    if (url) return url;
+  }
+  return "";
+}
+
+function blobToDataUrl_(blob) {
+  if (!blob || typeof blob.getBytes !== "function") return "";
   try {
-    const blob = images[0].getBlob();
-    if (!blob || typeof blob.getBytes !== "function") return "";
     const bytes = blob.getBytes();
     if (!bytes || !bytes.length || bytes.length > 1500000) return "";
-    const type = (blob.getContentType && blob.getContentType()) || "image/png";
+    let type = (blob.getContentType && blob.getContentType()) || "";
+    const name = String((blob.getName && blob.getName()) || "");
+    if (!/^image\//.test(type)) {
+      if (/\.png$/i.test(name)) type = "image/png";
+      else if (/\.jpe?g$/i.test(name)) type = "image/jpeg";
+      else type = "image/png";
+    }
     return "data:" + type + ";base64," + Utilities.base64Encode(bytes);
   } catch (err) {
     return "";
   }
+}
+
+function logoFromWorkbookFile_(ss) {
+  if (!ss || typeof ss.getId !== "function") return "";
+  if (typeof DriveApp === "undefined" || typeof DriveApp.getFileById !== "function") return "";
+  if (typeof Utilities.unzip !== "function") return "";
+  try {
+    const file = DriveApp.getFileById(ss.getId());
+    if (!file || typeof file.getBlob !== "function") return "";
+    const parts = Utilities.unzip(file.getBlob());
+    const files = {};
+    for (let i = 0; i < parts.length; i++) {
+      const name = String(parts[i].getName() || "").replace(/^\/+/, "");
+      files[name] = parts[i];
+    }
+    return logoDataUrlFromFiles_(files);
+  } catch (err) {
+    return "";
+  }
+}
+
+function logoDataUrlFromFiles_(files) {
+  const workbookXml = zipText_(files["xl/workbook.xml"]);
+  const workbookRels = zipText_(files["xl/_rels/workbook.xml.rels"]);
+  const sheetTag = workbookXml.match(/<sheet\b[^>]*name="INV-Template"[^>]*\/?>/i);
+  if (!sheetTag) return "";
+  const rid = (sheetTag[0].match(/\br:id="([^"]+)"/) || [])[1];
+  if (!rid) return "";
+  const sheetRel = workbookRels.match(new RegExp('Id="' + rid + '"[^>]*Target="([^"]+)"'));
+  if (!sheetRel) return "";
+  let sheetPath = sheetRel[1].replace(/^\/+/, "");
+  if (sheetPath.indexOf("xl/") !== 0) sheetPath = "xl/" + sheetPath.replace(/^\.\.\//, "");
+  const sheetName = sheetPath.split("/").pop();
+  const sheetRels = zipText_(files[sheetPath.replace(/[^/]+$/, "_rels/" + sheetName + ".rels")]);
+  const drawing = sheetRels.match(/relationships\/drawing"[^>]*Target="([^"]+)"/);
+  if (!drawing) return "";
+  const drawingPath = resolveZipPath_(sheetPath, drawing[1]);
+  const drawingName = drawingPath.split("/").pop();
+  const drawingRels = zipText_(files[drawingPath.replace(/[^/]+$/, "_rels/" + drawingName + ".rels")]);
+  const image = drawingRels.match(/relationships\/image"[^>]*Target="([^"]+)"/);
+  if (!image) return "";
+  return blobToDataUrl_(files[resolveZipPath_(drawingPath, image[1])]);
+}
+
+function zipText_(blob) {
+  if (!blob || typeof blob.getDataAsString !== "function") return "";
+  try { return String(blob.getDataAsString() || ""); } catch (err) { return ""; }
+}
+
+function resolveZipPath_(fromFile, target) {
+  const raw = String(target || "").replace(/^\/+/, "");
+  if (raw.indexOf("xl/") === 0) return raw;
+  const dir = String(fromFile || "").split("/").slice(0, -1);
+  raw.split("/").forEach(function (part) {
+    if (part === "..") dir.pop();
+    else if (part && part !== ".") dir.push(part);
+  });
+  return dir.join("/");
 }
 
 function placeInvoiceLogo_(sheet, blob) {
