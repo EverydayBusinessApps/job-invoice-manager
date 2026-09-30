@@ -292,6 +292,8 @@ window.Alpine.data('appState', () => ({
   downloadPdfLabel: "Download PDF",
   emailPdfLabel: "Email PDF",
   logButtonLabel: "Log a job",
+  clientButtonLabel: "Save client",
+  confirmText: "",
   currentTab: 'dashboard',
   feedback: { text: '', isError: false },
   clients: [],
@@ -387,6 +389,7 @@ window.Alpine.data('appState', () => ({
   detailMessageAuto: "",
   businessName: "EverydayWork",
   detailIsDraft: false,
+  detailCanSavePdf: false,
   detailCanFinish: false,
   detailCanUndo: false,
   detailLines: [],
@@ -395,9 +398,9 @@ window.Alpine.data('appState', () => ({
   driveUrl: "",
   form: { clientName: '', date: (() => {
     const now = new Date();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
-    return now.getFullYear() + '-' + mm + '-' + dd;
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    return dd + '/' + mm + '/' + now.getFullYear();
   })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '' },
 
   timeToMinutes(value) {
@@ -412,12 +415,35 @@ window.Alpine.data('appState', () => ({
     if (startMins == null || finishMins == null) return false;
     return finishMins <= startMins;
   },
+  jobDateParts(text) {
+    const raw = String(text || "").trim();
+    const dmy = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+    const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    let day;
+    let month;
+    let year;
+    if (dmy) {
+      day = Number(dmy[1]);
+      month = Number(dmy[2]);
+      year = Number(dmy[3]);
+    } else if (iso) {
+      year = Number(iso[1]);
+      month = Number(iso[2]);
+      day = Number(iso[3]);
+    } else return null;
+    const dt = new Date(year, month - 1, day);
+    if (dt.getFullYear() !== year || dt.getMonth() !== month - 1 || dt.getDate() !== day) return null;
+    const dd = String(day).padStart(2, "0");
+    const mm = String(month).padStart(2, "0");
+    return { iso: year + "-" + mm + "-" + dd, label: dd + "/" + mm + "/" + year, year: year, month: month, day: day };
+  },
   nextDayLabel(dateStr) {
-    if (!dateStr) return 'the next day';
-    const parts = String(dateStr).split('-').map(Number);
-    if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return 'the next day';
-    const next = new Date(parts[0], parts[1] - 1, parts[2] + 1);
-    return next.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    const parts = this.jobDateParts(dateStr);
+    if (!parts) return "the next day";
+    const next = new Date(parts.year, parts.month - 1, parts.day + 1);
+    const dd = String(next.getDate()).padStart(2, "0");
+    const mm = String(next.getMonth() + 1).padStart(2, "0");
+    return dd + "/" + mm + "/" + next.getFullYear();
   },
   syncOvernight() {
     const overnight = this.isOvernightShift(this.form.start, this.form.finish);
@@ -425,6 +451,11 @@ window.Alpine.data('appState', () => ({
     this.overnightLabel = overnight
       ? ('Overnight shift · finishes ' + this.nextDayLabel(this.form.date))
       : '';
+  },
+  normalizeJobDate() {
+    const parts = this.jobDateParts(this.form.date);
+    if (parts) this.form.date = parts.label;
+    this.syncOvernight();
   },
 
   isDraftStatus(status) {
@@ -761,76 +792,94 @@ window.Alpine.data('appState', () => ({
       terms: this.clientField(form.terms)
     };
   },
+  clientSavedMessage(payload) {
+    const name = payload && payload.name ? payload.name : "the client";
+    return (payload && payload.originalName ? "Updated client " : "Saved client ") + name + ".";
+  },
   async saveClient() {
+    if (this.saving) return;
     this.clearFeedback();
     const payload = this.clientPayload();
     if (!payload.name) {
-      this.setFeedback("Enter a client name.", true);
+      this.setFeedback("Could not save the client. Enter a client name.", true);
       return;
     }
     const rate = this.clientAmount(payload.rate);
     if (!rate.ok) {
-      this.setFeedback(rate.error === "Cannot be negative." ? "Rate cannot be negative." : "Rate must be a number.", true);
+      this.setFeedback(rate.error === "Cannot be negative." ? "Could not save " + payload.name + ". Rate cannot be negative." : "Could not save " + payload.name + ". Rate must be a number.", true);
       return;
     }
     const terms = this.clientAmount(payload.terms);
     if (!terms.ok) {
-      this.setFeedback(terms.error === "Cannot be negative." ? "Payment terms cannot be negative." : "Payment terms must be a number.", true);
+      this.setFeedback(terms.error === "Cannot be negative." ? "Could not save " + payload.name + ". Payment terms cannot be negative." : "Could not save " + payload.name + ". Payment terms must be a number.", true);
       return;
     }
     payload.rate = rate.value;
     payload.terms = terms.value;
-    if (this.previewMode) {
-      const records = (this.clientRecords || []).map((row) => Object.assign({}, row));
-      const original = payload.originalName.toLowerCase();
-      const duplicate = records.find((row) => row.name.toLowerCase() === payload.name.toLowerCase() && row.name.toLowerCase() !== original);
-      if (duplicate) {
-        this.setFeedback("A client named " + payload.name + " is already on ClientRecords.", true);
-        return;
-      }
-      const next = {
-        name: payload.name,
-        address1: payload.address1,
-        address2: payload.address2,
-        address3: payload.address3,
-        address4: payload.address4,
-        rate: payload.rate,
-        contact: payload.contact,
-        email: payload.email,
-        phone: payload.phone,
-        terms: payload.terms
-      };
-      if (payload.originalName) {
-        const index = records.findIndex((row) => row.name.toLowerCase() === original);
-        if (index < 0) {
-          this.setFeedback("That client is no longer on ClientRecords.", true);
+    this.saving = true;
+    this.loading = true;
+    this.loadingLabel = "Saving the client…";
+    this.clientButtonLabel = "Saving…";
+    try {
+      if (this.previewMode) {
+        await this.wait(800);
+        const records = (this.clientRecords || []).map((row) => Object.assign({}, row));
+        const original = payload.originalName.toLowerCase();
+        const duplicate = records.find((row) => row.name.toLowerCase() === payload.name.toLowerCase() && row.name.toLowerCase() !== original);
+        if (duplicate) {
+          this.setFeedback("Could not save " + payload.name + ". A client with that name is already on ClientRecords.", true);
           return;
         }
-        records[index] = next;
-      } else {
-        records.push(next);
+        const next = {
+          name: payload.name,
+          address1: payload.address1,
+          address2: payload.address2,
+          address3: payload.address3,
+          address4: payload.address4,
+          rate: payload.rate,
+          contact: payload.contact,
+          email: payload.email,
+          phone: payload.phone,
+          terms: payload.terms
+        };
+        if (payload.originalName) {
+          const index = records.findIndex((row) => row.name.toLowerCase() === original);
+          if (index < 0) {
+            this.setFeedback("Could not save " + payload.name + ". That client is no longer on ClientRecords.", true);
+            return;
+          }
+          records[index] = next;
+        } else {
+          records.push(next);
+        }
+        this.applyClientRecords(records);
+        this.clientView = "list";
+        this.setFeedback(this.clientSavedMessage(payload), false);
+        return;
       }
-      this.applyClientRecords(records);
-      this.clientView = "list";
-      this.setFeedback((payload.originalName ? "Updated " : "Added ") + payload.name + ". The live ClientRecords sheet updates after Code.gs is pasted and deployed.", false);
-      return;
-    }
-    try {
-      const res = await this.api("saveClient", payload);
+      const res = await this.api("saveClient", payload, { write: true });
       if (res && /Invalid API action/.test(String(res.error || ""))) {
-        this.setFeedback("The live script does not save clients yet. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
+        this.setFeedback("Could not save " + payload.name + ". The live script does not save clients yet. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
         return;
       }
       if (res && res.success) {
         if (Array.isArray(res.clientRecords)) this.applyClientRecords(res.clientRecords);
         this.adoptWrite(res);
         this.clientView = "list";
-        this.setFeedback(res.message || "Client saved.", false);
+        const named = res.message && String(res.message).indexOf(payload.name) !== -1
+          ? res.message
+          : this.clientSavedMessage(payload);
+        this.setFeedback(named, false);
         return;
       }
-      this.setFeedback(this.failMessage(res, "Could not save that client."), true);
+      this.setFeedback(this.failMessage(res, "Could not save client " + payload.name + "."), true);
     } catch (err) {
-      this.setFeedback("Could not save that client.", true);
+      this.setFeedback("Could not save client " + payload.name + ".", true);
+    } finally {
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+      this.clientButtonLabel = "Save client";
     }
   },
 
@@ -839,54 +888,76 @@ window.Alpine.data('appState', () => ({
     if (!id) return;
     const raw = String(rawId || "").trim();
     if (this.invoices.some((inv) => inv.id === id || (raw && inv.id === raw))) return;
+    const parts = this.jobDateParts(this.form.date);
     this.invoices = this.invoices.concat([{
       id: id,
       clientName: this.form.clientName,
       status: "Draft",
-      date: this.form.date,
+      date: parts ? parts.iso : this.form.date,
       label: "Invoice " + id + " · Draft"
     }]);
     this.refreshClientInvoices();
+  },
+  savedJobMessage(result, adding) {
+    const parts = this.jobDateParts(this.form.date);
+    const when = parts ? parts.label : String(this.form.date || "").trim();
+    const who = this.form.clientName || "the client";
+    const code = (result && (result.invoiceCode || result.invoiceId)) || (adding ? this.form.invoiceId : "");
+    const invoice = code ? ("invoice " + code) : "the invoice";
+    if (result && result.alreadySaved) {
+      return "Already saved. The job for " + who + " on " + when + " is on " + invoice + ".";
+    }
+    if (adding) return "Saved. Job added to " + invoice + " for " + who + " on " + when + ".";
+    if (this.overnight) return "Saved. Overnight job logged on " + invoice + " for " + who + " on " + when + ".";
+    return "Saved. Job logged on " + invoice + " for " + who + " on " + when + ".";
   },
   async submitForm() {
     if (this.saving) return;
     this.clearFeedback();
     if (!this.form.clientName) {
-      this.setFeedback("Choose a client.", true);
+      this.setFeedback("Could not log the job. Choose a client.", true);
       return;
     }
+    const jobDate = this.jobDateParts(this.form.date);
+    if (!jobDate) {
+      this.setFeedback("Could not log the job. Enter the date as day/month/year, for example 30/09/2026.", true);
+      return;
+    }
+    this.form.date = jobDate.label;
     if (this.timeToMinutes(this.form.start) == null || this.timeToMinutes(this.form.finish) == null) {
-      this.setFeedback("Choose a start and finish time.", true);
+      this.setFeedback("Could not log the job. Choose a start and finish time.", true);
       return;
     }
     if (this.form.invoiceMode === 'existing' && !this.form.invoiceId) {
-      this.setFeedback("Choose a draft invoice, or start a new one.", true);
+      this.setFeedback("Could not log the job. Choose a draft invoice, or start a new one.", true);
       return;
     }
     if (this.form.invoiceMode === 'existing') {
       const chosen = (this.invoices || []).find((inv) => inv.id === String(this.form.invoiceId));
       if (chosen && !this.isDraftStatus(chosen.status)) {
-        this.setFeedback("Time can't be added once an invoice leaves Draft. Invoice " + chosen.id + " is " + chosen.status + ".", true);
+        this.setFeedback("Could not log the job. Time can't be added once an invoice leaves Draft. Invoice " + chosen.id + " is " + chosen.status + ".", true);
         return;
       }
     }
     this.syncOvernight();
     this.saving = true;
+    this.loading = true;
     this.loadingLabel = "Saving the job…";
     this.syncLogButton();
     const adding = this.form.invoiceMode === "existing";
     const chosenId = this.form.invoiceId;
     try {
       if (this.previewMode) {
+        await this.wait(800);
         const code = adding && chosenId ? chosenId : "INV-JR26-018";
         this.form.jobDetails = "";
         this.rememberLoggedJob(code);
-        this.setFeedback(adding ? ("Job added to invoice " + code + ".") : ("Job logged on invoice " + code + "."), false);
+        this.setFeedback(this.savedJobMessage({ invoiceCode: code }, adding), false);
         return;
       }
       const result = await this.api('logTimeEntry', {
         clientName: this.form.clientName,
-        date: this.form.date,
+        date: jobDate.iso,
         jobDetails: this.form.jobDetails,
         start: this.form.start,
         lunch: this.form.lunch,
@@ -898,13 +969,14 @@ window.Alpine.data('appState', () => ({
       if (result && result.success) {
         this.form.jobDetails = "";
         this.rememberLoggedJob(result.invoiceCode || result.invoiceId, result.invoiceId);
-        this.setFeedback(result.message || (adding ? "Job added to the invoice." : "Job logged."), false);
+        this.setFeedback(this.savedJobMessage(result, adding), false);
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
-      this.setFeedback(this.failMessage(result, this.unreachableMessage(true)), true);
+      this.setFeedback(this.failMessage(result, "Could not log the job for " + this.form.clientName + " on " + jobDate.label + ". " + this.unreachableMessage(true)), true);
     } finally {
       this.saving = false;
+      this.loading = false;
       this.loadingLabel = "Updating…";
       this.syncLogButton();
     }
@@ -948,12 +1020,23 @@ window.Alpine.data('appState', () => ({
     this.activeAvg = this.money(period.avgRate);
     this.activeTop = period.topClient ? (period.topClient + " · " + this.hoursText(period.topClientHours) + " h") : "—";
   },
+  dueNote(row) {
+    if (!row || !row.dueDate) return row && row.kind === "draft" ? "Not sent" : "";
+    let note = "Due " + this.prettyDate(row.dueDate);
+    if (row.overdue) {
+      const days = Number(row.daysOverdue) || 0;
+      note += " · " + days + (days === 1 ? " day overdue" : " days overdue");
+    } else if (row.kind === "due" && row.dueDate === this.asOf) {
+      note += " · due today";
+    }
+    return note;
+  },
   invoiceMeta(row) {
     const bits = [];
     if (row.clientName) bits.push(row.clientName);
     if (row.date) bits.push(this.prettyDate(row.date));
-    if (row.dueDate) bits.push("Due " + this.prettyDate(row.dueDate));
-    else if (row.kind === "draft") bits.push("Not sent");
+    const due = this.dueNote(row);
+    if (due) bits.push(due);
     return bits.join(" · ");
   },
   syncVisibleInvoices() {
@@ -969,8 +1052,8 @@ window.Alpine.data('appState', () => ({
       title: row.code || row.id,
       meta: this.invoiceMeta(row),
       amount: this.money(row.total),
-      pill: row.overdue ? "Overdue" : (row.kind === "due" && row.dueDate && row.dueDate === this.asOf ? "Due today" : row.status),
-      pillClass: row.overdue ? "pill-overdue" : ("pill-" + (row.kind || "due"))
+      pill: row.status || "Draft",
+      pillClass: "pill-" + (row.kind || "due")
     }));
     this.listEmpty = this.visibleInvoices.length === 0;
     this.listEmptyLabel = "Nothing in this list.";
@@ -1232,11 +1315,9 @@ window.Alpine.data('appState', () => ({
     this.detailId = row.id;
     this.detailCode = row.code || row.id;
     this.detailClient = row.clientName || "No client";
-    this.detailStatus = row.overdue
-      ? (row.status + " · " + row.daysOverdue + (row.daysOverdue === 1 ? " day overdue" : " days overdue"))
-      : (row.status || "Draft");
+    this.detailStatus = row.status || "Draft";
     this.detailWhen = row.date ? this.prettyDate(row.date) : "No invoice date";
-    this.detailDue = row.dueDate ? ("Due " + this.prettyDate(row.dueDate)) : "No due date yet";
+    this.detailDue = row.dueDate ? this.dueNote(row) : "No due date yet";
     this.detailHours = this.hoursText(row.hours) + " h";
     this.detailTotal = this.money(row.total);
     this.detailService = row.servicePeriod || "—";
@@ -1247,6 +1328,7 @@ window.Alpine.data('appState', () => ({
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.detailIsDraft = row.kind === "draft";
+    this.detailCanSavePdf = row.kind !== "draft";
     this.detailCanFinish = row.kind === "due";
     this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
     if (!sameInvoice || this.detailMessage === this.detailMessageAuto) {
@@ -1285,11 +1367,20 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("Could not load the invoice lines.", true);
     }
   },
+  pdfSavedMessage(res) {
+    const code = this.detailCode || this.detailId || "";
+    const file = (res && res.fileName) || (code ? code + ".pdf" : "the invoice PDF");
+    if (res && res.message && String(res.message).indexOf(file) !== -1) return res.message;
+    let msg = "Saved " + file + " to the Invoices folder.";
+    if (res && res.markedInvoiced && code) msg += " Invoice " + code + " marked invoiced.";
+    return msg;
+  },
   async saveInvoicePdf() {
-    if (this.saving || !this.detailId) return;
+    if (this.saving || !this.detailId || !this.detailCanSavePdf) return;
+    const code = this.detailCode || this.detailId;
     if (this.previewMode) {
       await this.withInvoiceWait("Saving the PDF…", () => this.wait(1500));
-      this.previewIssue();
+      this.setFeedback(this.pdfSavedMessage({ fileName: code + ".pdf" }), false);
       return;
     }
     this.clearFeedback();
@@ -1299,13 +1390,13 @@ window.Alpine.data('appState', () => ({
         if (res && res.success) {
           this.driveUrl = res.url || "";
           this.noteIssued(res);
-          this.setFeedback(res.message || "Saved to the Invoices folder.", false);
+          this.setFeedback(this.pdfSavedMessage(res), false);
           if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         } else {
-          this.showPdfError(res, "Could not save the PDF.");
+          this.showPdfError(res, "Could not save " + code + " to the Invoices folder.");
         }
       } catch (err) {
-        this.setFeedback("Could not save the PDF.", true);
+        this.setFeedback("Could not save " + code + " to the Invoices folder.", true);
       }
     });
   },
@@ -1411,6 +1502,7 @@ window.Alpine.data('appState', () => ({
   setDetailPhase(status) {
     this.detailStatus = status;
     this.detailIsDraft = status === "Draft";
+    this.detailCanSavePdf = status !== "Draft";
     this.detailCanFinish = status === "Invoiced";
     this.detailCanUndo = status === "Paid" || status === "Written off";
   },
@@ -1442,7 +1534,16 @@ window.Alpine.data('appState', () => ({
       this.loadingLabel = "Updating…";
     }
   },
-  setFeedback(msg, isErr) { this.feedback.text = msg; this.feedback.isError = isErr; },
+  setFeedback(msg, isErr) {
+    this.feedback.text = msg;
+    this.feedback.isError = !!isErr;
+    this.confirmText = msg || "";
+    setTimeout(() => {
+      const node = document.getElementById("save-feedback");
+      if (!node || node.style.display === "none") return;
+      try { node.scrollIntoView({ block: "center" }); } catch (err) {}
+    }, 30);
+  },
   showPdfError(res, fallback) {
     this.setFeedback(this.failMessage(res, fallback), true);
     this.mailAuthUrl = (res && res.authUrl) || "";
@@ -1451,5 +1552,5 @@ window.Alpine.data('appState', () => ({
   openMailAuth() {
     if (this.mailAuthUrl) window.open(this.mailAuthUrl, "_blank", "noopener");
   },
-  clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; this.mailAuthUrl = ""; }
+  clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; this.confirmText = ""; this.mailAuthUrl = ""; }
 }));
