@@ -5,7 +5,9 @@ header { background-color: #00263B; color: #FAFFE4; padding: 1rem; display: flex
 .wait-label { flex: 1 0 100%; margin: 0; font-size: 0.75rem; font-weight: 700; color: #FAFFE4; font-family: inherit; line-height: 1.4; overflow-wrap: anywhere; }
 header h1 { margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -0.025em; }
 header p { margin: 0; font-size: 10px; color: #FAFFE4; font-family: monospace; font-weight: bold; letter-spacing: 0.05em; }
-.status-box { display: flex; align-items: center; gap: 0.5rem; }
+.status-box { display: flex; align-items: center; gap: 0.35rem; }
+header .icon-btn { width: auto; background: transparent; color: #FAFFE4; border: 0; padding: 0.35rem; display: flex; align-items: center; justify-content: center; border-radius: 0.5rem; }
+header .icon-btn.cog-on { background: #01344f; }
 .refresh-btn { border: 0; background: transparent; color: inherit; font: inherit; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; padding: 0.35rem 0.2rem; }
 .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; display: inline-block; background-color: #34d399; }
 .dot.syncing { background-color: #FAFFE4; animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
@@ -30,8 +32,9 @@ button.btn-alt { background-color: #00263B; color: #FAFFE4; }
 button.btn-paid { background-color: #047857; }
 button.btn-unpaid { background-color: #b45309; }
 button.btn-bad { background-color: #be123c; }
-nav { background-color: #00263B; color: #FAFFE4; display: flex; justify-content: center; padding: 0.75rem 0.2rem; position: fixed; bottom: 0; left: 0; right: 0; max-width: 28rem; margin: 0 auto; z-index: 50; border-top: 1px solid #01344f; box-sizing: border-box; gap: 0.15rem; }
-nav button { background: none; color: #FAFFE4; font-size: 0.62rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 0.15rem 0.05rem; width: auto; min-width: 0; flex: 1 1 0; font-weight: 500; line-height: 1.2; text-align: center; }
+nav { background-color: #00263B; color: #FAFFE4; display: flex; justify-content: center; padding: 0.75rem 0.35rem; position: fixed; bottom: 0; left: 0; right: 0; max-width: 28rem; margin: 0 auto; z-index: 50; border-top: 1px solid #01344f; box-sizing: border-box; gap: 0.35rem; }
+nav button { background: none; color: #FAFFE4; font-size: 0.72rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 0.15rem 0.15rem; width: auto; min-width: 0; flex: 1 1 0; font-weight: 500; line-height: 1.2; text-align: center; }
+button.see-more { width: auto; align-self: flex-start; background: transparent; color: #00263B; font-size: 0.8rem; font-weight: 700; padding: 0; text-align: left; }
 .alert { padding: 0.875rem; border-radius: 0.75rem; text-align: center; font-size: 0.875rem; font-weight: 600; border: 1px solid transparent; }
 .alert-success { background-color: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
 .alert-error { background-color: #fff1f2; color: #9f1239; border-color: #fecdd3; }
