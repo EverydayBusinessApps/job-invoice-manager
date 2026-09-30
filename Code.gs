@@ -95,21 +95,49 @@ function invoiceLabel_(id, status, dateStr) {
 }
 
 /**
- * InvoiceList column I (Invoice Status):
- * Draft when the first time entry opens the invoice, Invoiced when that
- * invoice is marked Invoiced, then Paid, Unpaid, or Bad debt from the
- * same open invoice. Time can only be added while the status is Draft.
+ * InvoiceList column I (Invoice Status), in this order:
+ * Draft, Invoiced, Paid, Written off.
+ * A draft can only become Invoiced. Invoiced can become Paid or Written off.
+ * Paid and Written off stay there until Undo puts that invoice back to Invoiced.
+ * Older sheet values Unpaid and Bad debt are read as Invoiced and Written off.
+ * Time can only be added while the status is Draft.
  */
 function displayStatus_(status) {
   const value = String(status || "").trim();
   if (!value) return "Draft";
   const key = value.toLowerCase();
   if (key === "draft") return "Draft";
-  if (key === "invoiced") return "Invoiced";
+  if (key === "invoiced" || key === "unpaid") return "Invoiced";
   if (key === "paid") return "Paid";
-  if (key === "unpaid") return "Unpaid";
-  if (key === "bad debt") return "Bad debt";
+  if (key === "written off" || key === "bad debt") return "Written off";
   return value;
+}
+
+function normalizeInvoiceStatuses_(invoiceSheet) {
+  if (!invoiceSheet) return;
+  const last = lastFilledRow_(invoiceSheet, 9);
+  if (last < 2) return;
+  const count = last - 1;
+  const values = invoiceSheet.getRange(2, 9, count, 1).getValues();
+  const next = [];
+  let changed = false;
+  for (let i = 0; i < values.length; i++) {
+    const raw = values[i][0];
+    const text = String(raw == null ? "" : raw).trim();
+    const key = text.toLowerCase();
+    if (key !== "unpaid" && key !== "bad debt") {
+      next.push([raw]);
+      continue;
+    }
+    const formula = invoiceSheet.getRange(i + 2, 9).getFormula();
+    if (formula) {
+      next.push([raw]);
+      continue;
+    }
+    next.push([displayStatus_(text)]);
+    changed = true;
+  }
+  if (changed) invoiceSheet.getRange(2, 9, count, 1).setValues(next);
 }
 
 function isDraftStatus_(status) {
@@ -513,7 +541,8 @@ function processAccountInvoice(payload) {
 }
 
 /**
- * Billing desk: mark an invoice Paid, Unpaid, or Bad debt (InvoiceList column I).
+ * Move one invoice along Draft → Invoiced → Paid or Written off.
+ * Undo is only for Paid and Written off, and it returns the invoice to Invoiced.
  */
 function updateInvoiceStatus(payload) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -521,23 +550,40 @@ function updateInvoiceStatus(payload) {
   if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
 
   const invoiceId = String((payload && payload.invoiceId) || "").trim();
-  const status = String((payload && payload.status) || "").trim();
-  const allowed = { "Paid": true, "Unpaid": true, "Bad debt": true };
+  const requested = String((payload && payload.status) || "").trim();
   if (!invoiceId) return { success: false, error: "Choose an invoice." };
-  if (!allowed[status]) return { success: false, error: "Choose Paid, Unpaid, or Bad debt." };
 
   const row = findInvoiceListRow_(invoiceSheet, invoiceId);
   if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
 
-  invoiceSheet.getRange(row, 9).setValue(status); // Column I: Invoice Status
+  const current = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
+  let next = "";
+  if (requested === "Undo") {
+    if (current !== "Paid" && current !== "Written off") {
+      return { success: false, error: "Undo is for a paid or written-off invoice." };
+    }
+    next = "Invoiced";
+  } else if (requested === "Paid" || requested === "Written off") {
+    if (current !== "Invoiced") {
+      return { success: false, error: "Mark the invoice invoiced before it can be " + requested.toLowerCase() + "." };
+    }
+    next = requested;
+  } else {
+    return { success: false, error: "Choose Paid, Written off, or Undo." };
+  }
+
+  invoiceSheet.getRange(row, 9).setValue(next);
   lockBilledTimeRates_(ss, { invoiceIds: [invoiceId] });
   const code = canonicalInvoiceCode_(invoiceId);
+  const message = requested === "Undo"
+    ? ("Invoice " + code + " back to invoiced.")
+    : ("Invoice " + code + " marked " + next + ".");
   return {
     success: true,
     invoiceId: invoiceId,
     invoiceCode: code,
-    status: status,
-    message: "Invoice " + code + " marked " + status + "."
+    status: next,
+    message: message
   };
 }
 
@@ -652,7 +698,7 @@ function inIsoRange_(iso, start, end) {
 function invoiceKind_(status) {
   const label = displayStatus_(status);
   if (label === "Paid") return "paid";
-  if (label === "Bad debt") return "bad";
+  if (label === "Written off") return "writtenoff";
   if (label === "Draft") return "draft";
   return "due";
 }
@@ -742,8 +788,8 @@ function blankPeriod_(window) {
     draftCount: 0,
     overdue: 0,
     overdueCount: 0,
-    badDebt: 0,
-    badDebtCount: 0
+    writtenOff: 0,
+    writtenOffCount: 0
   };
 }
 
@@ -1109,6 +1155,7 @@ function buildDashboardReport_(ss, asOfDate) {
   });
 
   const invoiceSheet = ss.getSheetByName("InvoiceList");
+  normalizeInvoiceStatuses_(invoiceSheet);
   if (invoiceSheet && invoiceSheet.getLastRow() >= 2) {
     const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 9).getValues();
     for (let i = 0; i < data.length; i++) {
@@ -1172,7 +1219,12 @@ function buildDashboardReport_(ss, asOfDate) {
   });
 
   const invoices = [];
-  const open = { dueAmount: 0, dueCount: 0, overdueAmount: 0, overdueCount: 0, draftAmount: 0, draftCount: 0, badDebtAmount: 0, badDebtCount: 0 };
+  const open = {
+    dueAmount: 0, dueCount: 0, overdueAmount: 0, overdueCount: 0,
+    draftAmount: 0, draftCount: 0,
+    paidAmount: 0, paidCount: 0,
+    writtenOffAmount: 0, writtenOffCount: 0
+  };
 
   Object.keys(groups).sort().forEach(function (code) {
     const group = groups[code];
@@ -1233,9 +1285,12 @@ function buildDashboardReport_(ss, asOfDate) {
     } else if (kind === "draft") {
       open.draftAmount = roundMoney_(open.draftAmount + total);
       open.draftCount += 1;
-    } else if (kind === "bad") {
-      open.badDebtAmount = roundMoney_(open.badDebtAmount + total);
-      open.badDebtCount += 1;
+    } else if (kind === "paid") {
+      open.paidAmount = roundMoney_(open.paidAmount + total);
+      open.paidCount += 1;
+    } else if (kind === "writtenoff") {
+      open.writtenOffAmount = roundMoney_(open.writtenOffAmount + total);
+      open.writtenOffCount += 1;
     }
 
     ["month", "quarter", "year"].forEach(function (key) {
@@ -1259,9 +1314,9 @@ function buildDashboardReport_(ss, asOfDate) {
       } else if (kind === "draft") {
         bucket.draft = roundMoney_(bucket.draft + total);
         bucket.draftCount += 1;
-      } else if (kind === "bad") {
-        bucket.badDebt = roundMoney_(bucket.badDebt + total);
-        bucket.badDebtCount += 1;
+      } else if (kind === "writtenoff") {
+        bucket.writtenOff = roundMoney_(bucket.writtenOff + total);
+        bucket.writtenOffCount += 1;
       }
     });
   });

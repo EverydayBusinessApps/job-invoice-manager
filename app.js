@@ -256,7 +256,8 @@ function sampleDashboard() {
       dueAmount: 240, dueCount: 2,
       overdueAmount: 200, overdueCount: 1,
       draftAmount: 50, draftCount: 1,
-      badDebtAmount: 80, badDebtCount: 1
+      paidAmount: 100, paidCount: 1,
+      writtenOffAmount: 80, writtenOffCount: 1
     },
     periods: {
       month: { label: "September 2026", hours: 7, shifts: 3, clients: 2, billable: 290, avgRate: 41.43, topClient: "Acme", topClientHours: 4, paid: 0, paidCount: 0, sent: 240, sentCount: 2, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 0, badDebtCount: 0 },
@@ -265,10 +266,10 @@ function sampleDashboard() {
     },
     invoices: [
       row({ id: "INV-JR26-002", code: "INV-JR26-002", clientName: "Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
-      row({ id: "INV-JR26-005", code: "INV-JR26-005", clientName: "Other Co", status: "Unpaid", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
+      row({ id: "INV-JR26-005", code: "INV-JR26-005", clientName: "Other Co", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
       row({ id: "INV-JR26-003", code: "INV-JR26-003", clientName: "Other Co", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
-      row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", status: "Bad debt", kind: "bad", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
+      row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
     ],
     clients: [{ name: "Acme" }, { name: "Other Co" }],
     clientRecords: [
@@ -340,14 +341,12 @@ window.Alpine.data('appState', () => ({
   tabClientsClass: "",
   tabTrackerClass: "",
   asOf: "",
-  openDueAmount: "€0.00",
-  openDueCount: "0 invoices",
-  openOverdueAmount: "€0.00",
-  openOverdueCount: "0 invoices",
-  openDraftAmount: "€0.00",
-  openDraftCount: "0 invoices",
-  openBadAmount: "€0.00",
-  openBadCount: "0 invoices",
+  openSendAmount: "€0.00",
+  openSendCount: "0 invoices",
+  openCollectAmount: "€0.00",
+  openCollectCount: "0 invoices",
+  openDoneAmount: "€0.00",
+  openDoneCount: "0 invoices",
   activeLabel: "",
   activeHours: "0",
   activeShifts: "0 shifts",
@@ -379,6 +378,8 @@ window.Alpine.data('appState', () => ({
   detailJob: "",
   detailEmail: "",
   detailIsDraft: false,
+  detailCanFinish: false,
+  detailCanUndo: false,
   detailLines: [],
   detailLinesRaw: [],
   detailLinesEmpty: true,
@@ -847,18 +848,6 @@ window.Alpine.data('appState', () => ({
     this.activeBillable = this.money(period.billable);
     this.activeAvg = this.money(period.avgRate);
     this.activeTop = period.topClient ? (period.topClient + " · " + this.hoursText(period.topClientHours) + " h") : "—";
-    this.activePaid = this.money(period.paid);
-    this.activePaidCount = this.countLabel(period.paidCount, "invoice", "invoices");
-    this.activeSent = this.money(period.sent);
-    this.activeSentCount = this.countLabel(period.sentCount, "invoice", "invoices");
-    this.activeDue = this.money(period.due);
-    this.activeDueCount = this.countLabel(period.dueCount, "invoice", "invoices");
-    this.activeDraft = this.money(period.draft);
-    this.activeDraftCount = this.countLabel(period.draftCount, "invoice", "invoices");
-    this.activeOverdue = this.money(period.overdue);
-    this.activeOverdueCount = this.countLabel(period.overdueCount, "invoice", "invoices");
-    this.activeBad = this.money(period.badDebt);
-    this.activeBadCount = this.countLabel(period.badDebtCount, "invoice", "invoices");
   },
   invoiceMeta(row) {
     const bits = [];
@@ -874,11 +863,8 @@ window.Alpine.data('appState', () => ({
     if (this.listScope === "period") rows = rows.filter((row) => row[flag]);
     const filter = this.invoiceFilter;
     if (filter === "due") rows = rows.filter((row) => row.kind === "due");
-    else if (filter === "overdue") rows = rows.filter((row) => row.overdue);
-    else if (filter === "draft") rows = rows.filter((row) => row.kind === "draft");
-    else if (filter === "paid") rows = rows.filter((row) => row.kind === "paid");
-    else if (filter === "bad") rows = rows.filter((row) => row.kind === "bad");
-    else if (filter === "sent") rows = rows.filter((row) => row.kind !== "draft");
+    else if (filter === "send" || filter === "draft") rows = rows.filter((row) => row.kind === "draft");
+    else if (filter === "done") rows = rows.filter((row) => row.kind === "paid" || row.kind === "writtenoff");
     this.visibleInvoices = rows.map((row) => ({
       id: row.id,
       title: row.code || row.id,
@@ -897,14 +883,17 @@ window.Alpine.data('appState', () => ({
     this.periodData = res.periods || {};
     this.invoiceRows = Array.isArray(res.invoices) ? res.invoices : [];
     const open = res.open || {};
-    this.openDueAmount = this.money(open.dueAmount);
-    this.openDueCount = this.countLabel(open.dueCount, "invoice", "invoices");
-    this.openOverdueAmount = this.money(open.overdueAmount);
-    this.openOverdueCount = this.countLabel(open.overdueCount, "invoice", "invoices");
-    this.openDraftAmount = this.money(open.draftAmount);
-    this.openDraftCount = this.countLabel(open.draftCount, "invoice", "invoices");
-    this.openBadAmount = this.money(open.badDebtAmount);
-    this.openBadCount = this.countLabel(open.badDebtCount, "invoice", "invoices");
+    this.openSendAmount = this.money(open.draftAmount);
+    this.openSendCount = this.countLabel(open.draftCount, "invoice", "invoices");
+    this.openCollectAmount = this.money(open.dueAmount);
+    let collect = this.countLabel(open.dueCount, "invoice", "invoices");
+    if (open.overdueCount) collect += " · " + this.countLabel(open.overdueCount, "overdue", "overdue");
+    this.openCollectCount = collect;
+    const doneBits = [];
+    if (open.paidCount) doneBits.push(this.countLabel(open.paidCount, "paid", "paid"));
+    if (open.writtenOffCount) doneBits.push(this.countLabel(open.writtenOffCount, "written off", "written off"));
+    this.openDoneAmount = this.money(open.paidAmount);
+    this.openDoneCount = doneBits.length ? doneBits.join(" · ") : "0 invoices";
     this.syncPeriodClasses();
     this.syncActive();
     this.syncVisibleInvoices();
@@ -1062,20 +1051,16 @@ window.Alpine.data('appState', () => ({
     this.listScope = periodScoped ? "period" : "open";
     const titles = {
       due: "Still to collect",
-      overdue: "Overdue",
-      draft: "Drafts",
-      paid: "Paid",
-      sent: "Sent",
-      bad: "Bad debt"
+      send: "Still to send",
+      draft: "Still to send",
+      done: "Done"
     };
     this.listTitle = (titles[kind] || "Invoices") + (periodScoped && this.activeLabel ? " · " + this.activeLabel : "");
     const hints = {
-      due: "Sent, and not paid yet. Open one to download the PDF or mark it paid.",
-      overdue: "Past the client payment terms. Open one to chase it.",
-      draft: "Not sent yet. Open one and mark it Invoiced, then create the PDF.",
-      paid: "Invoices in this period that are marked Paid.",
-      sent: "Issued in this period, including ones later paid or written off.",
-      bad: "Written off. These are not included in still to collect."
+      due: "Sent, and not paid yet. Open one to mark it paid or written off.",
+      send: "Not sent yet. Open one and mark it invoiced, then create the PDF.",
+      draft: "Not sent yet. Open one and mark it invoiced, then create the PDF.",
+      done: "Paid or written off. Undo puts one back to invoiced."
     };
     this.listHint = hints[kind] || "";
     this.dashView = "list";
@@ -1108,6 +1093,8 @@ window.Alpine.data('appState', () => ({
     this.detailService = row.servicePeriod || "—";
     this.detailJob = row.jobDetails || "—";
     this.detailIsDraft = row.kind === "draft";
+    this.detailCanFinish = row.kind === "due";
+    this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
     if (!keepEmail) this.detailEmail = row.email || "";
     this.detailLinesRaw = lines || [];
     this.detailLines = this.detailLinesRaw.map((line) => ({
@@ -1213,8 +1200,7 @@ window.Alpine.data('appState', () => ({
   async compileOpenInvoice() {
     if (this.saving || !this.detailId) return;
     if (this.previewMode) {
-      this.detailStatus = "Invoiced";
-      this.detailIsDraft = false;
+      this.setDetailPhase("Invoiced");
       this.setFeedback("Invoice " + (this.detailCode || this.detailId) + " marked invoiced.", false);
       return;
     }
@@ -1224,8 +1210,7 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api("compileInvoice", { invoiceId: this.detailId }, { write: true });
       if (res && res.success) {
-        this.detailStatus = "Invoiced";
-        this.detailIsDraft = false;
+        this.setDetailPhase("Invoiced");
         this.setFeedback(res.message || "Invoice marked invoiced.", false);
         this.refreshSnapshot({ quiet: true, announce: false });
         return;
@@ -1237,15 +1222,23 @@ window.Alpine.data('appState', () => ({
     }
   },
   async markDetailPaid() { return this.markDetailStatus("Paid"); },
-  async markDetailUnpaid() { return this.markDetailStatus("Unpaid"); },
-  async markDetailBad() { return this.markDetailStatus("Bad debt"); },
+  async markDetailWrittenOff() { return this.markDetailStatus("Written off"); },
+  async undoDetailStatus() { return this.markDetailStatus("Undo"); },
+  setDetailPhase(status) {
+    this.detailStatus = status;
+    this.detailIsDraft = status === "Draft";
+    this.detailCanFinish = status === "Invoiced";
+    this.detailCanUndo = status === "Paid" || status === "Written off";
+  },
   async markDetailStatus(status) {
     if (this.saving || !this.detailId) return;
-    const label = status === "Bad debt" ? "bad debt" : status.toLowerCase();
+    const code = this.detailCode || this.detailId;
+    const previewMessage = status === "Undo"
+      ? ("Invoice " + code + " back to invoiced.")
+      : ("Invoice " + code + " marked " + status + ".");
     if (this.previewMode) {
-      this.detailStatus = status;
-      this.detailIsDraft = false;
-      this.setFeedback("Invoice " + (this.detailCode || this.detailId) + " marked " + label + ".", false);
+      this.setDetailPhase(status === "Undo" ? "Invoiced" : status);
+      this.setFeedback(previewMessage, false);
       return;
     }
     this.saving = true;
@@ -1254,9 +1247,8 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api("updateInvoiceStatus", { invoiceId: this.detailId, status: status }, { write: true });
       if (res && res.success) {
-        this.detailStatus = status;
-        this.detailIsDraft = false;
-        this.setFeedback(res.message || ("Invoice marked " + label + "."), false);
+        this.setDetailPhase(res.status || (status === "Undo" ? "Invoiced" : status));
+        this.setFeedback(res.message || previewMessage, false);
         this.refreshSnapshot({ quiet: true, announce: false });
         return;
       }
