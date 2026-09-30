@@ -799,7 +799,26 @@ window.Alpine.data('appState', () => ({
       this.syncPdfLabels("");
     }
   },
+  startupTab() {
+    const search = typeof location !== "undefined" ? location.search : "";
+    const match = /(?:\?|&)tab=([^&]*)/.exec(search);
+    if (!match) return "";
+    let value = match[1] || "";
+    try { value = decodeURIComponent(value.replace(/\+/g, " ")); } catch (err) {}
+    return String(value).trim().toLowerCase();
+  },
+  openStartupTab() {
+    const tab = this.startupTab();
+    if (tab === "clients") this.setClientsTab();
+    else if (tab === "log") this.setTrackerTab();
+    else if (tab === "summary") this.setSummaryTab();
+    else if (tab === "home") this.setDashTab();
+  },
   async init() {
+    if (this.previewMode) {
+      const helpLink = document.querySelector("a.help-mark");
+      if (helpLink) helpLink.setAttribute("href", "help.html?preview=1");
+    }
     this.syncTabClasses();
     this.syncPeriodClasses();
     this.syncOvernight();
@@ -807,11 +826,13 @@ window.Alpine.data('appState', () => ({
     this.syncInvoiceHint();
     if (this.previewMode) {
       await this.loadDashboard();
+      this.openStartupTab();
       return;
     }
     const stored = this.storedSnapshot();
     if (stored) this.applySnapshot(stored, true);
     await this.refreshSnapshot({ quiet: !!stored, announce: !stored, resync: true });
+    this.openStartupTab();
   },
   scrollPage() {
     try { window.scrollTo(0, 0); } catch (err) {}

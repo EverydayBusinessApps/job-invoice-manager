@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=21">
-  <script defer src="app.js?v=27"></script>
+  <link rel="stylesheet" href="style.css?v=22">
+  <script defer src="app.js?v=28"></script>
 </head>
 <body>
 
@@ -45,7 +45,7 @@
                 <span class="metric-title">Invoices to send</span>
                 <span class="metric-value" x-text="openSendAmount"></span>
                 <span class="metric-sub" x-text="openSendCount"></span>
-                <span class="pile-hint">Create, Update and Send Invoices</span>
+                <span class="pile-hint">Email drafts and mark them sent</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
@@ -54,7 +54,7 @@
                 <span class="metric-title">Invoices to collect</span>
                 <span class="metric-value" x-text="openCollectAmount"></span>
                 <span class="metric-sub" x-text="openCollectCount"></span>
-                <span class="pile-hint">Payment in? Mark as paid or written off</span>
+                <span class="pile-hint">Record a payment or write one off</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
@@ -63,7 +63,7 @@
                 <span class="metric-title">Finished invoices</span>
                 <span class="metric-value" x-text="openDoneAmount"></span>
                 <span class="metric-sub" x-text="openDoneCount"></span>
-                <span class="pile-hint">View or undo if needed</span>
+                <span class="pile-hint">Check paid ones, or undo a mistake</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
@@ -338,7 +338,7 @@
         </section>
         <section>
           <div class="card-title">Financial summary</div>
-          <p class="shift-note">Figures below are indicitive, please check with your accountant</p>
+          <p class="shift-note">Figures below are indicative, please check with your accountant</p>
           <button type="button" class="see-more" data-action="toggleTaxRates" x-text="taxRatesLabel"></button>
           <p class="shift-note" x-show="taxRatesOpen">For a single sole trader, on 2026 Irish rates, using this financial year’s recorded work minus written-off invoices and the expenses you type. No other income is included. Income tax is 20% up to €44,000 and 40% after that, with a €2,000 personal credit and a €2,000 earned income credit. USC starts above €13,000, and self-employed income over €100,000 is at 11%. PRSI is Class S at 4.2%, with a €650 minimum from €5,000 of income. That rate rises to 4.35% from 1 October 2026. VAT, pensions, and other credits are left out.</p>
           <div class="card-title" x-text="summaryPeriod"></div>
@@ -396,7 +396,7 @@
       <div x-show="currentTab === 'settings'">
         <section>
           <div class="card-title">Settings</div>
-          <p class="shift-note">Your business defaults. The name is the setting and the box is the value.</p>
+          <p class="shift-note">Your business defaults. Each name is the setting and the box is the value.</p>
           <div class="form-group">
             <label>Logo</label>
             <div id="logo-wrap" class="logo-frame">
