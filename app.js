@@ -288,6 +288,9 @@ window.Alpine.data('appState', () => ({
   loading: false,
   loadingLabel: "Updating…",
   saving: false,
+  savePdfLabel: "Save PDF to Drive",
+  downloadPdfLabel: "Download PDF",
+  emailPdfLabel: "Email PDF",
   logButtonLabel: "Log a job",
   currentTab: 'dashboard',
   feedback: { text: '', isError: false },
@@ -497,9 +500,14 @@ window.Alpine.data('appState', () => ({
   async api(actionName, payloadData = {}, opts) {
     const quiet = opts && opts.quiet;
     const writing = !!(opts && opts.write);
+    const timeoutMs = (opts && opts.timeoutMs) || 40000;
     if (!quiet) this.loading = true;
     const controller = typeof AbortController === "function" ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), 40000) : null;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (controller) controller.abort();
+    }, timeoutMs);
     try {
       const response = await fetch(this.apiUrl, {
         method: "POST",
@@ -514,13 +522,53 @@ window.Alpine.data('appState', () => ({
       } catch (err) {
         result = { success: false, error: this.unreachableMessage(writing), unconfirmed: writing };
       }
-      if (!quiet) this.loading = false;
       return result;
     } catch (err) {
-      if (!quiet) this.loading = false;
+      if (timedOut || (err && err.name === "AbortError")) {
+        return {
+          success: false,
+          timedOut: true,
+          error: "That took too long, so it was stopped. Check the invoice before you try again."
+        };
+      }
       return { success: false, error: this.unreachableMessage(writing), unconfirmed: writing };
     } finally {
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
+      if (!quiet) this.loading = false;
+    }
+  },
+  wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  },
+  syncPdfLabels(active) {
+    this.savePdfLabel = active === "Saving the PDF…" ? "Saving…" : "Save PDF to Drive";
+    this.downloadPdfLabel = active === "Downloading the PDF…" ? "Downloading…" : "Download PDF";
+    this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : "Email PDF";
+  },
+  async withInvoiceWait(label, fn) {
+    if (this.saving) return;
+    this.saving = true;
+    this.loading = true;
+    this.loadingLabel = label;
+    this.syncPdfLabels(label);
+    let timer;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), 60000);
+    });
+    try {
+      const outcome = await Promise.race([
+        Promise.resolve().then(fn).then(() => "done"),
+        timeout
+      ]);
+      if (outcome === "timeout") {
+        this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
+      }
+    } finally {
+      clearTimeout(timer);
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+      this.syncPdfLabels("");
     }
   },
   async init() {
@@ -1238,65 +1286,83 @@ window.Alpine.data('appState', () => ({
     }
   },
   async saveInvoicePdf() {
-    if (!this.detailId) return;
-    if (this.previewMode) return this.previewIssue();
-    this.clearFeedback();
-    try {
-      const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "drive" });
-      if (res && res.success) {
-        this.driveUrl = res.url || "";
-        this.noteIssued(res);
-        this.setFeedback(res.message || "Saved to the Invoices folder.", false);
-        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-      } else {
-        this.showPdfError(res, "Could not save the PDF.");
-      }
-    } catch (err) {
-      this.setFeedback("Could not save the PDF.", true);
+    if (this.saving || !this.detailId) return;
+    if (this.previewMode) {
+      await this.withInvoiceWait("Saving the PDF…", () => this.wait(1500));
+      this.previewIssue();
+      return;
     }
+    this.clearFeedback();
+    await this.withInvoiceWait("Saving the PDF…", async () => {
+      try {
+        const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "drive" }, { quiet: true, timeoutMs: 60000, write: true });
+        if (res && res.success) {
+          this.driveUrl = res.url || "";
+          this.noteIssued(res);
+          this.setFeedback(res.message || "Saved to the Invoices folder.", false);
+          if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+        } else {
+          this.showPdfError(res, "Could not save the PDF.");
+        }
+      } catch (err) {
+        this.setFeedback("Could not save the PDF.", true);
+      }
+    });
   },
   async downloadInvoicePdf() {
-    if (!this.detailId) return;
-    if (this.previewMode) return this.previewIssue();
-    this.clearFeedback();
-    try {
-      const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "download" });
-      if (res && res.success && res.pdfBase64) {
-        this.savePdfFile(res.fileName, res.pdfBase64);
-        this.noteIssued(res);
-        this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
-        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-      } else {
-        this.setFeedback(this.failMessage(res, "Could not download the PDF."), true);
-      }
-    } catch (err) {
-      this.setFeedback("Could not download the PDF.", true);
+    if (this.saving || !this.detailId) return;
+    if (this.previewMode) {
+      await this.withInvoiceWait("Downloading the PDF…", () => this.wait(1500));
+      this.previewIssue();
+      return;
     }
+    this.clearFeedback();
+    await this.withInvoiceWait("Downloading the PDF…", async () => {
+      try {
+        const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "download" }, { quiet: true, timeoutMs: 60000, write: true });
+        if (res && res.success && res.pdfBase64) {
+          this.savePdfFile(res.fileName, res.pdfBase64);
+          this.noteIssued(res);
+          this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
+          if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+        } else {
+          this.setFeedback(this.failMessage(res, "Could not download the PDF."), true);
+        }
+      } catch (err) {
+        this.setFeedback("Could not download the PDF.", true);
+      }
+    });
   },
   async emailInvoicePdf() {
-    if (!this.detailId) return;
+    if (this.saving || !this.detailId) return;
     const email = String(this.detailEmail || "").trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       this.setFeedback("Enter an email address to send the PDF.", true);
       return;
     }
-    if (this.previewMode) return this.previewIssue();
-    this.clearFeedback();
-    try {
-      const res = await this.api("exportInvoicePdf", {
-        invoiceId: this.detailId,
-        mode: "email",
-        email: email,
-        message: this.detailMessage
-      });
-      if (res && res.success) {
-        this.noteIssued(res);
-        this.setFeedback(res.message || "Invoice emailed.", false);
-        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-      } else this.showPdfError(res, "Could not email the PDF.");
-    } catch (err) {
-      this.setFeedback("Could not email the PDF.", true);
+    if (this.previewMode) {
+      await this.withInvoiceWait("Sending the invoice…", () => this.wait(1500));
+      this.previewIssue();
+      return;
     }
+    this.clearFeedback();
+    await this.withInvoiceWait("Sending the invoice…", async () => {
+      try {
+        const res = await this.api("exportInvoicePdf", {
+          invoiceId: this.detailId,
+          mode: "email",
+          email: email,
+          message: this.detailMessage
+        }, { quiet: true, timeoutMs: 60000, write: true });
+        if (res && res.success) {
+          this.noteIssued(res);
+          this.setFeedback(res.message || "Invoice emailed.", false);
+          if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+        } else this.showPdfError(res, "Could not email the PDF.");
+      } catch (err) {
+        this.setFeedback("Could not email the PDF.", true);
+      }
+    });
   },
   savePdfFile(fileName, b64) {
     const bin = atob(b64);

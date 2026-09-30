@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=6">
-  <script defer src="app.js?v=13"></script>
+  <link rel="stylesheet" href="style.css?v=8">
+  <script defer src="app.js?v=14"></script>
 </head>
 <body>
 
@@ -18,9 +18,10 @@
         <p>Jobs and invoices</p>
       </div>
       <div class="status-box">
-        <button type="button" class="refresh-btn" data-action="refreshBooks">Refresh</button>
+        <button type="button" class="refresh-btn" data-action="refreshBooks" data-disable-when="saving">Refresh</button>
         <span class="dot" :class="loading ? 'syncing' : ''"></span>
       </div>
+      <p class="wait-label" x-show="loading" x-text="loadingLabel"></p>
     </header>
 
     <div class="banner" x-show="loading" x-text="loadingLabel"></div>
@@ -145,11 +146,11 @@
           </template>
           <p class="shift-note" x-show="detailLinesEmpty">No shifts are linked to this invoice yet.</p>
           <p class="shift-note">Writes this invoice into INV-Template cell B1, then prints that sheet from row 2. The PDF is the INV-Template page with the sheet grid left off, including the logo and bank details. Save it to the Invoices folder on Drive, download it, or send it from here. Email also sends you a copy for your records.</p>
-          <button type="button" class="btn-alt" data-action="saveInvoicePdf">Save PDF to Drive</button>
-          <button type="button" data-action="downloadInvoicePdf">Download PDF</button>
+          <button type="button" class="btn-alt" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
+          <button type="button" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
           <div class="form-group">
             <label>Email the PDF</label>
-            <input type="email" x-model="detailEmail" placeholder="client@company.com">
+            <input type="email" x-model="detailEmail" placeholder="client@company.com" data-disable-when="saving">
           </div>
           <div class="form-group">
             <label>Subject</label>
@@ -157,9 +158,9 @@
           </div>
           <div class="form-group">
             <label>Email message</label>
-            <textarea x-model="detailMessage" rows="9"></textarea>
+            <textarea x-model="detailMessage" rows="9" data-disable-when="saving"></textarea>
           </div>
-          <button type="button" class="btn-ghost" data-action="emailInvoicePdf">Email PDF</button>
+          <button type="button" class="btn-ghost" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
           <button type="button" class="btn-alt" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
           <button type="button" class="btn-paid" x-show="detailCanFinish" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
           <button type="button" class="btn-bad" x-show="detailCanFinish" data-action="markDetailWrittenOff" data-disable-when="saving">Written off</button>
