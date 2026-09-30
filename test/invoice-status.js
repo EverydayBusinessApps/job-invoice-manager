@@ -866,7 +866,7 @@ test("saving a client writes columns A to J and leaves later columns", function 
     terms: 30
   });
   assert(edited.success, edited.error);
-  assert(edited.message === "Updated Acme Ltd. Time entries now use that name.", edited.message);
+  assert(edited.message === "Updated Acme Ltd. Time entries now use that name. Drafts and new shifts use this rate. Sent invoices keep the rate they were billed at.", edited.message);
   assert(clients.getRange(2, 1).getValue() === "Acme Ltd", clients.getRange(2, 1).getValue());
   assert(clients.getRange(2, 2).getValue() === "1 Dock Road", "address");
   assert(clients.getRange(2, 6).getValue() === 80, "rate was not a number");
@@ -890,6 +890,83 @@ test("saving a client writes columns A to J and leaves later columns", function 
   assert(zero.success, zero.error);
   assert(clients.getRange(4, 6).getValue() === 0, "zero rate");
   assert(clients.getRange(4, 10).getValue() === "", "blank terms");
+});
+
+test("a new client rate stays off invoices that have left Draft", function (api, workbook) {
+  const clients = workbook.sheets.ClientRecords;
+  const time = workbook.sheets["Time&Attendance"];
+  const invoices = workbook.sheets.InvoiceList;
+  clients.getRange(2, 1).setValue("Acme");
+  clients.getRange(2, 6).setValue(150);
+
+  time.getRange(2, 2).setValue("INV-JR26-002");
+  time.getRange(2, 3).setValue(2);
+  time.getRange(2, 4).setValue("Acme");
+  time.getRange(2, 11).setValue(150);
+  invoices.getRange(2, 1).setValue("INV-JR26-002");
+  invoices.getRange(2, 9).setValue("Invoiced");
+
+  time.getRange(3, 2).setValue("INV-JR26-003");
+  time.getRange(3, 3).setValue(3);
+  time.getRange(3, 4).setValue("Acme");
+  time.getRange(3, 11).setValue(150);
+  invoices.getRange(3, 1).setValue("INV-JR26-003");
+  invoices.getRange(3, 9).setValue("Draft");
+
+  time.getRange(4, 2).setValue("INV-JR26-004");
+  time.getRange(4, 4).setValue("Other Co");
+  time.getRange(4, 11).setValue(40);
+  invoices.getRange(4, 1).setValue("INV-JR26-004");
+  invoices.getRange(4, 9).setValue("Paid");
+
+  time.getRange(5, 4).setValue("Acme");
+  time.getRange(5, 11).setValue(150);
+
+  invoices.getRange(5, 1).setValue("INV-JR26-005");
+  invoices.getRange(5, 9).setValue("Unpaid");
+  time.getRange(6, 2).setValue("INV-JR26-005");
+  time.getRange(6, 4).setValue("acme");
+  time.getRange(6, 11).setValue(150);
+
+  invoices.getRange(6, 1).setValue("INV-JR26-006");
+  invoices.getRange(6, 9).setValue("Bad Debt");
+  time.getRange(7, 2).setValue("INV-JR26-006");
+  time.getRange(7, 4).setValue("Acme");
+  time.getRange(7, 11).setValue(150);
+
+  const saved = api.saveClientRecord_({ originalName: "Acme", name: "Acme", rate: 180, terms: 30 });
+  assert(saved.success, saved.error);
+  assert(/Sent invoices keep the rate/.test(saved.message), saved.message);
+  assert(clients.getRange(2, 6).getValue() === 180, "client rate");
+  assert(time.getRange(2, 14).getValue() === 150, "invoiced rate changed");
+  assert(time.getRange(3, 14).getValue() === "", "draft rate was frozen");
+  assert(time.getRange(4, 14).getValue() === "", "another client was frozen");
+  assert(time.getRange(5, 14).getValue() === "", "open time was frozen");
+  assert(time.getRange(6, 14).getValue() === 150, "unpaid rate changed");
+  assert(time.getRange(7, 14).getValue() === 150, "bad debt rate changed");
+  assert(time.getRange(1, 14).getValue() === "Billed Rate", "billed rate header");
+  const formula = time.getRange("K2").getFormula();
+  assert(formula.indexOf("N2:N29544") !== -1 && formula.indexOf("VLOOKUP(D2:D29544,ClientRecords!A:F,6,FALSE)") !== -1, formula);
+
+  const again = api.saveClientRecord_({ originalName: "Acme", name: "Acme", address1: "1 Dock Road", rate: 200 });
+  assert(again.success, again.error);
+  assert(time.getRange(2, 14).getValue() === 150, "a second rate change rewrote the billed rate");
+  assert(time.getRange(3, 14).getValue() === "", "draft was frozen on the second save");
+  assert(clients.getRange(2, 6).getValue() === 200, "second rate");
+
+  const addressOnly = api.saveClientRecord_({ originalName: "Acme", name: "Acme", address1: "9 Harbour Lane", rate: 200 });
+  assert(addressOnly.success, addressOnly.error);
+  assert(!/Sent invoices keep the rate/.test(addressOnly.message), addressOnly.message);
+  assert(time.getRange(3, 14).getValue() === "", "address edit froze the draft");
+
+  const compiled = api.compileSingleInvoice({ invoiceId: "INV-JR26-003" });
+  assert(compiled.success, compiled.error);
+  assert(time.getRange(3, 14).getValue() === 150, "marking invoiced did not keep the current rate");
+
+  const paid = api.updateInvoiceStatus({ invoiceId: "INV-JR26-004", status: "Paid" });
+  assert(paid.success, paid.error);
+  assert(time.getRange(4, 14).getValue() === 40, "paid invoice did not keep its rate");
+  assert(time.getRange(5, 14).getValue() === "", "open time was frozen when another invoice was marked paid");
 });
 
 if (failures.length) {
