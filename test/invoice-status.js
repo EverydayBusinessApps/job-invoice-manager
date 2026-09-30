@@ -19,6 +19,7 @@ function colToIndex(letters) {
 
 function createSheet(name) {
   const cells = {};
+  const formulas = {};
   createSheet.nextId = (createSheet.nextId || 0) + 1;
   const sheetId = createSheet.nextId;
   let sheetHidden = false;
@@ -136,8 +137,16 @@ function parseA1(a1) {
             for (let c = 0; c < values[r].length; c++) set(startRow + r, startCol + c, values[r][c]);
           }
         },
-        getFormula: function () { return ""; },
-        setFormula: function () {}
+        getFormula: function () {
+          return formulas[key(startRow, startCol)] || "";
+        },
+        setFormula: function (formula) {
+          formulas[key(startRow, startCol)] = String(formula || "");
+          const time = String(formula || "").match(/^=TIME\((\d+),(\d+),(\d+)\)$/i);
+          if (!time) return;
+          const serial = (Number(time[1]) * 60 + Number(time[2]) + Number(time[3]) / 60) / 1440;
+          set(startRow, startCol, serial);
+        }
       };
     },
     getSheetId: function () { return sheetId; },
@@ -371,6 +380,8 @@ test("finish is the end of the shift, so hours are not a fraction of a day", fun
   const row = time.getLastRow();
   const start = time.getRange(row, 7).getValue();
   const finish = time.getRange(row, 9).getValue();
+  assert(time.getRange(row, 7).getFormula() === "=TIME(8,0,0)", time.getRange(row, 7).getFormula());
+  assert(time.getRange(row, 9).getFormula() === "=TIME(10,30,0)", time.getRange(row, 9).getFormula());
   assert(typeof start === "number" && start > 0 && start < 1, "start was a date " + start);
   assert(typeof finish === "number" && finish > 0 && finish < 1, "finish was a date " + finish);
   assert(Math.abs(start - (8 / 24)) < 1e-9, "start " + start);
