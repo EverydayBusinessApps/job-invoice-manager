@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=5">
-  <script defer src="app.js?v=9"></script>
+  <link rel="stylesheet" href="style.css?v=6">
+  <script defer src="app.js?v=10"></script>
 </head>
 <body>
 
@@ -35,27 +35,22 @@
         <div x-show="dashView === 'home'">
         <section>
           <div class="card-title">Needs attention</div>
-          <p class="shift-note">Still to collect, overdue, and drafts are the live books, not just this period.</p>
+          <p class="shift-note">Still to send, still to collect, and done. These are the live books.</p>
           <div class="grid-2">
+            <button type="button" class="metric-box" data-action="openList" data-id="send">
+              <span class="metric-title">Still to send</span>
+              <span class="metric-value" x-text="openSendAmount"></span>
+              <span class="metric-sub" x-text="openSendCount"></span>
+            </button>
             <button type="button" class="metric-box alt" data-action="openList" data-id="due">
               <span class="metric-title">Still to collect</span>
-              <span class="metric-value" x-text="openDueAmount"></span>
-              <span class="metric-sub" x-text="openDueCount"></span>
+              <span class="metric-value" x-text="openCollectAmount"></span>
+              <span class="metric-sub" x-text="openCollectCount"></span>
             </button>
-            <button type="button" class="metric-box warn" data-action="openList" data-id="overdue">
-              <span class="metric-title">Overdue</span>
-              <span class="metric-value" x-text="openOverdueAmount"></span>
-              <span class="metric-sub" x-text="openOverdueCount"></span>
-            </button>
-            <button type="button" class="metric-box" data-action="openList" data-id="draft">
-              <span class="metric-title">Drafts</span>
-              <span class="metric-value" x-text="openDraftAmount"></span>
-              <span class="metric-sub" x-text="openDraftCount"></span>
-            </button>
-            <button type="button" class="metric-box bad" data-action="openList" data-id="bad">
-              <span class="metric-title">Bad debt</span>
-              <span class="metric-value" x-text="openBadAmount"></span>
-              <span class="metric-sub" x-text="openBadCount"></span>
+            <button type="button" class="metric-box" data-action="openList" data-id="done">
+              <span class="metric-title">Done</span>
+              <span class="metric-value" x-text="openDoneAmount"></span>
+              <span class="metric-sub" x-text="openDoneCount"></span>
             </button>
           </div>
         </section>
@@ -88,39 +83,7 @@
               <span class="metric-value metric-value-sm" x-text="activeTop"></span>
             </div>
           </div>
-          <div class="grid-2">
-            <button type="button" class="metric-box" data-action="openList" data-id="period-paid">
-              <span class="metric-title">Paid</span>
-              <span class="metric-value" x-text="activePaid"></span>
-              <span class="metric-sub" x-text="activePaidCount"></span>
-            </button>
-            <button type="button" class="metric-box alt" data-action="openList" data-id="period-sent">
-              <span class="metric-title">Sent</span>
-              <span class="metric-value" x-text="activeSent"></span>
-              <span class="metric-sub" x-text="activeSentCount"></span>
-            </button>
-            <button type="button" class="metric-box warn" data-action="openList" data-id="period-due">
-              <span class="metric-title">Due</span>
-              <span class="metric-value" x-text="activeDue"></span>
-              <span class="metric-sub" x-text="activeDueCount"></span>
-            </button>
-            <button type="button" class="metric-box" data-action="openList" data-id="period-draft">
-              <span class="metric-title">Drafts</span>
-              <span class="metric-value" x-text="activeDraft"></span>
-              <span class="metric-sub" x-text="activeDraftCount"></span>
-            </button>
-            <button type="button" class="metric-box warn" data-action="openList" data-id="period-overdue">
-              <span class="metric-title">Overdue in period</span>
-              <span class="metric-value" x-text="activeOverdue"></span>
-              <span class="metric-sub" x-text="activeOverdueCount"></span>
-            </button>
-            <button type="button" class="metric-box bad" data-action="openList" data-id="period-bad">
-              <span class="metric-title">Bad debt</span>
-              <span class="metric-value" x-text="activeBad"></span>
-              <span class="metric-sub" x-text="activeBadCount"></span>
-            </button>
-          </div>
-          <p class="shift-note">Hours are shifts worked in the period. Paid, sent, due, and drafts follow the invoice date. Sent is everything that has left Draft, including invoices later paid or written off.</p>
+          <p class="shift-note">Hours are shifts worked in this period. The three piles above are the live books, across every month.</p>
         </section>
         </div>
 
@@ -190,9 +153,9 @@
           </div>
           <button type="button" class="btn-ghost" data-action="emailInvoicePdf">Email PDF</button>
           <button type="button" class="btn-alt" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
-          <button type="button" class="btn-paid" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
-          <button type="button" class="btn-unpaid" data-action="markDetailUnpaid" data-disable-when="saving">Mark unpaid</button>
-          <button type="button" class="btn-bad" data-action="markDetailBad" data-disable-when="saving">Mark bad debt</button>
+          <button type="button" class="btn-paid" x-show="detailCanFinish" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
+          <button type="button" class="btn-bad" x-show="detailCanFinish" data-action="markDetailWrittenOff" data-disable-when="saving">Written off</button>
+          <button type="button" class="btn-ghost" x-show="detailCanUndo" data-action="undoDetailStatus" data-disable-when="saving">Undo</button>
           <button type="button" class="btn-ghost" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
         </section>
         </div>

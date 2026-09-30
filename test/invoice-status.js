@@ -393,7 +393,10 @@ test("a second tap of the same job confirms the save and does not duplicate it",
   assert(different.success && !different.alreadySaved, different.error || different.message);
   assert(timeRows(workbook).length === rowsBefore + 1, "a different job was not stored");
 
-  api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Paid" });
+  const marked = api.compileSingleInvoice({ invoiceId: created.invoiceId });
+  assert(marked.success, marked.error);
+  const paid = api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Paid" });
+  assert(paid.success, paid.error);
   const blocked = api.executeTimeLog(shift({
     invoiceMode: "existing",
     invoiceId: created.invoiceId,
@@ -478,25 +481,37 @@ test("time cannot be added once an invoice leaves Draft", function (api, workboo
   api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Paid" });
   const paidBlock = api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId }));
   assert(!paidBlock.success, "paid add was allowed");
-  api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Unpaid" });
-  assert(!api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId })).success, "unpaid add was allowed");
-  api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Bad debt" });
-  assert(statusCell(workbook, 2) === "Bad debt", statusCell(workbook, 2));
-  assert(!api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId })).success, "bad debt add was allowed");
+  const undone = api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Undo" });
+  assert(undone.success && statusCell(workbook, 2) === "Invoiced", undone.error || statusCell(workbook, 2));
+  assert(!api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId })).success, "invoiced add was allowed after undo");
+  api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Written off" });
+  assert(statusCell(workbook, 2) === "Written off", statusCell(workbook, 2));
+  assert(!api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId })).success, "written-off add was allowed");
 });
 
-test("billing desk marks Paid, Unpaid, and Bad debt", function (api, workbook) {
+test("an invoice moves Draft, Invoiced, Paid, and Written off", function (api, workbook) {
   const created = api.executeTimeLog(shift());
-  ["Paid", "Unpaid", "Bad debt"].forEach(function (status) {
-    const updated = api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: status });
-    assert(updated.success, updated.error);
-    assert(updated.status === status, updated.status);
-    assert(statusCell(workbook, 2) === status, statusCell(workbook, 2));
-    assert(updated.message === "Invoice INV-JR26-001 marked " + status + ".", updated.message);
-  });
-  const rejected = api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Draft" });
-  assert(!rejected.success, "Draft was accepted from the billing desk");
-  assert(statusCell(workbook, 2) === "Bad debt", "status was overwritten");
+  const id = created.invoiceId;
+  assert(!api.updateInvoiceStatus({ invoiceId: id, status: "Paid" }).success, "paid from draft");
+  assert(!api.updateInvoiceStatus({ invoiceId: id, status: "Written off" }).success, "written off from draft");
+  assert(!api.updateInvoiceStatus({ invoiceId: id, status: "Undo" }).success, "undo from draft");
+  const compiled = api.compileSingleInvoice({ invoiceId: id });
+  assert(compiled.success, compiled.error);
+  const paid = api.updateInvoiceStatus({ invoiceId: id, status: "Paid" });
+  assert(paid.success, paid.error);
+  assert(paid.status === "Paid" && statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
+  assert(paid.message === "Invoice INV-JR26-001 marked Paid.", paid.message);
+  assert(!api.updateInvoiceStatus({ invoiceId: id, status: "Written off" }).success, "written off from paid");
+  const undo = api.updateInvoiceStatus({ invoiceId: id, status: "Undo" });
+  assert(undo.success, undo.error);
+  assert(undo.status === "Invoiced" && statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+  assert(undo.message === "Invoice INV-JR26-001 back to invoiced.", undo.message);
+  const off = api.updateInvoiceStatus({ invoiceId: id, status: "Written off" });
+  assert(off.success && off.message === "Invoice INV-JR26-001 marked Written off.", off.message || off.error);
+  assert(statusCell(workbook, 2) === "Written off", statusCell(workbook, 2));
+  assert(!api.updateInvoiceStatus({ invoiceId: id, status: "Unpaid" }).success, "unpaid was accepted");
+  const back = api.updateInvoiceStatus({ invoiceId: id, status: "Undo" });
+  assert(back.success && statusCell(workbook, 2) === "Invoiced", back.error || statusCell(workbook, 2));
 });
 
 test("unbilled summary counts draft time only", function (api, workbook) {
@@ -583,7 +598,7 @@ test("dashboard splits hours and invoices across month, quarter, and year", func
   assert(month.due === 240 && month.dueCount === 2, "month due " + month.due);
   assert(month.draft === 50 && month.draftCount === 1, "month draft");
   assert(month.overdue === 200 && month.overdueCount === 1, "month overdue");
-  assert(month.badDebt === 0, "month bad debt");
+  assert(month.writtenOff === 0, "month written off");
 
   const quarter = report.periods.quarter;
   assert(quarter.label === "Q3 2026", quarter.label);
@@ -591,24 +606,27 @@ test("dashboard splits hours and invoices across month, quarter, and year", func
   assert(quarter.avgRate === 39.17, "quarter rate " + quarter.avgRate);
   assert(quarter.topClient === "Acme" && quarter.topClientHours === 9, quarter.topClientHours);
   assert(quarter.paid === 100 && quarter.sent === 420, "quarter money " + quarter.paid + " " + quarter.sent);
-  assert(quarter.due === 240 && quarter.draft === 50 && quarter.badDebt === 80, "quarter split");
+  assert(quarter.due === 240 && quarter.draft === 50 && quarter.writtenOff === 80, "quarter split");
   assert(quarter.overdue === 200, "quarter overdue");
   assert(report.periods.year.sent === quarter.sent && report.periods.year.hours === quarter.hours, "year should match this sample");
 
   assert(report.open.dueAmount === 240 && report.open.dueCount === 2, "open due");
   assert(report.open.overdueAmount === 200 && report.open.overdueCount === 1, "open overdue");
   assert(report.open.draftAmount === 50 && report.open.draftCount === 1, "open draft");
-  assert(report.open.badDebtAmount === 80 && report.open.badDebtCount === 1, "open bad debt");
+  assert(report.open.paidAmount === 100 && report.open.paidCount === 1, "open paid");
+  assert(report.open.writtenOffAmount === 80 && report.open.writtenOffCount === 1, "open written off");
 
   const overdue = findInvoice(report, "INV-JR26-002");
   assert(overdue && overdue.kind === "due" && overdue.overdue, "invoiced should be overdue");
   assert(overdue.dueDate === "2026-09-15" && overdue.daysOverdue === 7, overdue.dueDate + " " + overdue.daysOverdue);
   assert(overdue.email === "acme@example.com", overdue.email);
   const unpaid = findInvoice(report, "INV-JR26-005");
-  assert(unpaid && unpaid.kind === "due" && !unpaid.overdue && unpaid.total === 40, JSON.stringify(unpaid));
+  assert(unpaid && unpaid.status === "Invoiced" && unpaid.kind === "due" && !unpaid.overdue && unpaid.total === 40, JSON.stringify(unpaid));
   assert(unpaid.dueDate === "2026-10-20", unpaid.dueDate);
+  assert(workbook.sheets.InvoiceList.getRange(6, 9).getValue() === "Invoiced", "Unpaid was left on the sheet");
   const bad = findInvoice(report, "INV-JR26-004");
-  assert(bad && bad.status === "Bad debt" && bad.kind === "bad", bad && bad.status);
+  assert(bad && bad.status === "Written off" && bad.kind === "writtenoff", bad && bad.status);
+  assert(workbook.sheets.InvoiceList.getRange(5, 9).getValue() === "Written off", "Bad debt was left on the sheet");
   const draft = findInvoice(report, "INV-JR26-003");
   assert(draft && draft.kind === "draft" && draft.inMonth && !draft.inQuarter === false, "draft period flags");
   assert(draft.inQuarter && draft.inYear, "draft should sit in the quarter and year");
@@ -949,7 +967,7 @@ test("a new client rate stays off invoices that have left Draft", function (api,
   time.getRange(4, 4).setValue("Other Co");
   time.getRange(4, 11).setValue(40);
   invoices.getRange(4, 1).setValue("INV-JR26-004");
-  invoices.getRange(4, 9).setValue("Paid");
+  invoices.getRange(4, 9).setValue("Invoiced");
 
   time.getRange(5, 4).setValue("Acme");
   time.getRange(5, 11).setValue(150);
