@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=10">
-  <script defer src="app.js?v=15"></script>
+  <link rel="stylesheet" href="style.css?v=11">
+  <script defer src="app.js?v=16"></script>
 </head>
 <body>
 
@@ -22,10 +22,8 @@
         <span class="dot" :class="loading ? 'syncing' : ''"></span>
       </div>
       <p class="wait-label" x-show="loading" x-text="loadingLabel"></p>
-      <p class="wait-label" x-show="confirmText" x-text="confirmText"></p>
     </header>
 
-    <div class="banner" x-show="loading" x-text="loadingLabel"></div>
     <div class="banner sample" x-show="dashboardNote" x-text="dashboardNote"></div>
 
     <main>
@@ -313,12 +311,89 @@
           </section>
         </div>
       </div>
+
+      <!-- VIEW: SETTINGS -->
+      <div x-show="currentTab === 'settings'">
+        <section>
+          <div class="card-title">Settings</div>
+          <p class="shift-note">Logo, rate, and bank details from the Config sheet. Column A is the setting and column B is the value. The invoice uses these.</p>
+          <div class="form-group">
+            <label>Logo</label>
+            <div id="logo-wrap" class="logo-frame">
+              <img id="logo-preview" alt="Logo">
+            </div>
+            <p class="shift-note" x-show="logoEmpty">No logo on the invoice yet. Choose a PNG or JPEG and save settings.</p>
+            <input id="logo-file" type="file" accept="image/png,image/jpeg" @change="onLogoPicked" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.rate">
+            <label>Default Hourly Rate</label>
+            <input type="text" inputmode="decimal" x-model="settingsForm.rate" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.currency">
+            <label>Default Currency</label>
+            <input type="text" x-model="settingsForm.currency" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.name">
+            <label>Business Name</label>
+            <input type="text" x-model="settingsForm.name" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.address">
+            <label>Business Address</label>
+            <input type="text" x-model="settingsForm.address" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.email">
+            <label>Business Email</label>
+            <input type="email" x-model="settingsForm.email" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.website">
+            <label>Website</label>
+            <input type="text" x-model="settingsForm.website" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.phone">
+            <label>Business Phone</label>
+            <input type="tel" x-model="settingsForm.phone" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.bank">
+            <label>Bank Account Name</label>
+            <input type="text" x-model="settingsForm.bank" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.iban">
+            <label>IBAN</label>
+            <input type="text" x-model="settingsForm.iban" data-disable-when="saving">
+          </div>
+          <div id="settings-extra"></div>
+          <div class="card-title">Breaks</div>
+          <p class="shift-note">These lengths come off a shift. The names are the ones used when you log a job.</p>
+          <div class="form-group" x-show="settingsShow.na">
+            <label>na</label>
+            <input type="text" x-model="breakForm.na" placeholder="00:00" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.half">
+            <label>half hour</label>
+            <input type="text" x-model="breakForm.half" placeholder="00:30" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.hour">
+            <label>hour</label>
+            <input type="text" x-model="breakForm.hour" placeholder="01:00" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.hourHalf">
+            <label>hour and half</label>
+            <input type="text" x-model="breakForm.hourHalf" placeholder="01:30" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.two">
+            <label>two hours</label>
+            <input type="text" x-model="breakForm.two" placeholder="02:00" data-disable-when="saving">
+          </div>
+          <button type="button" data-action="saveSettings" data-disable-when="saving" x-text="settingsButtonLabel"></button>
+        </section>
+      </div>
     </main>
 
     <nav>
       <button :class="tabDashClass ? 'nav-on' : ''" @click="setDashTab">📊 Dashboard</button>
       <button :class="tabClientsClass ? 'nav-on' : ''" @click="setClientsTab">👤 Clients</button>
       <button :class="tabTrackerClass ? 'nav-on' : ''" @click="setTrackerTab">🕒 Log</button>
+      <button :class="tabSettingsClass ? 'nav-on' : ''" @click="setSettingsTab">⚙️ Settings</button>
     </nav>
   </div>
 

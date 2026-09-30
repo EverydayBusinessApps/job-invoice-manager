@@ -63,6 +63,10 @@ function doPost(e) {
       responseData = listClientRecords();
     } else if (action === "saveClient") {
       responseData = saveClientRecord_(requestData.payload);
+    } else if (action === "getSettings") {
+      responseData = fetchSettings();
+    } else if (action === "saveSettings") {
+      responseData = saveSettings_(requestData.payload);
     } else {
       throw new Error("Invalid API action parameter mapping.");
     }
@@ -1556,6 +1560,203 @@ function recordsEmail_(ss, clientEmail) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(found)) return "";
   if (found.toLowerCase() === String(clientEmail || "").trim().toLowerCase()) return "";
   return found;
+}
+
+function fetchSettings() {
+  const ss = workbook_();
+  const read = readConfigSheet_(ss);
+  if (!read.success) return read;
+  read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"));
+  return read;
+}
+
+function readConfigSheet_(ss) {
+  const config = ss.getSheetByName("Config");
+  if (!config) return { success: false, error: "The workbook has no Config sheet." };
+  const last = Math.max(config.getLastRow(), 1);
+  const rows = config.getRange(1, 1, last, 2).getValues();
+  const settings = [];
+  const breaks = [];
+  let mode = "settings";
+  for (let i = 0; i < rows.length; i++) {
+    const label = clientText_(rows[i][0]);
+    if (!label) {
+      if (mode === "breaks" && breaks.length) break;
+      continue;
+    }
+    if (/^settings$/i.test(label)) continue;
+    if (/^breaks$/i.test(label)) {
+      mode = "breaks";
+      continue;
+    }
+    if (/^(invoice status|draft|invoiced|paid|written off)$/i.test(label)) break;
+    const item = { row: i + 1, label: label, value: configText_(rows[i][1], mode === "breaks") };
+    if (mode === "breaks") breaks.push(item);
+    else settings.push(item);
+  }
+  return { success: true, settings: settings, breaks: breaks, logo: "" };
+}
+
+function configText_(value, asTime) {
+  if (value == null || value === "") return "";
+  if (isDateValue_(value)) {
+    return Utilities.formatDate(value, (Session.getScriptTimeZone && Session.getScriptTimeZone()) || "UTC", "HH:mm");
+  }
+  if (typeof value === "number" && isFinite(value)) {
+    if (asTime || (value > 0 && value < 1)) {
+      const total = Math.round(value * 1440);
+      const hours = Math.floor(total / 60);
+      const minutes = total % 60;
+      return String(hours).padStart(2, "0") + ":" + String(minutes).padStart(2, "0");
+    }
+    return String(value);
+  }
+  return String(value).trim();
+}
+
+function configFormulaLocked_(cell) {
+  const formula = cell.getFormula ? String(cell.getFormula() || "") : "";
+  if (!formula) return false;
+  return !/^=TIME\(\d+,\d+,\d+\)$/i.test(formula);
+}
+
+function checkedConfigValue_(label, raw, isBreak) {
+  const text = String(raw == null ? "" : raw).trim();
+  if (/hourly rate/i.test(label)) {
+    if (!text) return { ok: true, write: function (cell) { cell.setValue(""); } };
+    const n = Number(String(text).replace(/[^0-9.-]/g, ""));
+    if (!isFinite(n) || n < 0) return { ok: false, error: "Default hourly rate must be a number." };
+    return { ok: true, write: function (cell) { cell.setValue(n); } };
+  }
+  if (/email/i.test(label) && text && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
+    return { ok: false, error: "Business email needs to look like an email address." };
+  }
+  if (isBreak) {
+    if (!clockParts_(text)) return { ok: false, error: "Enter " + label + " as hours and minutes, for example 00:30." };
+    return { ok: true, write: function (cell) { writeClockTime_(cell, text); } };
+  }
+  if (/phone|iban/i.test(label)) {
+    return { ok: true, write: function (cell) { cell.setNumberFormat("@"); cell.setValue(text); } };
+  }
+  return { ok: true, write: function (cell) { cell.setValue(text); } };
+}
+
+function saveSettings_(payload) {
+  const ss = workbook_();
+  const config = ss.getSheetByName("Config");
+  if (!config) return { success: false, error: "The workbook has no Config sheet." };
+  const source = payload || {};
+  const settings = Array.isArray(source.settings) ? source.settings : [];
+  const breaks = Array.isArray(source.breaks) ? source.breaks : [];
+  const breakRows = {};
+  breaks.forEach(function (item) { breakRows[Number(item && item.row)] = true; });
+  let logoBlob = null;
+  if (source.logo) {
+    try {
+      logoBlob = logoBlob_(source.logo);
+    } catch (err) {
+      return { success: false, error: err.message || String(err) };
+    }
+  }
+  const plan = [];
+  const items = settings.concat(breaks);
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i] || {};
+    const row = Number(item.row);
+    const label = clientText_(item.label);
+    if (!row || !label) continue;
+    const current = clientText_(config.getRange(row, 1).getValue());
+    if (current.toLowerCase() !== label.toLowerCase()) {
+      return { success: false, error: label + " is no longer on that Config row. Use Refresh and try again." };
+    }
+    const cell = config.getRange(row, 2);
+    if (configFormulaLocked_(cell)) {
+      return { success: false, error: label + " is a formula on the Config sheet, so it was left as it is." };
+    }
+    const checked = checkedConfigValue_(label, item.value, !!breakRows[row]);
+    if (!checked.ok) return { success: false, error: checked.error };
+    plan.push({ cell: cell, write: checked.write });
+  }
+  plan.forEach(function (step) { step.write(step.cell); });
+  let logoNote = "";
+  if (logoBlob) {
+    const template = ss.getSheetByName("INV-Template");
+    if (!template) return { success: false, error: "Saved the Config sheet. The workbook has no INV-Template sheet for the logo." };
+    try {
+      placeInvoiceLogo_(template, logoBlob);
+      logoNote = " The logo is on the invoice.";
+    } catch (err) {
+      return { success: false, error: "Saved the Config sheet. " + (err.message || err) };
+    }
+  }
+  const read = readConfigSheet_(ss);
+  const name = clientText_(config.getRange("B5").getValue());
+  read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"));
+  read.message = "Saved settings" + (name ? " for " + name : "") + "." + logoNote;
+  read.success = true;
+  return read;
+}
+
+function logoBlob_(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=\s]+)$/);
+  if (!match) throw new Error("Choose a PNG or JPEG logo.");
+  const mime = match[1] === "png" ? "image/png" : "image/jpeg";
+  const bytes = Utilities.base64Decode(match[2].replace(/\s/g, ""));
+  if (!bytes || !bytes.length) throw new Error("That logo file was empty.");
+  if (bytes.length > 1500000) throw new Error("Choose a logo smaller than 1.5 MB.");
+  const ext = mime === "image/png" ? "png" : "jpg";
+  return Utilities.newBlob(bytes, mime, "everydaywork-logo." + ext);
+}
+
+function readInvoiceLogo_(sheet) {
+  if (!sheet || typeof sheet.getImages !== "function") return "";
+  let images;
+  try {
+    images = sheet.getImages() || [];
+  } catch (err) {
+    return "";
+  }
+  if (!images.length || typeof images[0].getBlob !== "function") return "";
+  try {
+    const blob = images[0].getBlob();
+    if (!blob || typeof blob.getBytes !== "function") return "";
+    const bytes = blob.getBytes();
+    if (!bytes || !bytes.length || bytes.length > 1500000) return "";
+    const type = (blob.getContentType && blob.getContentType()) || "image/png";
+    return "data:" + type + ";base64," + Utilities.base64Encode(bytes);
+  } catch (err) {
+    return "";
+  }
+}
+
+function placeInvoiceLogo_(sheet, blob) {
+  let column = 1;
+  let row = 3;
+  let width = 160;
+  let height = 70;
+  if (typeof sheet.getImages === "function") {
+    const images = sheet.getImages() || [];
+    if (images.length) {
+      const current = images[0];
+      if (typeof current.getAnchorCell === "function") {
+        const anchor = current.getAnchorCell();
+        if (anchor && anchor.getColumn && anchor.getRow) {
+          column = anchor.getColumn() || column;
+          row = anchor.getRow() || row;
+        }
+      }
+      if (typeof current.getWidth === "function" && current.getWidth()) width = current.getWidth();
+      if (typeof current.getHeight === "function" && current.getHeight()) height = current.getHeight();
+      if (typeof current.remove === "function") current.remove();
+    }
+  }
+  if (typeof sheet.insertImage !== "function") {
+    throw new Error("This spreadsheet cannot place a logo on the invoice.");
+  }
+  const image = sheet.insertImage(blob, column, row);
+  if (image && typeof image.setWidth === "function") image.setWidth(width);
+  if (image && typeof image.setHeight === "function") image.setHeight(height);
+  return image;
 }
 
 function businessProfile_(ss) {

@@ -289,6 +289,7 @@ function loadApi(workbook) {
       },
       sleep: function () {},
       base64Encode: function (bytes) { return Buffer.from(bytes).toString("base64"); },
+      base64Decode: function (text) { return Array.from(Buffer.from(String(text).replace(/\s/g, ""), "base64")); },
       newBlob: function (bytes, type) {
         return {
           setName: function () { return this; },
@@ -1099,6 +1100,138 @@ test("a new client rate stays off invoices that have left Draft", function (api,
   assert(paid.success, paid.error);
   assert(time.getRange(4, 14).getValue() === 40, "paid invoice did not keep its rate");
   assert(time.getRange(5, 14).getValue() === "", "open time was frozen when another invoice was marked paid");
+});
+
+function seedConfig(workbook) {
+  const config = createSheet("Config");
+  workbook.sheets.Config = config;
+  const pairs = [
+    [1, "Settings", "Value"],
+    [2, "Default Hourly Rate", 65],
+    [4, "Default Currency", "EUR"],
+    [5, "Business Name", "Everyday Business"],
+    [6, "Business Address", "Ireland"],
+    [7, "Business Email", "Jane@EverydayBusiness.ie"],
+    [8, "Website", "www.EverydayBusiness.ie"],
+    [9, "Business Phone", "00353 123 45678"],
+    [11, "Bank Account Name", "Everyday Business"],
+    [12, "IBAN", "IEXX XXXX XXXX XXXX XXXX XX"],
+    [15, "Breaks", "Value"],
+    [16, "na", 0],
+    [17, "half hour", 30 / 1440],
+    [18, "hour", new Date(Date.UTC(1899, 11, 30, 1, 0, 0))],
+    [19, "hour and half", "01:30"],
+    [20, "two hours", "02:00"],
+    [26, "Invoice status", ""],
+    [27, "Draft", ""],
+    [28, "Invoiced", ""],
+    [29, "Written off", ""],
+    [30, "Paid", ""]
+  ];
+  pairs.forEach(function (pair) {
+    config.getRange(pair[0], 1).setValue(pair[1]);
+    if (pair[2] !== "") config.getRange(pair[0], 2).setValue(pair[2]);
+  });
+  config.getRange(5, 3).setValue("keep-me");
+  return config;
+}
+
+test("settings read the Config sheet and leave status rows alone", function (api, workbook) {
+  const config = seedConfig(workbook);
+  const read = api.fetchSettings();
+  assert(read.success, read.error);
+  assert(read.settings.length === 9, JSON.stringify(read.settings));
+  assert(read.settings[0].label === "Default Hourly Rate" && read.settings[0].value === "65", read.settings[0].value);
+  assert(read.settings[2].label === "Business Name" && read.settings[2].row === 5, JSON.stringify(read.settings[2]));
+  assert(read.settings[4].value === "Jane@EverydayBusiness.ie", read.settings[4].value);
+  assert(read.breaks.length === 5, JSON.stringify(read.breaks));
+  assert(read.breaks[0].value === "00:00", read.breaks[0].value);
+  assert(read.breaks[1].value === "00:30", read.breaks[1].value);
+  assert(read.breaks.map(function (item) { return item.label; }).indexOf("Draft") === -1, "status row was treated as a break");
+  assert(config.getRange(5, 3).getValue() === "keep-me", "column C was read as a value");
+
+  config.getRange(4, 2).setFormula("=1+1");
+  const blocked = api.saveSettings_({
+    settings: [{ row: 4, label: "Default Currency", value: "GBP" }, { row: 5, label: "Business Name", value: "Changed" }]
+  });
+  assert(!blocked.success, "a formula cell was overwritten");
+  assert(/formula/.test(blocked.error), blocked.error);
+  assert(config.getRange(5, 2).getValue() === "Everyday Business", "later cells were written after a formula block");
+
+  config.getRange(4, 2).setFormula("");
+  config.getRange(4, 2).setValue("EUR");
+  const saved = api.saveSettings_({
+    settings: [
+      { row: 2, label: "Default Hourly Rate", value: "70" },
+      { row: 5, label: "Business Name", value: "Harbour Lane" },
+      { row: 7, label: "Business Email", value: "office@everydaybusiness.ie" },
+      { row: 9, label: "Business Phone", value: "00353 123 45678" }
+    ],
+    breaks: [
+      { row: 16, label: "na", value: "00:00" },
+      { row: 17, label: "half hour", value: "00:45" }
+    ]
+  });
+  assert(saved.success, saved.error);
+  assert(saved.message === "Saved settings for Harbour Lane.", saved.message);
+  assert(config.getRange(2, 2).getValue() === 70, "rate was stored as text");
+  assert(config.getRange(5, 1).getValue() === "Business Name", "the setting name changed");
+  assert(config.getRange(5, 2).getValue() === "Harbour Lane", config.getRange(5, 2).getValue());
+  assert(config.getRange(5, 3).getValue() === "keep-me", "column C was wiped");
+  assert(config.getRange(7, 2).getValue() === "office@everydaybusiness.ie", "email");
+  assert(config.getRange(9, 2).getValue() === "00353 123 45678", "phone lost its text");
+  assert(config.getRange(17, 2).getFormula() === "=TIME(0,45,0)", config.getRange(17, 2).getFormula());
+  assert(config.getRange(27, 1).getValue() === "Draft", "Draft status row changed");
+  assert(api.businessProfile_(workbook).name === "Harbour Lane", "business name no longer comes from B5");
+
+  const badRate = api.saveSettings_({ settings: [{ row: 2, label: "Default Hourly Rate", value: "-5" }] });
+  assert(!badRate.success && /number/.test(badRate.error), badRate.error);
+  const badEmail = api.saveSettings_({ settings: [{ row: 7, label: "Business Email", value: "not-an-email" }] });
+  assert(!badEmail.success && /email/.test(badEmail.error), badEmail.error);
+});
+
+test("a logo replaces the image already on the invoice", function (api, workbook) {
+  seedConfig(workbook);
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  const images = [];
+  const current = {
+    getAnchorCell: function () { return { getColumn: function () { return 2; }, getRow: function () { return 4; } }; },
+    getWidth: function () { return 140; },
+    getHeight: function () { return 60; },
+    getBlob: function () { return { getBytes: function () { return [1, 2, 3]; }, getContentType: function () { return "image/png"; } }; },
+    remove: function () { images.splice(images.indexOf(current), 1); }
+  };
+  images.push(current);
+  template.getImages = function () { return images.slice(); };
+  let placed = null;
+  template.insertImage = function (blob, column, row) {
+    placed = {
+      blob: blob,
+      column: column,
+      row: row,
+      width: 0,
+      height: 0,
+      setWidth: function (width) { this.width = width; },
+      setHeight: function (height) { this.height = height; },
+      getBlob: function () { return blob; }
+    };
+    images.length = 0;
+    images.push(placed);
+    return placed;
+  };
+  const before = api.fetchSettings();
+  assert(before.success, before.error);
+  assert(before.logo.indexOf("data:image/png;base64,") === 0, before.logo);
+  const png = "data:image/png;base64," + Buffer.from("logo-bytes").toString("base64");
+  const saved = api.saveSettings_({ settings: [], breaks: [], logo: png });
+  assert(saved.success, saved.error);
+  assert(/logo is on the invoice/.test(saved.message), saved.message);
+  assert(placed && placed.column === 2 && placed.row === 4, JSON.stringify(placed));
+  assert(placed.width === 140 && placed.height === 60, placed.width + "x" + placed.height);
+  assert(images.indexOf(current) === -1, "the old logo stayed on the invoice");
+  const bad = api.saveSettings_({ logo: "data:text/plain;base64,YQ==" });
+  assert(!bad.success && /PNG or JPEG/.test(bad.error), bad.error);
 });
 
 if (failures.length) {

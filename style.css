@@ -20,7 +20,9 @@ select, input, textarea { width: 100%; background-color: #f8fafc; border: 1px so
 input:disabled, textarea:disabled, select:disabled { background-color: #f1f5f9; color: #64748b; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
-input[type="time"], input[type="date"] { min-height: 2.75rem; }
+input[type="time"], input[type="date"], input[type="file"] { min-height: 2.75rem; }
+.logo-frame { display: none; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.75rem; }
+.logo-frame img { display: block; max-width: 100%; max-height: 7rem; margin: 0 auto; object-fit: contain; }
 .shift-note { margin: 0; font-size: 0.75rem; font-weight: 600; color: #FAFFE4; background: #00263B; border-radius: 0.75rem; padding: 0.5rem 0.75rem; }
 button { width: 100%; background-color: #00263B; color: #FAFFE4; font-weight: 600; padding: 1rem; border-radius: 0.75rem; border: none; font-size: 0.875rem; cursor: pointer; }
 button:disabled { background-color: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
@@ -28,8 +30,8 @@ button.btn-alt { background-color: #00263B; color: #FAFFE4; }
 button.btn-paid { background-color: #047857; }
 button.btn-unpaid { background-color: #b45309; }
 button.btn-bad { background-color: #be123c; }
-nav { background-color: #00263B; color: #FAFFE4; display: flex; justify-content: center; padding: 0.75rem 0.5rem; position: fixed; bottom: 0; left: 0; right: 0; max-width: 28rem; margin: 0 auto; z-index: 50; border-top: 1px solid #01344f; box-sizing: border-box; gap: 1rem; }
-nav button { background: none; color: #FAFFE4; font-size: 0.72rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 0.15rem 0.25rem; width: auto; min-width: 4.6rem; font-weight: 500; line-height: 1.2; text-align: center; }
+nav { background-color: #00263B; color: #FAFFE4; display: flex; justify-content: center; padding: 0.75rem 0.35rem; position: fixed; bottom: 0; left: 0; right: 0; max-width: 28rem; margin: 0 auto; z-index: 50; border-top: 1px solid #01344f; box-sizing: border-box; gap: 0.35rem; }
+nav button { background: none; color: #FAFFE4; font-size: 0.68rem; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 0.15rem 0.15rem; width: auto; min-width: 3.8rem; font-weight: 500; line-height: 1.2; text-align: center; }
 .alert { padding: 0.875rem; border-radius: 0.75rem; text-align: center; font-size: 0.875rem; font-weight: 600; border: 1px solid transparent; }
 .alert-success { background-color: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
 .alert-error { background-color: #fff1f2; color: #9f1239; border-color: #fecdd3; }
