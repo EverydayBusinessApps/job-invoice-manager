@@ -267,6 +267,10 @@ function sampleDashboard() {
       row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", status: "Bad debt", kind: "bad", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
     ],
     clients: [{ name: "Acme" }, { name: "Other Co" }],
+    clientRecords: [
+      { name: "Acme", address1: "1 Dock Road", address2: "Dublin", address3: "", address4: "", rate: 50, contact: "Ann Acme", email: "acme@example.com", phone: "01 555 0100", terms: 14 },
+      { name: "Other Co", address1: "22 Quay Street", address2: "Cork", address3: "", address4: "", rate: 40, contact: "Owen Other", email: "owen@other.test", phone: "021 555 0199", terms: 30 }
+    ],
     unbilled: { "Other Co": { totalHours: 1, totalAmount: 50 } }
   };
 }
@@ -279,6 +283,24 @@ window.Alpine.data('appState', () => ({
   currentTab: 'dashboard',
   feedback: { text: '', isError: false },
   clients: [],
+  clientRecords: [],
+  clientRecordsEmpty: true,
+  clientDetailsLive: false,
+  clientView: "list",
+  clientFormTitle: "New client",
+  clientForm: {
+    originalName: "",
+    name: "",
+    address1: "",
+    address2: "",
+    address3: "",
+    address4: "",
+    rate: "",
+    contact: "",
+    email: "",
+    phone: "",
+    terms: ""
+  },
   
   apiUrl: "https://script.google.com/macros/s/AKfycbzVJ3wV-heWwuT0xD5uKQum8xMp9NJ165pTWESf170vNvsgpI6ApGIX2BjoyuW5Z3tS/exec",
 
@@ -308,6 +330,7 @@ window.Alpine.data('appState', () => ({
   periodQuarterClass: "",
   periodYearClass: "",
   tabDashClass: "nav-on",
+  tabClientsClass: "",
   tabTrackerClass: "",
   asOf: "",
   openDueAmount: "€0.00",
@@ -476,6 +499,7 @@ window.Alpine.data('appState', () => ({
   },
   syncTabClasses() {
     this.tabDashClass = this.currentTab === "dashboard" ? "nav-on" : "";
+    this.tabClientsClass = this.currentTab === "clients" ? "nav-on" : "";
     this.tabTrackerClass = this.currentTab === "tracker" ? "nav-on" : "";
   },
   setDashTab() {
@@ -483,7 +507,199 @@ window.Alpine.data('appState', () => ({
     this.syncTabClasses();
     this.clearFeedback();
   },
+  setClientsTab() {
+    this.currentTab = "clients";
+    this.clientView = "list";
+    this.syncTabClasses();
+    this.clearFeedback();
+  },
   setTrackerTab() { this.currentTab = 'tracker'; this.syncTabClasses(); this.clearFeedback(); },
+  blankClientForm() {
+    return {
+      originalName: "",
+      name: "",
+      address1: "",
+      address2: "",
+      address3: "",
+      address4: "",
+      rate: "",
+      contact: "",
+      email: "",
+      phone: "",
+      terms: ""
+    };
+  },
+  clientField(value) {
+    return String(value == null ? "" : value).trim();
+  },
+  clientAmount(value) {
+    if (value === "" || value == null) return { ok: true, value: "" };
+    const text = String(value).trim().replace(/[€£$]/g, "").replace(/,/g, "").replace(/\s/g, "");
+    if (!text) return { ok: true, value: "" };
+    if (!/^-?\d+(\.\d+)?$/.test(text)) return { ok: false, error: "Enter a number." };
+    const n = Number(text);
+    if (!isFinite(n)) return { ok: false, error: "Enter a number." };
+    if (n < 0) return { ok: false, error: "Cannot be negative." };
+    return { ok: true, value: n };
+  },
+  decorateClientRecords(rows) {
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+      const name = this.clientField(row && row.name);
+      if (!name) return null;
+      const email = this.clientField(row.email);
+      const contact = this.clientField(row.contact);
+      const who = email || contact;
+      const termsRaw = row.terms === "" || row.terms == null ? "" : Number(row.terms);
+      const termsLabel = termsRaw === "" || Number.isNaN(termsRaw) ? "" : (termsRaw + (Number(termsRaw) === 1 ? " day" : " days"));
+      const rateRaw = row.rate === "" || row.rate == null ? "" : Number(row.rate);
+      const rateLabel = rateRaw === "" || Number.isNaN(rateRaw) ? "No rate" : (this.money(rateRaw) + "/h");
+      return {
+        name: name,
+        address1: this.clientField(row.address1),
+        address2: this.clientField(row.address2),
+        address3: this.clientField(row.address3),
+        address4: this.clientField(row.address4),
+        rate: rateRaw,
+        contact: contact,
+        email: email,
+        phone: this.clientField(row.phone),
+        terms: termsRaw,
+        meta: [who, termsLabel].filter(Boolean).join(" · ") || "No contact yet",
+        rateLabel: rateLabel,
+        partial: !!row.partial
+      };
+    }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  },
+  applyClientRecords(rows) {
+    const decorated = this.decorateClientRecords(rows);
+    this.clientRecords = decorated;
+    this.clientRecordsEmpty = decorated.length === 0;
+    this.clientDetailsLive = !decorated.some((row) => row.partial);
+    this.applyClientList(decorated);
+  },
+  newClient() {
+    this.clientForm = this.blankClientForm();
+    this.clientFormTitle = "New client";
+    this.clientView = "form";
+    this.clearFeedback();
+  },
+  editClient(name) {
+    const wanted = this.clientField(name);
+    const row = (this.clientRecords || []).find((item) => item.name === wanted);
+    if (!row) return;
+    if (row.partial) {
+      this.setFeedback("Client details load after Code.gs is pasted into Apps Script and deployed. Then use Refresh.", true);
+      return;
+    }
+    this.clientForm = {
+      originalName: row.name,
+      name: row.name,
+      address1: row.address1 || "",
+      address2: row.address2 || "",
+      address3: row.address3 || "",
+      address4: row.address4 || "",
+      rate: row.rate === "" || row.rate == null ? "" : String(row.rate),
+      contact: row.contact || "",
+      email: row.email || "",
+      phone: row.phone || "",
+      terms: row.terms === "" || row.terms == null ? "" : String(row.terms)
+    };
+    this.clientFormTitle = "Edit client";
+    this.clientView = "form";
+    this.clearFeedback();
+  },
+  showClientList() {
+    this.clientView = "list";
+    this.clearFeedback();
+  },
+  clientPayload() {
+    const form = this.clientForm || {};
+    return {
+      originalName: this.clientField(form.originalName),
+      name: this.clientField(form.name),
+      address1: this.clientField(form.address1),
+      address2: this.clientField(form.address2),
+      address3: this.clientField(form.address3),
+      address4: this.clientField(form.address4),
+      rate: this.clientField(form.rate),
+      contact: this.clientField(form.contact),
+      email: this.clientField(form.email),
+      phone: this.clientField(form.phone),
+      terms: this.clientField(form.terms)
+    };
+  },
+  async saveClient() {
+    this.clearFeedback();
+    const payload = this.clientPayload();
+    if (!payload.name) {
+      this.setFeedback("Enter a client name.", true);
+      return;
+    }
+    const rate = this.clientAmount(payload.rate);
+    if (!rate.ok) {
+      this.setFeedback(rate.error === "Cannot be negative." ? "Rate cannot be negative." : "Rate must be a number.", true);
+      return;
+    }
+    const terms = this.clientAmount(payload.terms);
+    if (!terms.ok) {
+      this.setFeedback(terms.error === "Cannot be negative." ? "Payment terms cannot be negative." : "Payment terms must be a number.", true);
+      return;
+    }
+    payload.rate = rate.value;
+    payload.terms = terms.value;
+    if (this.previewMode) {
+      const records = (this.clientRecords || []).map((row) => Object.assign({}, row));
+      const original = payload.originalName.toLowerCase();
+      const duplicate = records.find((row) => row.name.toLowerCase() === payload.name.toLowerCase() && row.name.toLowerCase() !== original);
+      if (duplicate) {
+        this.setFeedback("A client named " + payload.name + " is already on ClientRecords.", true);
+        return;
+      }
+      const next = {
+        name: payload.name,
+        address1: payload.address1,
+        address2: payload.address2,
+        address3: payload.address3,
+        address4: payload.address4,
+        rate: payload.rate,
+        contact: payload.contact,
+        email: payload.email,
+        phone: payload.phone,
+        terms: payload.terms
+      };
+      if (payload.originalName) {
+        const index = records.findIndex((row) => row.name.toLowerCase() === original);
+        if (index < 0) {
+          this.setFeedback("That client is no longer on ClientRecords.", true);
+          return;
+        }
+        records[index] = next;
+      } else {
+        records.push(next);
+      }
+      this.applyClientRecords(records);
+      this.clientView = "list";
+      this.setFeedback((payload.originalName ? "Updated " : "Added ") + payload.name + ". The live ClientRecords sheet updates after Code.gs is pasted and deployed.", false);
+      return;
+    }
+    try {
+      const res = await this.api("saveClient", payload);
+      if (res && /Invalid API action/.test(String(res.error || ""))) {
+        this.setFeedback("The live script does not save clients yet. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
+        return;
+      }
+      if (res && res.success) {
+        if (Array.isArray(res.clientRecords)) this.applyClientRecords(res.clientRecords);
+        this.adoptWrite(res);
+        this.clientView = "list";
+        this.setFeedback(res.message || "Client saved.", false);
+        return;
+      }
+      this.setFeedback(this.failMessage(res, "Could not save that client."), true);
+    } catch (err) {
+      this.setFeedback("Could not save that client.", true);
+    }
+  },
 
   async submitForm() {
     this.clearFeedback();
@@ -679,7 +895,13 @@ window.Alpine.data('appState', () => ({
     }).filter((c) => c.name);
   },
   applySnapshot(res, keepEmail) {
-    if (Array.isArray(res.clients) && res.clients.length) this.applyClientList(res.clients);
+    if (Array.isArray(res.clientRecords)) this.applyClientRecords(res.clientRecords);
+    else if (Array.isArray(res.clients) && res.clients.length && !this.clientDetailsLive) {
+      this.applyClientRecords(res.clients.map((client) => ({
+        name: typeof client === "string" ? client : ((client && (client.name || client.Name || client.clientName)) || ""),
+        partial: true
+      })));
+    } else if (Array.isArray(res.clients) && res.clients.length) this.applyClientList(res.clients);
     this.unbilled = res.unbilled || {};
     this.applyDashboard(res, keepEmail);
     if (Array.isArray(res.invoices)) {
@@ -716,7 +938,8 @@ window.Alpine.data('appState', () => ({
         if (!this.clients.length) {
           const initial = await this.api("getInitialAppData", {}, { quiet: quiet });
           if (initial && initial.success) {
-            this.applyClientList(initial.clients);
+            if (Array.isArray(initial.clientRecords)) this.applyClientRecords(initial.clientRecords);
+            else this.applyClientList(initial.clients);
             this.invoices = this.mapInvoices(initial.invoices);
             this.refreshClientInvoices();
           }
@@ -750,7 +973,7 @@ window.Alpine.data('appState', () => ({
       this.dashboardNote = "Sample figures for the layout. Live totals appear after Code.gs is pasted into Apps Script and deployed.";
       const sample = sampleDashboard();
       this.unbilled = sample.unbilled || {};
-      this.applyClientList(sample.clients || []);
+      this.applyClientRecords(sample.clientRecords || sample.clients || []);
       this.invoices = this.mapInvoices(sample.invoices);
       this.refreshClientInvoices();
       this.applyDashboard(sample, true);
