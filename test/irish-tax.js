@@ -49,4 +49,66 @@ assert(context.expenseAmount("1,500.50") === 1500.5, "expenses");
 assert(context.expenseAmount("") === 0, "blank expenses");
 assert(context.expenseAmount("abc") === null, "bad expenses");
 
+const sample = context.sampleDashboard();
+const draft = sample.invoices.filter((row) => row.id === "INV-JR26-003")[0];
+const draftFacts = context.invoiceCardFacts(draft);
+assert(draftFacts.period === "12/09/2026", "draft period " + draftFacts.period);
+assert(draftFacts.when === "10/09/2026", "draft date " + draftFacts.when);
+assert(draftFacts.hours === "1 h", "draft hours " + draftFacts.hours);
+assert(draftFacts.work === "Survey", "draft work " + draftFacts.work);
+
+const span = context.invoiceCardFacts({
+  date: "2026-09-30",
+  hours: 3.5,
+  jobDetails: "Site pack",
+  lines: [
+    { date: "2026-09-30", details: "Fit the lock", hours: 1 },
+    { date: "2026-09-28", details: "Survey the quay", hours: 1.5 },
+    { date: "2026-09-29", details: "Survey the quay", hours: 1 }
+  ]
+});
+assert(span.period === "28/09/2026 – 30/09/2026", "span " + span.period);
+assert(span.when === "30/09/2026", "span date " + span.when);
+assert(span.hours === "3.5 h", "span hours " + span.hours);
+assert(span.work === "Fit the lock, Survey the quay", "span work " + span.work);
+
+const oneDay = context.invoiceCardFacts({
+  date: "2026-09-30",
+  hours: 3,
+  jobDetails: "Site visit",
+  servicePeriod: "2026-09-30",
+  lines: [{ date: "2026-09-30", details: "Site visit", hours: 3 }]
+});
+assert(oneDay.period === "30/09/2026", "one day " + oneDay.period);
+assert(oneDay.hours === "3 h", "whole hours " + oneDay.hours);
+assert(oneDay.work === "Site visit", "job details " + oneDay.work);
+
+const fromService = context.invoiceCardFacts({
+  date: "2026-09-30",
+  servicePeriod: "2026-09-28 - 2026-09-30",
+  jobDetails: "Callout",
+  lines: []
+});
+assert(fromService.period === "28/09/2026 – 30/09/2026", "service period " + fromService.period);
+assert(fromService.hours === "0 h", "missing hours " + fromService.hours);
+assert(fromService.work === "Callout", "service work " + fromService.work);
+
+const summed = context.invoiceCardFacts({
+  lines: [
+    { date: "2026-09-01", details: "Install", hours: 2 },
+    { date: "2026-09-01", details: "Install", hours: 1.25 }
+  ]
+});
+assert(summed.period === "01/09/2026", "same day " + summed.period);
+assert(summed.hours === "3.3 h", "summed hours " + summed.hours);
+assert(summed.work === "Install", "repeated work " + summed.work);
+assert(summed.when === "—", "blank invoice date");
+
+const longWork = context.invoiceCardFacts({
+  jobDetails: "Checked the north quay gate, replaced the hinge pins, and wrote the survey notes for the harbour office before the tide turned",
+  lines: []
+});
+assert(longWork.work.length <= 90, "work stays short " + longWork.work);
+assert(/…$/.test(longWork.work), "long work is cut " + longWork.work);
+
 console.log("Irish sole trader indication passed.");

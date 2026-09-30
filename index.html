@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=20">
-  <script defer src="app.js?v=26"></script>
+  <link rel="stylesheet" href="style.css?v=21">
+  <script defer src="app.js?v=27"></script>
 </head>
 <body>
 
@@ -79,10 +79,28 @@
               <article class="inv-card">
                 <div class="inv-client" x-text="inv.client"></div>
                 <div class="inv-code" x-text="inv.line"></div>
+                <div class="inv-facts">
+                  <div class="inv-fact">
+                    <span class="inv-k">Period</span>
+                    <span x-text="inv.period"></span>
+                  </div>
+                  <div class="inv-fact">
+                    <span class="inv-k">Invoice date</span>
+                    <span x-text="inv.when"></span>
+                  </div>
+                  <div class="inv-fact">
+                    <span class="inv-k">Hours</span>
+                    <span x-text="inv.hours"></span>
+                  </div>
+                  <div class="inv-fact">
+                    <span class="inv-k">Work</span>
+                    <span x-text="inv.work"></span>
+                  </div>
+                </div>
                 <div class="inv-amount" x-text="inv.amount"></div>
                 <div class="inv-actions">
                   <button type="button" x-show="listShowsSend" data-action="markListInvoiced" :data-id="inv.id" data-disable-when="saving">Mark invoiced</button>
-                  <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Open</button>
+                  <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Generate and send</button>
                   <button type="button" x-show="listShowsCollect" data-action="markListPaid" :data-id="inv.id" data-disable-when="saving">Mark paid</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="markListWrittenOff" :data-id="inv.id" data-disable-when="saving">Write off</button>
                   <button type="button" class="btn-line btn-auto" x-show="listShowsDone" data-action="undoListStatus" :data-id="inv.id" data-disable-when="saving">Undo</button>
