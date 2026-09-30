@@ -223,7 +223,7 @@ function fetchInvoiceRecords() {
 
   const timeSheet = ss.getSheetByName("Time&Attendance");
   if (timeSheet) {
-    const lastRow = timeSheet.getLastRow();
+    const lastRow = timeSheetLastRow_(timeSheet);
     if (lastRow >= 2) {
       const data = timeSheet.getRange(2, 3, lastRow - 1, 2).getValues(); // C InvoiceInt, D ClientID
       for (let i = 0; i < data.length; i++) {
@@ -321,8 +321,10 @@ function executeTimeLog(payload) {
   const timeSheet = ss.getSheetByName("Time&Attendance");
   if (!timeSheet) return { success: false, error: "Missing Time&Attendance tab." };
 
-  // To bypass ARRAYFORMULA collision bounds, find the true physical empty row index location
-  const values = timeSheet.getRange("D1:D").getValues();
+  // The rate formula in column K runs to row 29544, so getLastRow() is not
+  // the next empty shift. Walk the client column only as far as the last real one.
+  const bound = Math.max(timeSheetLastRow_(timeSheet), 1);
+  const values = timeSheet.getRange(1, 4, bound, 1).getValues();
   let nextRow = 1;
   while (values[nextRow - 1] && values[nextRow - 1][0] !== "") {
     nextRow++;
@@ -412,7 +414,7 @@ function sameClock_(cellValue, timeStr) {
 // A second tap of the same job, before the first answer got back to the van,
 // must not open another invoice.
 function recentMatchingEntry_(sheet, payload) {
-  const last = lastFilledRow_(sheet, 4);
+  const last = timeSheetLastRow_(sheet);
   if (last < 2) return null;
   const count = last - 1;
   const data = sheet.getRange(2, 3, count, 11).getValues();
@@ -455,7 +457,7 @@ function fetchUnbilledSummary(payload) {
     }
   }
 
-  const lastRow = timeSheet.getLastRow();
+  const lastRow = timeSheetLastRow_(timeSheet);
   let totalHours = 0;
   let totalAmount = 0;
 
@@ -516,7 +518,7 @@ function processAccountInvoice(payload) {
 
   // Legacy rows still waiting for an invoice number are closed onto a new Invoiced header.
   const nextInvoiceInt = nextInvoiceInt_(invoiceSheet);
-  const timeLastRow = timeSheet.getLastRow();
+  const timeLastRow = timeSheetLastRow_(timeSheet);
   let updatedRowsCount = 0;
 
   if (timeLastRow >= 2) {
@@ -738,8 +740,9 @@ function invoicePrintCode_(ss, invoiceId) {
   if (/^INV-/i.test(text)) return text;
   const timeCodeByInt = {};
   const timeSheet = ss.getSheetByName("Time&Attendance");
-  if (timeSheet && timeSheet.getLastRow() >= 2) {
-    const data = timeSheet.getRange(2, 2, timeSheet.getLastRow() - 1, 2).getValues();
+  const timeLast = timeSheet ? timeSheetLastRow_(timeSheet) : 0;
+  if (timeSheet && timeLast >= 2) {
+    const data = timeSheet.getRange(2, 2, timeLast - 1, 2).getValues();
     for (let i = 0; i < data.length; i++) {
       const code = String(data[i][0] || "").trim();
       const intId = String(data[i][1] || "").trim();
@@ -1044,6 +1047,31 @@ function lastFilledRow_(sheet, column) {
   return used;
 }
 
+// Time&Attendance column K is an ARRAYFORMULA down to row 29544, so
+// getLastRow() follows that formula. A shift stops at the last client or date.
+function columnLastRow_(sheet, column) {
+  if (!sheet) return 0;
+  const direction = typeof SpreadsheetApp !== "undefined" && SpreadsheetApp.Direction && SpreadsheetApp.Direction.UP;
+  if (direction && sheet.getMaxRows) {
+    try {
+      const bottom = sheet.getRange(sheet.getMaxRows(), column);
+      if (bottom.getNextDataCell) {
+        const found = bottom.getNextDataCell(direction);
+        const row = found.getRow();
+        const value = found.getValue ? found.getValue() : sheet.getRange(row, column).getValue();
+        if (value !== "" && value != null) return row;
+        return 0;
+      }
+    } catch (err) {}
+  }
+  return lastFilledRow_(sheet, column);
+}
+
+function timeSheetLastRow_(sheet) {
+  if (!sheet) return 0;
+  return Math.max(columnLastRow_(sheet, 4), columnLastRow_(sheet, 5));
+}
+
 function invoiceStatusByKey_(invoiceSheet) {
   const map = {};
   if (!invoiceSheet || invoiceSheet.getLastRow() < 2) return map;
@@ -1080,7 +1108,7 @@ function lockBilledTimeRates_(ss, filter) {
   const timeSheet = ss.getSheetByName("Time&Attendance");
   if (!timeSheet) return 0;
   ensureBilledRateFormula_(timeSheet);
-  const lastClientRow = lastFilledRow_(timeSheet, 4);
+  const lastClientRow = timeSheetLastRow_(timeSheet);
   if (lastClientRow < 2) return 0;
 
   const count = lastClientRow - 1;
@@ -1124,8 +1152,9 @@ function lockBilledTimeRates_(ss, filter) {
 
 function renameClientOnTimeSheet_(ss, fromName, toName) {
   const sheet = ss.getSheetByName("Time&Attendance");
-  if (!sheet || sheet.getLastRow() < 2) return false;
-  const range = sheet.getRange(2, 4, sheet.getLastRow() - 1, 1);
+  const last = sheet ? timeSheetLastRow_(sheet) : 0;
+  if (!sheet || last < 2) return false;
+  const range = sheet.getRange(2, 4, last - 1, 1);
   const values = range.getValues();
   const from = clientText_(fromName).toLowerCase();
   let changed = false;
@@ -1212,8 +1241,9 @@ function saveClientRecord_(payload) {
 
 function readTimeRows_(ss, timezone) {
   const sheet = ss.getSheetByName("Time&Attendance");
-  if (!sheet || sheet.getLastRow() < 2) return [];
-  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 12).getValues();
+  const last = sheet ? timeSheetLastRow_(sheet) : 0;
+  if (!sheet || last < 2) return [];
+  const data = sheet.getRange(2, 1, last - 1, 12).getValues();
   const rows = [];
   for (let i = 0; i < data.length; i++) {
     const client = String(data[i][3] || "").trim();
@@ -2076,7 +2106,7 @@ function invoiceLetterParts_(ss, invoiceId) {
   }
   if (!parts.works) {
     const timeSheet = ss.getSheetByName("Time&Attendance");
-    const last = timeSheet ? lastFilledRow_(timeSheet, 4) : 0;
+    const last = timeSheet ? timeSheetLastRow_(timeSheet) : 0;
     if (timeSheet && last >= 2) {
       const data = timeSheet.getRange(2, 2, last - 1, 5).getValues();
       for (let i = 0; i < data.length; i++) {

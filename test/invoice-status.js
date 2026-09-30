@@ -137,6 +137,22 @@ function parseA1(a1) {
             for (let c = 0; c < values[r].length; c++) set(startRow + r, startCol + c, values[r][c]);
           }
         },
+        getNextDataCell: function (direction) {
+          if (direction !== "up") throw new Error("Unsupported direction " + direction);
+          let found = 0;
+          Object.keys(cells).forEach(function (id) {
+            if (cells[id] === "" || cells[id] == null) return;
+            const parts = id.split(":");
+            const row = Number(parts[0]);
+            const col = Number(parts[1]);
+            if (col === startCol && row <= startRow && row > found) found = row;
+          });
+          const row = found || 1;
+          return {
+            getRow: function () { return row; },
+            getValue: function () { return get(row, startCol); }
+          };
+        },
         getFormula: function () {
           return formulas[key(startRow, startCol)] || "";
         },
@@ -222,7 +238,8 @@ function loadApi(workbook) {
   const context = {
     SpreadsheetApp: {
       getActiveSpreadsheet: function () { return workbook; },
-      flush: function () {}
+      flush: function () {},
+      Direction: { UP: "up" }
     },
     LockService: {
       getDocumentLock: function () {
@@ -1317,6 +1334,54 @@ test("a logo replaces the image already on the invoice", function (api, workbook
   assert(images.indexOf(current) === -1, "the old logo stayed on the invoice");
   const bad = api.saveSettings_({ logo: "data:text/plain;base64,YQ==" });
   assert(!bad.success && /PNG or JPEG/.test(bad.error), bad.error);
+});
+
+test("time sheet reads stop at the last shift", function (api, workbook) {
+  const created = api.executeTimeLog(shift());
+  assert(created.success, created.error);
+  const time = workbook.sheets["Time&Attendance"];
+  time.getRange(5, 5).setValue("2026-09-23");
+  time.getRange(29544, 11).setValue(65);
+  assert(time.getLastRow() === 29544, "rate formula still extends the sheet");
+
+  const calls = [];
+  const original = time.getRange;
+  time.getRange = function () {
+    calls.push(Array.prototype.slice.call(arguments));
+    return original.apply(time, arguments);
+  };
+  const rows = api.readTimeRows_(workbook, "UTC");
+  assert(rows.length === 2, "shifts " + rows.length);
+  assert(rows[0].client === "Acme", rows[0].client);
+  assert(rows[1].date === "2026-09-23", rows[1].date);
+  const wide = calls.filter(function (args) {
+    return args.length === 4 && args[3] >= 12;
+  });
+  assert(wide.length === 1, "wide reads " + wide.length);
+  assert(wide[0][2] === 4, "read " + wide[0][2] + " rows");
+  calls.forEach(function (args) {
+    if (args.length === 4) assert(args[2] < 30, "range height " + args[2]);
+  });
+  time.getRange = original;
+
+  const second = api.executeTimeLog(shift({ date: "2026-09-24", jobDetails: "Follow up" }));
+  assert(second.success, second.error);
+  assert(time.getRange(3, 4).getValue() === "Acme", "next job followed the rate formula");
+  assert(time.getRange(3, 6).getValue() === "Follow up", time.getRange(3, 6).getValue());
+
+  const fallbackCalls = [];
+  time.getRange = function () {
+    const range = original.apply(time, arguments);
+    range.getNextDataCell = undefined;
+    fallbackCalls.push(Array.prototype.slice.call(arguments));
+    return range;
+  };
+  const fallback = api.readTimeRows_(workbook, "UTC");
+  assert(fallback.length === 3, "fallback shifts " + fallback.length);
+  const fallbackWide = fallbackCalls.filter(function (args) {
+    return args.length === 4 && args[3] >= 12;
+  });
+  assert(fallbackWide.length === 1 && fallbackWide[0][2] === 4, JSON.stringify(fallbackWide));
 });
 
 if (failures.length) {
