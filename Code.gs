@@ -1232,12 +1232,29 @@ function renderInvoicePdf_(ss, sheet) {
 }
 
 function concealForPdf_(sheet, start, count, axis) {
-  if (count < 1) return [];
-  return hideVisibleSpan_(sheet, start, count, axis);
+  if (count < 1) return { mode: "none" };
+  // One sheet call. Walking each row asks the spreadsheet once per row, and a
+  // thousand of those calls holds the invoice lock until the download times out.
+  if (count > 8) {
+    if (axis === "row") sheet.hideRows(start, count);
+    else sheet.hideColumns(start, count);
+    return { mode: "bulk", start: start, count: count };
+  }
+  return { mode: "spans", spans: hideVisibleSpan_(sheet, start, count, axis) };
 }
 
-function revealForPdf_(sheet, spans, axis) {
-  showSpan_(sheet, spans || [], axis);
+function revealForPdf_(sheet, hidden, axis) {
+  if (!hidden || hidden.mode === "none") return;
+  if (Array.isArray(hidden)) {
+    showSpan_(sheet, hidden, axis);
+    return;
+  }
+  if (hidden.mode === "bulk") {
+    if (axis === "row") sheet.showRows(hidden.start, hidden.count);
+    else sheet.showColumns(hidden.start, hidden.count);
+    return;
+  }
+  showSpan_(sheet, hidden.spans || [], axis);
 }
 
 function hideVisibleSpan_(sheet, start, count, axis) {
