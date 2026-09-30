@@ -114,6 +114,7 @@ function parseA1(a1) {
         setValue: function (value) {
           set(startRow, startCol, value);
         },
+        setNumberFormat: function () {},
         getValues: function () {
           const out = [];
           for (let r = 0; r < rows; r++) {
@@ -361,6 +362,31 @@ test("first time entry sets InvoiceList column I to Draft", function (api, workb
   const again = api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId }));
   assert(again.success, again.error);
   assert(statusCell(workbook, 2) === "Draft", "second entry changed status");
+});
+
+test("finish is the end of the shift, so hours are not a fraction of a day", function (api, workbook) {
+  const logged = api.executeTimeLog(shift({ start: "08:00", finish: "10:30", lunch: "na" }));
+  assert(logged.success, logged.error);
+  const time = workbook.sheets["Time&Attendance"];
+  const row = time.getLastRow();
+  const start = time.getRange(row, 7).getValue();
+  const finish = time.getRange(row, 9).getValue();
+  assert(typeof start === "number" && start > 0 && start < 1, "start was a date " + start);
+  assert(typeof finish === "number" && finish > 0 && finish < 1, "finish was a date " + finish);
+  assert(Math.abs(start - (8 / 24)) < 1e-9, "start " + start);
+  assert(Math.abs(finish - (10.5 / 24)) < 1e-9, "finish " + finish);
+  const raw = (finish * 24) - (start * 24);
+  assert(Math.abs(raw - 2.5) < 1e-9, "hours " + raw);
+  assert(String(time.getRange(row, 5).getValue()).indexOf("2026-09-22") === 0, "date column moved");
+
+  const night = api.executeTimeLog(shift({ start: "18:00", finish: "06:00", overnight: true }));
+  assert(night.success, night.error);
+  const row2 = time.getLastRow();
+  const nightStart = time.getRange(row2, 7).getValue();
+  const nightFinish = time.getRange(row2, 9).getValue();
+  assert(nightStart < 1 && nightFinish < 1, "overnight finish stored a date");
+  const nightHours = (nightFinish * 24) - (nightStart * 24) + 24;
+  assert(Math.abs(nightHours - 12) < 1e-9, "overnight hours " + nightHours);
 });
 
 test("blank column I is set to Draft on the first time entry", function (api, workbook) {
