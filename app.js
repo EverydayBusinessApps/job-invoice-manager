@@ -314,7 +314,7 @@ window.Alpine.data('appState', () => ({
   invoices: [],
   clientInvoices: [],
   showExistingInvoices: false,
-  invoiceHint: 'This shift will open a new draft invoice.',
+  invoiceHint: 'This job will open a new draft invoice.',
   overnight: false,
   overnightLabel: '',
   previewMode: /(?:\?|&)preview=1(?:&|$)/.test(typeof location !== "undefined" ? location.search : ""),
@@ -521,6 +521,7 @@ window.Alpine.data('appState', () => ({
     this.syncPeriodClasses();
     this.syncOvernight();
     this.syncLogButton();
+    this.syncInvoiceHint();
     if (this.previewMode) {
       await this.loadDashboard();
       return;
