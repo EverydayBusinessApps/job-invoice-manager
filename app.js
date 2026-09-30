@@ -293,7 +293,7 @@ window.Alpine.data('appState', () => ({
   emailPdfLabel: "Email PDF",
   logButtonLabel: "Log a job",
   clientButtonLabel: "Save client",
-  confirmText: "",
+  settingsButtonLabel: "Save settings",
   currentTab: 'dashboard',
   feedback: { text: '', isError: false },
   clients: [],
@@ -346,6 +346,22 @@ window.Alpine.data('appState', () => ({
   tabDashClass: "nav-on",
   tabClientsClass: "",
   tabTrackerClass: "",
+  tabSettingsClass: "",
+  logoPreview: "",
+  logoDirty: false,
+  logoEmpty: true,
+  extraSettings: [],
+  settingsMeta: {},
+  settingsShow: {
+    rate: false, currency: false, name: false, address: false, email: false,
+    website: false, phone: false, bank: false, iban: false,
+    na: false, half: false, hour: false, hourHalf: false, two: false
+  },
+  settingsForm: {
+    rate: "", currency: "", name: "", address: "", email: "",
+    website: "", phone: "", bank: "", iban: ""
+  },
+  breakForm: { na: "", half: "", hour: "", hourHalf: "", two: "" },
   asOf: "",
   openSendAmount: "€0.00",
   openSendCount: "0 invoices",
@@ -620,6 +636,7 @@ window.Alpine.data('appState', () => ({
     this.tabDashClass = this.currentTab === "dashboard" ? "nav-on" : "";
     this.tabClientsClass = this.currentTab === "clients" ? "nav-on" : "";
     this.tabTrackerClass = this.currentTab === "tracker" ? "nav-on" : "";
+    this.tabSettingsClass = this.currentTab === "settings" ? "nav-on" : "";
   },
   setDashTab() {
     this.currentTab = "dashboard";
@@ -633,6 +650,12 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
   },
   setTrackerTab() { this.currentTab = 'tracker'; this.syncTabClasses(); this.clearFeedback(); },
+  async setSettingsTab() {
+    this.currentTab = "settings";
+    this.syncTabClasses();
+    this.clearFeedback();
+    await this.loadSettings();
+  },
   blankClientForm() {
     return {
       originalName: "",
@@ -1146,6 +1169,7 @@ window.Alpine.data('appState', () => ({
   async refreshBooks() {
     if (this.previewMode) return;
     await this.refreshSnapshot({ quiet: false, announce: true, resync: true });
+    if (this.currentTab === "settings") await this.loadSettings();
   },
   async refreshSnapshot(opts) {
     const quiet = !!(opts && opts.quiet);
@@ -1537,7 +1561,6 @@ window.Alpine.data('appState', () => ({
   setFeedback(msg, isErr) {
     this.feedback.text = msg;
     this.feedback.isError = !!isErr;
-    this.confirmText = msg || "";
     setTimeout(() => {
       const node = document.getElementById("save-feedback");
       if (!node || node.style.display === "none") return;
@@ -1552,5 +1575,261 @@ window.Alpine.data('appState', () => ({
   openMailAuth() {
     if (this.mailAuthUrl) window.open(this.mailAuthUrl, "_blank", "noopener");
   },
-  clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; this.confirmText = ""; this.mailAuthUrl = ""; }
+  clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; this.mailAuthUrl = ""; },
+  sampleSettings() {
+    const row = (n, label, value) => ({ row: n, label: label, value: value });
+    return {
+      success: true,
+      logo: "",
+      settings: [
+        row(2, "Default Hourly Rate", "65"),
+        row(4, "Default Currency", "EUR"),
+        row(5, "Business Name", "Everyday Business"),
+        row(6, "Business Address", "Ireland"),
+        row(7, "Business Email", "Jane@EverydayBusiness.ie"),
+        row(8, "Website", "www.EverydayBusiness.ie"),
+        row(9, "Business Phone", "00353 123 45678"),
+        row(11, "Bank Account Name", "Everyday Business"),
+        row(12, "IBAN", "IEXX XXXX XXXX XXXX XXXX XX")
+      ],
+      breaks: [
+        row(16, "na", "00:00"),
+        row(17, "half hour", "00:30"),
+        row(18, "hour", "01:00"),
+        row(19, "hour and half", "01:30"),
+        row(20, "two hours", "02:00")
+      ]
+    };
+  },
+  settingKey(label) {
+    const name = String(label || "").trim().toLowerCase();
+    const settings = {
+      "default hourly rate": "rate",
+      "default currency": "currency",
+      "business name": "name",
+      "business address": "address",
+      "business email": "email",
+      website: "website",
+      "business phone": "phone",
+      "bank account name": "bank",
+      iban: "iban"
+    };
+    const breaks = { na: "na", "half hour": "half", hour: "hour", "hour and half": "hourHalf", "two hours": "two" };
+    if (settings[name]) return { key: settings[name], kind: "setting" };
+    if (breaks[name]) return { key: breaks[name], kind: "break" };
+    return null;
+  },
+  applySettings(res) {
+    const show = {
+      rate: false, currency: false, name: false, address: false, email: false,
+      website: false, phone: false, bank: false, iban: false,
+      na: false, half: false, hour: false, hourHalf: false, two: false
+    };
+    const meta = {};
+    const extra = [];
+    (Array.isArray(res && res.settings) ? res.settings : []).forEach((row) => {
+      const mapped = this.settingKey(row && row.label);
+      if (!mapped || mapped.kind !== "setting") {
+        if (row && row.label) extra.push({ row: row.row, label: row.label, value: row.value == null ? "" : String(row.value) });
+        return;
+      }
+      show[mapped.key] = true;
+      meta[mapped.key] = { row: row.row, label: row.label, kind: "setting" };
+      this.settingsForm[mapped.key] = row.value == null ? "" : String(row.value);
+    });
+    (Array.isArray(res && res.breaks) ? res.breaks : []).forEach((row) => {
+      const mapped = this.settingKey(row && row.label);
+      if (!mapped || mapped.kind !== "break") return;
+      show[mapped.key] = true;
+      meta[mapped.key] = { row: row.row, label: row.label, kind: "break" };
+      this.breakForm[mapped.key] = row.value == null ? "" : String(row.value);
+    });
+    this.settingsShow = show;
+    this.settingsMeta = meta;
+    this.extraSettings = extra;
+    this.renderExtraSettings(extra);
+    this.logoPreview = (res && res.logo) || "";
+    this.logoDirty = false;
+    if (this.settingsForm.name) this.businessName = this.settingsForm.name;
+    this.syncLogoPreview();
+  },
+  renderExtraSettings(rows) {
+    const host = document.getElementById("settings-extra");
+    if (!host) return;
+    host.innerHTML = "";
+    (rows || []).forEach((row, index) => {
+      const group = document.createElement("div");
+      group.className = "form-group";
+      const label = document.createElement("label");
+      label.textContent = row.label;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = row.value || "";
+      input.addEventListener("input", () => {
+        if (this.extraSettings[index]) this.extraSettings[index].value = input.value;
+      });
+      group.appendChild(label);
+      group.appendChild(input);
+      host.appendChild(group);
+    });
+  },
+  syncLogoPreview() {
+    const img = document.getElementById("logo-preview");
+    const wrap = document.getElementById("logo-wrap");
+    this.logoEmpty = !this.logoPreview;
+    if (!img || !wrap) return;
+    if (this.logoPreview) {
+      img.src = this.logoPreview;
+      wrap.style.display = "block";
+    } else {
+      img.removeAttribute("src");
+      wrap.style.display = "none";
+    }
+  },
+  onLogoPicked() {
+    const input = document.getElementById("logo-file");
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg)$/.test(file.type)) {
+      this.setFeedback("Choose a PNG or JPEG logo.", true);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => this.fitLogo(String(reader.result || ""), file.type);
+    reader.readAsDataURL(file);
+  },
+  fitLogo(dataUrl, type) {
+    const image = new Image();
+    image.onload = () => {
+      const max = 720;
+      let width = image.width || max;
+      let height = image.height || max;
+      const scale = Math.min(1, max / Math.max(width, height));
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(image, 0, 0, width, height);
+      const mime = type === "image/png" ? "image/png" : "image/jpeg";
+      this.logoPreview = canvas.toDataURL(mime, 0.85);
+      this.logoDirty = true;
+      this.syncLogoPreview();
+    };
+    image.src = dataUrl;
+  },
+  settingsPayload() {
+    const settings = [];
+    const breaks = [];
+    Object.keys(this.settingsMeta || {}).forEach((key) => {
+      const meta = this.settingsMeta[key];
+      if (!meta || !meta.row) return;
+      const value = meta.kind === "break" ? this.breakForm[key] : this.settingsForm[key];
+      const item = { row: meta.row, label: meta.label, value: value };
+      if (meta.kind === "break") breaks.push(item);
+      else settings.push(item);
+    });
+    (this.extraSettings || []).forEach((row) => {
+      if (row && row.row && row.label) settings.push({ row: row.row, label: row.label, value: row.value });
+    });
+    const payload = { settings: settings, breaks: breaks };
+    if (this.logoDirty && this.logoPreview) payload.logo = this.logoPreview;
+    return payload;
+  },
+  settingsProblem(payload) {
+    const rate = (this.settingsForm.rate || "").trim();
+    if (this.settingsShow.rate && rate && !/^\d+(\.\d+)?$/.test(rate)) return "Default hourly rate must be a number.";
+    const email = (this.settingsForm.email || "").trim();
+    if (this.settingsShow.email && email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Business email needs to look like an email address.";
+    const breaks = payload.breaks || [];
+    for (let i = 0; i < breaks.length; i++) {
+      const text = String(breaks[i].value || "").trim();
+      if (!/^\d{1,2}:\d{2}$/.test(text)) return "Enter " + breaks[i].label + " as hours and minutes, for example 00:30.";
+      const parts = text.split(":");
+      if (Number(parts[0]) > 23 || Number(parts[1]) > 59) return "Enter " + breaks[i].label + " as hours and minutes, for example 00:30.";
+    }
+    return "";
+  },
+  settingsSavedMessage() {
+    const name = String(this.settingsForm.name || "").trim();
+    let message = "Saved settings" + (name ? " for " + name : "") + ".";
+    if (this.logoDirty && this.logoPreview) message += " The logo is on the invoice.";
+    return message;
+  },
+  async loadSettings() {
+    if (this.previewMode) {
+      this.applySettings(this.sampleSettings());
+      return;
+    }
+    this.loading = true;
+    this.loadingLabel = "Loading settings…";
+    try {
+      const res = await this.api("getSettings", {}, { quiet: true });
+      if (res && /Invalid API action/.test(String(res.error || ""))) {
+        const blank = this.sampleSettings();
+        blank.settings.forEach((row) => { row.value = ""; });
+        blank.breaks.forEach((row) => { row.value = ""; });
+        this.applySettings(blank);
+        this.setFeedback("Could not read settings. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
+        return;
+      }
+      if (res && res.success) {
+        this.applySettings(res);
+        return;
+      }
+      this.setFeedback(this.failMessage(res, "Could not read settings. Try Refresh."), true);
+    } catch (err) {
+      this.setFeedback("Could not read settings. Try Refresh.", true);
+    } finally {
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+    }
+  },
+  async saveSettings() {
+    if (this.saving) return;
+    this.clearFeedback();
+    const payload = this.settingsPayload();
+    if (!payload.settings.length && !payload.breaks.length && !payload.logo) {
+      this.setFeedback("Could not save settings. Open Settings again so the Config sheet can load.", true);
+      return;
+    }
+    const problem = this.settingsProblem(payload);
+    if (problem) {
+      this.setFeedback("Could not save settings. " + problem, true);
+      return;
+    }
+    const named = this.settingsSavedMessage();
+    this.saving = true;
+    this.loading = true;
+    this.loadingLabel = "Saving settings…";
+    this.settingsButtonLabel = "Saving…";
+    try {
+      if (this.previewMode) {
+        await this.wait(800);
+        this.logoDirty = false;
+        this.setFeedback(named, false);
+        return;
+      }
+      const res = await this.api("saveSettings", payload, { write: true, quiet: true, timeoutMs: 60000 });
+      if (res && /Invalid API action/.test(String(res.error || ""))) {
+        this.setFeedback("Could not save settings. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
+        return;
+      }
+      if (res && res.success) {
+        this.applySettings(res);
+        this.setFeedback(res.message || named, false);
+        return;
+      }
+      this.setFeedback(this.failMessage(res, "Could not save settings."), true);
+    } catch (err) {
+      this.setFeedback("Could not save settings.", true);
+    } finally {
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+      this.settingsButtonLabel = "Save settings";
+    }
+  }
 }));
