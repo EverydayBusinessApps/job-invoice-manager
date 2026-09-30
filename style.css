@@ -24,6 +24,7 @@ header .icon-btn.cog-ring svg { width: 18px; height: 18px; }
 .help-step p { margin: 0.55rem 0 0; color: #64748b; font-size: 0.95rem; font-weight: 500; line-height: 1.45; }
 .help-note { margin: 0; }
 .refresh-btn { border: 0; background: transparent; color: inherit; font: inherit; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; padding: 0.35rem 0.2rem; }
+a.refresh-btn { text-decoration: none; }
 .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; display: inline-block; background-color: #34d399; }
 .dot.syncing { background-color: #FAFFE4; animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
 .banner { background-color: #00263B; border-bottom: 1px solid #01344f; padding: 0.5rem 0.75rem; text-align: left; font-size: 0.75rem; font-weight: 600; color: #FAFFE4; line-height: 1.4; overflow-wrap: anywhere; }
