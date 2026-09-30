@@ -425,7 +425,7 @@ window.Alpine.data('appState', () => ({
   periodMonthClass: "seg-on",
   periodQuarterClass: "",
   periodYearClass: "",
-  periodNote: "Hours and value are for this month only.",
+  /*periodNote: "Hours and value are for this month only.",*/
   tabDashClass: "nav-on",
   tabClientsClass: "",
   tabTrackerClass: "",
@@ -1170,13 +1170,13 @@ window.Alpine.data('appState', () => ({
     this.activeBillable = this.money(period.billable);
     this.activeAvg = this.money(period.avgRate);
     this.activeTop = period.topClient ? (period.topClient + " · " + this.hoursText(period.topClientHours) + " h") : "—";
-    const notes = {
+   /* const notes = {
       week: "Hours and value are for this week only.",
       month: "Hours and value are for this month only.",
       quarter: "Hours and value are for this quarter only.",
       year: "Hours and value are for this financial year."
     };
-    this.periodNote = notes[this.period] || notes.month;
+    this.periodNote = notes[this.period] || notes.month;*/
     this.syncSummary();
   },
   syncSummary() {
