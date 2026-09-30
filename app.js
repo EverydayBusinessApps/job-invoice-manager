@@ -686,8 +686,8 @@ window.Alpine.data('appState', () => ({
       this.invoices = this.mapInvoices(res.invoices);
       this.refreshClientInvoices();
     }
-    if (!this.previewMode && res.invoicePdf !== "inv-template-sheet") {
-      this.dashboardNote = "The invoice file is still the previous layout. Open the EverydayWork spreadsheet https://docs.google.com/spreadsheets/d/1YN1xWdA7OScbXZj72yB5EyjrYA2zsJqwTTJ7-VdTxhM/edit then Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. Keep this web app URL so the emailed PDF is the INV-Template sheet.";
+    if (!this.previewMode && res.invoicePdf !== "inv-template-plain") {
+      this.dashboardNote = "The invoice still shows the sheet grid. Open the EverydayWork spreadsheet https://docs.google.com/spreadsheets/d/1YN1xWdA7OScbXZj72yB5EyjrYA2zsJqwTTJ7-VdTxhM/edit then Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. Keep this web app URL.";
     }
   },
   adoptWrite(res) {
