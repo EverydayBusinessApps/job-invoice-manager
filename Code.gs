@@ -434,6 +434,8 @@ function processAccountInvoice(payload) {
     return { success: false, error: "No draft invoices or open unbilled items detected for this client profile." };
   }
 
+  lockBilledTimeRates_(ss, { invoiceIds: marked });
+
   const label = marked.length === 1 ? ("Invoice " + marked[0]) : ("Invoices " + marked.join(", "));
   return attachSnapshot_(ss, {
     success: true,
@@ -462,6 +464,7 @@ function updateInvoiceStatus(payload) {
   if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
 
   invoiceSheet.getRange(row, 9).setValue(status); // Column I: Invoice Status
+  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId] });
   return attachSnapshot_(ss, {
     success: true,
     invoiceId: invoiceId,
@@ -493,6 +496,7 @@ function compileSingleInvoice(payload) {
 
   invoiceSheet.getRange(row, 9).setValue("Invoiced");
   if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
+  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId] });
 
   return attachSnapshot_(ss, {
     success: true,
@@ -771,6 +775,118 @@ function matchClientIndexes_(names, wanted) {
   return hits;
 }
 
+function sameClientRate_(left, right) {
+  const a = left === "" || left == null ? "" : Number(left);
+  const b = right === "" || right == null ? "" : Number(right);
+  if (a === "" && b === "") return true;
+  if (a === "" || b === "") return false;
+  if (isNaN(a) || isNaN(b)) return false;
+  return a === b;
+}
+
+function billedRateFormula_() {
+  return '=ARRAYFORMULA(IF(LEN(D2:D29544),IF(LEN(N2:N29544),N2:N29544,IFERROR(VLOOKUP(D2:D29544,ClientRecords!A:F,6,FALSE),DefaultHourlyRate)),""))';
+}
+
+function ensureBilledRateFormula_(timeSheet) {
+  if (!timeSheet) return;
+  const current = String(timeSheet.getRange("K2").getFormula() || "");
+  if (current.indexOf("N2:N29544") !== -1) return;
+  if (!clientText_(timeSheet.getRange(1, 14).getValue())) {
+    timeSheet.getRange(1, 14).setValue("Billed Rate");
+  }
+  timeSheet.getRange("K2").setFormula(billedRateFormula_());
+}
+
+function lastFilledRow_(sheet, column) {
+  const last = sheet.getLastRow();
+  if (last < 1) return 0;
+  const values = sheet.getRange(1, column, last, 1).getValues();
+  let used = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (values[i][0] !== "" && values[i][0] != null) used = i + 1;
+  }
+  return used;
+}
+
+function invoiceStatusByKey_(invoiceSheet) {
+  const map = {};
+  if (!invoiceSheet || invoiceSheet.getLastRow() < 2) return map;
+  const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 9).getValues();
+  for (let i = 0; i < data.length; i++) {
+    const id = clientText_(data[i][0]);
+    if (!id) continue;
+    map[id.toLowerCase()] = displayStatus_(data[i][8]);
+  }
+  return map;
+}
+
+function timeRowKeys_(code, invoiceInt) {
+  const keys = [];
+  const codeText = clientText_(code);
+  const intText = clientText_(invoiceInt);
+  if (codeText) keys.push(codeText.toLowerCase());
+  if (intText && keys.indexOf(intText.toLowerCase()) === -1) keys.push(intText.toLowerCase());
+  return keys;
+}
+
+function statusForTimeRow_(statusByKey, code, invoiceInt) {
+  const keys = timeRowKeys_(code, invoiceInt);
+  if (!keys.length) return "Draft";
+  for (let i = 0; i < keys.length; i++) {
+    if (statusByKey[keys[i]]) return statusByKey[keys[i]];
+  }
+  return "Draft";
+}
+
+// Column N keeps the rate for invoices that have left Draft. Column K
+// uses that value, and still looks up ClientRecords for drafts and new shifts.
+function lockBilledTimeRates_(ss, filter) {
+  const timeSheet = ss.getSheetByName("Time&Attendance");
+  if (!timeSheet) return 0;
+  ensureBilledRateFormula_(timeSheet);
+  const lastClientRow = lastFilledRow_(timeSheet, 4);
+  if (lastClientRow < 2) return 0;
+
+  const count = lastClientRow - 1;
+  const data = timeSheet.getRange(2, 2, count, 13).getValues();
+  const statusByKey = invoiceStatusByKey_(ss.getSheetByName("InvoiceList"));
+  const clientName = clientText_(filter && filter.clientName).toLowerCase();
+  const invoiceIds = {};
+  const requested = (filter && filter.invoiceIds) || [];
+  for (let i = 0; i < requested.length; i++) {
+    const id = clientText_(requested[i]).toLowerCase();
+    if (id) invoiceIds[id] = true;
+  }
+  const useClient = !!clientName;
+  const useInvoice = requested.length > 0;
+  let lockedCount = 0;
+  let changed = false;
+
+  for (let i = 0; i < data.length; i++) {
+    const client = clientText_(data[i][2]);
+    if (useClient && client.toLowerCase() !== clientName) continue;
+    const keys = timeRowKeys_(data[i][0], data[i][1]);
+    if (useInvoice && !keys.some(function (key) { return invoiceIds[key]; })) continue;
+    const status = statusForTimeRow_(statusByKey, data[i][0], data[i][1]);
+    if (isDraftStatus_(status)) continue;
+    if (data[i][12] !== "" && data[i][12] != null) continue;
+    const rate = clientNumberOrBlank_(data[i][9]);
+    if (rate === "") continue;
+    data[i][12] = rate;
+    lockedCount += 1;
+    changed = true;
+  }
+
+  if (changed) {
+    const locks = data.map(function (row) { return [row[12]]; });
+    const range = timeSheet.getRange(2, 14, count, 1);
+    range.setNumberFormat("0.00");
+    range.setValues(locks);
+  }
+  return lockedCount;
+}
+
 function renameClientOnTimeSheet_(ss, fromName, toName) {
   const sheet = ss.getSheetByName("Time&Attendance");
   if (!sheet || sheet.getLastRow() < 2) return false;
@@ -825,6 +941,10 @@ function saveClientRecord_(payload) {
     targetRow = lastUsed + 1;
   }
 
+  const previousRate = rowIndex >= 0 ? sheet.getRange(targetRow, 6).getValue() : "";
+  const rateChanged = rowIndex >= 0 && !sameClientRate_(previousRate, rate.value);
+  if (rateChanged) lockBilledTimeRates_(ss, { clientName: originalName });
+
   const phone = clientPhone_(source.phone);
   sheet.getRange(targetRow, 9).setNumberFormat("@");
   sheet.getRange(targetRow, 1, 1, 10).setValues([[
@@ -843,6 +963,9 @@ function saveClientRecord_(payload) {
   let message = (originalName ? "Updated " : "Added ") + name + ".";
   if (originalName && originalName !== name && renameClientOnTimeSheet_(ss, originalName, name)) {
     message += " Time entries now use that name.";
+  }
+  if (rateChanged) {
+    message += " Drafts and new shifts use this rate. Sent invoices keep the rate they were billed at.";
   }
 
   return attachSnapshot_(ss, {
