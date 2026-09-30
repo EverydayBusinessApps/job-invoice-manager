@@ -197,7 +197,7 @@ function createWorkbook() {
     getBlob: function () {
       return {
         setName: function () { return this; },
-        getBytes: function () { return [37, 80, 68, 70]; },
+        getBytes: function () { return [37, 80, 68, 70, 45, 49, 46, 52, 10]; },
         getContentType: function () { return "application/pdf"; }
       };
     },
@@ -551,6 +551,7 @@ test("dashboard splits hours and invoices across month, quarter, and year", func
   assert(report.unbilled["Other Co"].totalHours === 1 && report.unbilled["Other Co"].totalAmount === 50, JSON.stringify(report.unbilled));
   assert(!report.unbilled.Acme, "paid and invoiced time was left open");
   assert(report.clients.map(function (client) { return client.name; }).join(",") === "Acme,Other Co", JSON.stringify(report.clients));
+  assert(report.invoicePdf === "inv-template-sheet", report.invoicePdf);
   assert(api.fetchAppSnapshot().success, "snapshot action");
   assert(lines[0].date === "2026-09-02" && lines[0].hours === 4 && lines[0].amount === 200, JSON.stringify(lines[0]));
   assert(lines[0].start === "08:00" && lines[0].finish === "12:00", lines[0].start + " " + lines[0].finish);
@@ -583,13 +584,12 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
   assert(/Draft/.test(again.error), again.error);
 });
 
-test("invoice pdf prints INV-Template from row 2 and does not call Drive", function (api, workbook) {
+test("invoice pdf prints INV-Template from row 2 and restores the workbook", function (api, workbook) {
   const source = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
-  assert(/UrlFetchApp\.fetch/.test(source), "PDF export no longer prints the sheet");
-  assert(!/ss\.getBlob\s*\(/.test(source), "PDF export still prints the whole spreadsheet");
-  assert(!/hideSheet\s*\(/.test(source), "PDF export still hides sheets");
-  assert(!/moveActiveSheet\s*\(/.test(source), "PDF export still reorders tabs");
+  assert(!/UrlFetchApp/.test(source), "PDF export asks for a new external permission");
+  assert(/ss\.getBlob\s*\(/.test(source), "PDF export no longer prints the sheet");
   assert(!/buildInvoicePdf_/.test(source), "PDF export still draws its own page");
+  assert(api.invoicePdfEngine_() === "inv-template-sheet", api.invoicePdfEngine_());
 
   const template = createSheet("INV-Template");
   const archive = createSheet("Archive");
@@ -601,38 +601,52 @@ test("invoice pdf prints INV-Template from row 2 and does not call Drive", funct
   template.getRange("B1").setValue("OLD");
   const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
   const activeBefore = workbook.getActiveSheet().getName();
-  let seenB1 = null;
-  let rowHiddenDuringPrint = null;
-  const originalFetch = api.UrlFetchApp.fetch;
-  api.UrlFetchApp.fetch = function (url, options) {
-    seenB1 = template.getRange("B1").getValue();
-    rowHiddenDuringPrint = template.isRowHiddenByUser(1);
-    return originalFetch.call(this, url, options);
+  let seen = null;
+  workbook.getBlob = function () {
+    seen = {
+      b1: template.getRange("B1").getValue(),
+      row1: template.isRowHiddenByUser(1),
+      row2: template.isRowHiddenByUser(2),
+      row3: template.isRowHiddenByUser(3),
+      row37: template.isRowHiddenByUser(37),
+      col8: template.isColumnHiddenByUser(8),
+      first: workbook.getSheets()[0].getName(),
+      timeHidden: workbook.sheets["Time&Attendance"].isSheetHidden(),
+      clientsHidden: workbook.sheets.ClientRecords.isSheetHidden(),
+      archiveHidden: archive.isSheetHidden(),
+      templateHidden: template.isSheetHidden()
+    };
+    return {
+      getBytes: function () { return [37, 80, 68, 70, 45, 49, 46, 52, 10]; },
+      getContentType: function () { return "application/pdf"; }
+    };
   };
-  workbook.getBlob = function () { throw new Error("getBlob should not run"); };
   const touches = api.driveTouches;
 
   const saved = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(saved.success, saved.error);
-  assert(/INV-Template print/.test(saved.message), saved.message);
+  assert(/INV-Template sheet/.test(saved.message), saved.message);
   assert(saved.fileName === "INV-JR26-013_" + new Date().getFullYear() + "-"
     + String(new Date().getMonth() + 1).padStart(2, "0") + "-"
     + String(new Date().getDate()).padStart(2, "0") + ".pdf", saved.fileName);
   const pdf = Buffer.from(saved.pdfBase64, "base64").toString("latin1");
   assert(pdf.indexOf("%PDF-1.4") === 0, "pdf header");
-  assert(api.lastFetch && api.lastFetch.url.indexOf("/spreadsheets/d/workbook/export?") !== -1, api.lastFetch && api.lastFetch.url);
-  assert(api.lastFetch.url.indexOf("gid=" + template.getSheetId()) !== -1, api.lastFetch.url);
-  assert(api.lastFetch.url.indexOf("gid=" + workbook.sheets["Time&Attendance"].getSheetId()) === -1, api.lastFetch.url);
-  assert(api.lastFetch.url.indexOf("r1=1") !== -1 && api.lastFetch.url.indexOf("r2=36") !== -1, api.lastFetch.url);
-  assert(api.lastFetch.url.indexOf("c1=0") !== -1 && api.lastFetch.url.indexOf("c2=7") !== -1, api.lastFetch.url);
-  assert(api.lastFetch.url.indexOf("size=a4") !== -1, api.lastFetch.url);
-  assert(api.lastFetch.options.headers.Authorization === "Bearer token", JSON.stringify(api.lastFetch.options));
-  assert(seenB1 === "INV-JR26-013", "B1 during print " + seenB1);
-  assert(rowHiddenDuringPrint === false, "picker row was hidden during the print");
+  assert(seen && seen.b1 === "INV-JR26-013", "B1 during print " + (seen && seen.b1));
+  assert(seen.row1 === true, "picker row stayed on the PDF");
+  assert(seen.row2 === true, "row 2 was shown during the print");
+  assert(seen.row3 === false, "row 3 was hidden during the print");
+  assert(seen.row37 === true, "rows below the bank block stayed on the PDF");
+  assert(seen.col8 === true, "columns past G stayed on the PDF");
+  assert(seen.first === "INV-Template", "first tab during print " + seen.first);
+  assert(seen.timeHidden && seen.clientsHidden && !seen.templateHidden, "other tabs stayed visible");
+  assert(seen.archiveHidden, "Archive was shown during the print");
   assert(template.getRange("B1").getValue() === "OLD", "B1 was not restored");
-  assert(!template.isRowHiddenByUser(1), "picker row was hidden");
+  assert(!template.isRowHiddenByUser(1), "picker row stayed hidden");
   assert(template.isRowHiddenByUser(2), "row 2 was unhidden");
+  assert(!template.isRowHiddenByUser(37), "tail rows stayed hidden");
+  assert(!template.isColumnHiddenByUser(8), "columns stayed hidden");
   assert(api.driveTouches === touches, "download called Drive");
+  assert(api.fetchTouches === 0, "download asked for an external connection");
   assert(archive.isSheetHidden(), "Archive was unhidden");
   assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords was hidden");
   assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet was hidden");
@@ -688,8 +702,7 @@ test("a failed pdf export restores the invoice selected in B1", function (api, w
   template.getRange = function (rowOrA1) {
     return originalRange.apply(this, arguments);
   };
-  api.fetchError = "boom";
-  workbook.getBlob = function () { throw new Error("getBlob should not run"); };
+  workbook.getBlob = function () { throw new Error("boom"); };
   const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(!failed.success, "failure was treated as success");
   assert(/boom/.test(failed.error), failed.error);
@@ -708,13 +721,13 @@ test("drive and email permission errors tell Jane how to authorize", function (a
   assert(/New deployment/.test(drive), drive);
   const email = api.invoicePdfError_(new Error("Specified permissions are not sufficient for MailApp"), "email");
   assert(/Allow email sending/.test(email) && /authorizeEverydayWork/.test(email), email);
-  const download = api.invoicePdfError_(new Error("You do not have permission to call UrlFetchApp.fetch"), "download");
+  const download = api.invoicePdfError_(new Error("You do not have permission to call DriveApp.getFileById"), "download");
   assert(/authorizeEverydayWork/.test(download), download);
   assert(/Manage deployments/.test(download), download);
+  assert(/New deployment/.test(download), download);
   api.authorizeEverydayWork();
-  assert(api.driveTouches === 1 && api.mailTouches === 1, "authorize did not touch Drive and Gmail");
-  assert(api.fetchTouches === 1, "authorize did not request the sheet print");
-  assert(/format=pdf/.test(api.lastFetch.url), api.lastFetch.url);
+  assert(api.driveTouches === 1 && api.mailTouches === 1, "authorize did not touch Drive and Mail");
+  assert(api.fetchTouches === 0, "authorize asked for an external connection");
 });
 
 test("email without mail permission explains how to allow it", function (api, workbook) {

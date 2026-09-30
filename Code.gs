@@ -4,10 +4,15 @@
  * Copyright (c) 2026 EverydayBusinessApps. All Rights Reserved.
  */
 
+function invoicePdfEngine_() {
+  return "inv-template-sheet";
+}
+
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({ 
     success: true, 
-    message: "EverydayWork API operational. Awaiting data vectors." 
+    message: "EverydayWork API operational. Awaiting data vectors.",
+    invoicePdf: invoicePdfEngine_()
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -945,7 +950,8 @@ function buildDashboardReport_(ss, asOfDate) {
     periods: periods,
     invoices: invoices,
     clients: clientList,
-    unbilled: unbilled
+    unbilled: unbilled,
+    invoicePdf: invoicePdfEngine_()
   };
 }
 
@@ -993,32 +999,22 @@ function readInvoiceLines_(ss, invoice) {
 }
 
 /**
- * Run once from the Apps Script editor. Click Run, choose Allow, then open
- * Deploy, Manage deployments, edit the web app, set Version to New version,
- * and Deploy. The published web app keeps the previous PDF until that
- * deployment is updated.
+ * Run once from the Apps Script editor on the EverydayWork spreadsheet.
+ * Click Run, choose Allow, then open Deploy, Manage deployments, edit the
+ * web app, set Version to New version, and Deploy. Keep that web app URL.
  */
 function authorizeEverydayWork() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const fileName = DriveApp.getFileById(ss.getId()).getName();
   const remaining = MailApp.getRemainingDailyQuota();
   const sheet = ss.getSheetByName("INV-Template");
-  const url = sheet
-    ? templatePdfUrl_(ss, sheet)
-    : "https://docs.google.com/spreadsheets/d/" + ss.getId() + "/export?format=pdf";
-  UrlFetchApp.fetch(url, {
-    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    muteHttpExceptions: true
-  });
-  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail. The invoice PDF is the INV-Template print.");
+  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail. The invoice PDF is the INV-Template sheet" + (sheet ? "" : ", which is missing from this workbook") + ".");
 }
 
 /**
- * Write the selected invoice into INV-Template!B1, then build the PDF from that
- * sheet. Row 1 is the on-sheet dropdown, so the PDF starts at row 2.
- * The PDF is Google's print of INV-Template from row 2. Save to Drive
- * and Email still need Drive and Gmail. Printing the sheet also needs
- * permission to connect to an external service.
+ * Write the selected invoice into INV-Template!B1, then print that sheet.
+ * Row 1 is the on-sheet dropdown, so the PDF starts at row 2. The file is
+ * the spreadsheet's own PDF of INV-Template, including the logo and bank block.
  */
 function exportInvoicePdf(payload) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1061,7 +1057,7 @@ function exportInvoicePdf(payload) {
         mode: mode,
         fileName: fileName,
         pdfBase64: Utilities.base64Encode(blob.getBytes()),
-        message: fileName + " is the INV-Template print, ready to download."
+        message: fileName + " is the INV-Template sheet, ready to download."
       };
     }
 
@@ -1073,8 +1069,8 @@ function exportInvoicePdf(payload) {
         mode: mode,
         fileName: fileName,
         message: copyTo
-          ? "Emailed the INV-Template print " + fileName + " to " + email + ". A copy went to " + copyTo + " for your records."
-          : "Emailed the INV-Template print " + fileName + " to " + email + "."
+          ? "Emailed the INV-Template sheet " + fileName + " to " + email + ". A copy went to " + copyTo + " for your records."
+          : "Emailed the INV-Template sheet " + fileName + " to " + email + "."
       };
     }
 
@@ -1160,72 +1156,139 @@ function widenInvoiceTotals_(sheet) {
 
 function invoicePdfError_(err, mode) {
   const text = String(err && err.message ? err.message : err);
-  const denied = /permission|authorization|external_request|UrlFetchApp/i.test(text);
-  if (denied && /UrlFetchApp|external_request/i.test(text)) {
-    return "Could not create the invoice PDF. " + text + " " + templatePdfAuthHint_();
-  }
+  const denied = /permission|authorization/i.test(text);
   if (denied && mode === "email") {
     return "Could not create the invoice PDF. " + text
-      + " In the Apps Script editor, select authorizeEverydayWork, click Run, and choose Allow email sending. Then open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. If that deployment still has no mail permission, use Deploy, then New deployment, then Web app. Invoice email is sent through Gmail so your address can be verified.";
+      + " In the Apps Script editor, select authorizeEverydayWork, click Run, and choose Allow email sending. Then open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. Invoice email is sent through Gmail so your address can be verified.";
   }
-  if (denied && mode === "drive") {
+  if (denied) {
     return "Could not create the invoice PDF. " + text + " " + templatePdfAuthHint_();
   }
   return "Could not create the invoice PDF. " + text;
 }
 
 function templatePdfAuthHint_() {
-  return "In the Apps Script editor, select authorizeEverydayWork, click Run, and choose Allow, including connecting to an external service. Then open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. If Allow did not add the new permission, use Deploy, then New deployment, then Web app, and replace the web app URL in the app. The current web app keeps serving the old PDF until its deployment is updated.";
+  return "Open the EverydayWork spreadsheet, choose Extensions, then Apps Script, and replace Code.gs. Select authorizeEverydayWork, click Run, and choose Allow. Then open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. A New deployment uses a different URL, so this app would keep serving the previous PDF.";
 }
 
 /**
- * Print INV-Template itself. Row 1 is the dropdown, so the print starts at row 2.
- * The PDF is Google's print of that sheet, including the logo and the bank block.
+ * Print INV-Template itself. getBlob() follows the first visible sheet, which
+ * is why an earlier download was Time & Attendance. Other tabs are hidden,
+ * the template moves to the first tab, and row 1 (the dropdown) is hidden.
+ * Rows 2–36 and columns A–G stay visible, so the logo and bank block are the
+ * sheet's own. Everything is put back after the bytes are read.
  */
 function renderInvoicePdf_(ss, sheet) {
   if (sheet.getName && sheet.getName() !== "INV-Template") {
     throw new Error("The invoice PDF has to be INV-Template, not " + sheet.getName() + ".");
   }
-  SpreadsheetApp.flush();
-  const response = UrlFetchApp.fetch(templatePdfUrl_(ss, sheet), {
-    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    muteHttpExceptions: true
-  });
-  const code = response.getResponseCode();
-  const blob = response.getBlob();
-  const bytes = blob && blob.getBytes ? blob.getBytes() : [];
-  const header = [];
-  for (let i = 0; i < bytes.length && i < 5; i++) header.push(String.fromCharCode(bytes[i] & 255));
-  const pdf = header.join("") === "%PDF-";
-  if (code === 401 || code === 403 || !pdf) {
-    throw new Error("You do not have permission to call UrlFetchApp.fetch. INV-Template could not be printed (" + code + ").");
+  const state = {
+    showedTemplate: false,
+    hiddenSheets: [],
+    picker: [],
+    tail: [],
+    columns: [],
+    originalIndex: sheet.getIndex ? sheet.getIndex() : 1,
+    previousSheet: ss.getActiveSheet ? ss.getActiveSheet() : null
+  };
+  try {
+    if (sheet.isSheetHidden && sheet.isSheetHidden()) {
+      sheet.showSheet();
+      state.showedTemplate = true;
+    }
+    const all = ss.getSheets();
+    for (let i = 0; i < all.length; i++) {
+      const other = all[i];
+      if (other.getSheetId() === sheet.getSheetId()) continue;
+      if (other.isSheetHidden && other.isSheetHidden()) continue;
+      other.hideSheet();
+      state.hiddenSheets.push(other);
+    }
+    state.picker = concealForPdf_(sheet, 1, 1, "row");
+    const maxRows = sheet.getMaxRows ? sheet.getMaxRows() : 36;
+    if (maxRows > 36) state.tail = concealForPdf_(sheet, 37, maxRows - 36, "row");
+    const maxCols = sheet.getMaxColumns ? sheet.getMaxColumns() : 7;
+    if (maxCols > 7) state.columns = concealForPdf_(sheet, 8, maxCols - 7, "column");
+    if (sheet.activate) sheet.activate();
+    if (ss.setActiveSheet) ss.setActiveSheet(sheet);
+    if (state.originalIndex !== 1 && ss.moveActiveSheet) ss.moveActiveSheet(1);
+    SpreadsheetApp.flush();
+    Utilities.sleep(800);
+    const raw = ss.getBlob();
+    if (!raw || !raw.getBytes) throw new Error("The spreadsheet did not return a PDF.");
+    const bytes = raw.getBytes();
+    if (!bytes || !bytes.length) throw new Error("The spreadsheet did not return a PDF.");
+    const header = [];
+    for (let i = 0; i < bytes.length && i < 5; i++) header.push(String.fromCharCode(bytes[i] & 255));
+    if (header.join("").indexOf("%PDF") !== 0) throw new Error("The spreadsheet did not return a PDF.");
+    const first = ss.getSheets()[0];
+    if (!first || first.getSheetId() !== sheet.getSheetId()) {
+      throw new Error("The invoice PDF was not taken from INV-Template.");
+    }
+    return Utilities.newBlob(bytes, "application/pdf");
+  } finally {
+    restoreInvoicePdfView_(ss, sheet, state);
   }
-  return blob;
 }
 
-function templatePdfUrl_(ss, sheet) {
-  const params = [
-    "format=pdf",
-    "gid=" + sheet.getSheetId(),
-    "r1=1",
-    "c1=0",
-    "r2=36",
-    "c2=7",
-    "portrait=true",
-    "size=a4",
-    "scale=2",
-    "fitw=true",
-    "sheetnames=false",
-    "title=false",
-    "gridlines=false",
-    "fzr=false",
-    "fzc=false",
-    "top_margin=0.75",
-    "bottom_margin=0.75",
-    "left_margin=0.7",
-    "right_margin=0.7"
-  ];
-  return "https://docs.google.com/spreadsheets/d/" + ss.getId() + "/export?" + params.join("&");
+function concealForPdf_(sheet, start, count, axis) {
+  if (count < 1) return [];
+  return hideVisibleSpan_(sheet, start, count, axis);
+}
+
+function revealForPdf_(sheet, spans, axis) {
+  showSpan_(sheet, spans || [], axis);
+}
+
+function hideVisibleSpan_(sheet, start, count, axis) {
+  const rowAxis = axis === "row";
+  const alreadyHidden = rowAxis
+    ? function (index) { return sheet.isRowHiddenByUser(index); }
+    : function (index) { return sheet.isColumnHiddenByUser(index); };
+  const hide = rowAxis
+    ? function (index, n) { sheet.hideRows(index, n); }
+    : function (index, n) { sheet.hideColumns(index, n); };
+  const spans = [];
+  let runStart = 0;
+  for (let offset = 0; offset <= count; offset++) {
+    const atEnd = offset === count;
+    const skip = !atEnd && alreadyHidden(start + offset);
+    if (!atEnd && !skip) {
+      if (!runStart) runStart = start + offset;
+    } else if (runStart) {
+      const n = (start + offset) - runStart;
+      hide(runStart, n);
+      spans.push({ start: runStart, count: n });
+      runStart = 0;
+    }
+  }
+  return spans;
+}
+
+function showSpan_(sheet, spans, axis) {
+  const show = axis === "row"
+    ? function (index, n) { sheet.showRows(index, n); }
+    : function (index, n) { sheet.showColumns(index, n); };
+  for (let i = spans.length - 1; i >= 0; i--) show(spans[i].start, spans[i].count);
+}
+
+function restoreInvoicePdfView_(ss, sheet, state) {
+  if (state.columns) revealForPdf_(sheet, state.columns, "column");
+  if (state.tail) revealForPdf_(sheet, state.tail, "row");
+  if (state.picker) revealForPdf_(sheet, state.picker, "row");
+  const hiddenSheets = state.hiddenSheets || [];
+  for (let i = 0; i < hiddenSheets.length; i++) hiddenSheets[i].showSheet();
+  if (state.originalIndex && sheet.getIndex && sheet.getIndex() !== state.originalIndex && ss.moveActiveSheet) {
+    if (sheet.activate) sheet.activate();
+    if (ss.setActiveSheet) ss.setActiveSheet(sheet);
+    ss.moveActiveSheet(state.originalIndex);
+  }
+  if (state.showedTemplate) sheet.hideSheet();
+  const previous = state.previousSheet;
+  if (previous && previous.getSheetId() !== sheet.getSheetId() && !previous.isSheetHidden()) {
+    if (previous.activate) previous.activate();
+    else if (ss.setActiveSheet) ss.setActiveSheet(previous);
+  }
 }
 
 function invoicePdfName_(code, isoDate) {
