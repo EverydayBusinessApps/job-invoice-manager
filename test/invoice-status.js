@@ -740,7 +740,8 @@ test("invoice pdf prints INV-Template from row 2 and restores the workbook", fun
 
   const saved = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(saved.success, saved.error);
-  assert(/INV-Template sheet/.test(saved.message), saved.message);
+  assert(/invoice PDF/.test(saved.message), saved.message);
+  assert(!/INV-Template/.test(saved.message), saved.message);
   assert(saved.fileName === "INV-JR26-013_" + new Date().getFullYear() + "-"
     + String(new Date().getMonth() + 1).padStart(2, "0") + "-"
     + String(new Date().getDate()).padStart(2, "0") + ".pdf", saved.fileName);
@@ -778,7 +779,7 @@ test("invoice pdf prints INV-Template from row 2 and restores the workbook", fun
   assert(workbook.getActiveSheet().getName() === activeBefore, "active tab changed");
 });
 
-test("saving or emailing a draft marks it invoiced and sends the edited letter", function (api, workbook) {
+test("downloading a draft marks it invoiced and emailing leaves the draft", function (api, workbook) {
   const template = createSheet("INV-Template");
   workbook.sheets["INV-Template"] = template;
   const created = api.executeTimeLog(shift());
@@ -809,8 +810,10 @@ test("saving or emailing a draft marks it invoiced and sends the edited letter",
     message: letter
   });
   assert(sent.success, sent.error);
-  assert(sent.markedInvoiced === true, "email did not mark the draft");
-  assert(statusCell(workbook, 3) === "Invoiced", statusCell(workbook, 3));
+  assert(sent.markedInvoiced === false, "email marked the draft");
+  assert(statusCell(workbook, 3) === "Draft", statusCell(workbook, 3));
+  assert(!/Invoice marked invoiced/.test(sent.message), sent.message);
+  assert(!/INV-Template/.test(sent.message), sent.message);
   assert(api.lastEmail.body === letter, api.lastEmail.body);
   assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
   assert(api.lastEmail.htmlBody.indexOf("For works Survey") !== -1, api.lastEmail.htmlBody);
@@ -1076,11 +1079,11 @@ test("saving a client writes columns A to J and leaves later columns", function 
   assert(time.getRange(3, 4).getValue() === "Other Co", "another client was renamed");
 
   const duplicate = api.saveClientRecord_({ name: "other co", rate: 10, terms: 0 });
-  assert(!duplicate.success && /already on ClientRecords/.test(duplicate.error), duplicate.error);
+  assert(!duplicate.success && /already in the list/.test(duplicate.error), duplicate.error);
   const blank = api.saveClientRecord_({ name: "  ", rate: 10 });
   assert(!blank.success && /Enter a client name/.test(blank.error), blank.error);
   const missing = api.saveClientRecord_({ originalName: "Nope", name: "Nope" });
-  assert(!missing.success && /no longer on ClientRecords/.test(missing.error), missing.error);
+  assert(!missing.success && /no longer in the list/.test(missing.error), missing.error);
   const badRate = api.saveClientRecord_({ name: "New Co", rate: "fast", terms: 7 });
   assert(!badRate.success && /Rate must be a number/.test(badRate.error), badRate.error);
   const badTerms = api.saveClientRecord_({ name: "New Co", rate: 10, terms: -1 });

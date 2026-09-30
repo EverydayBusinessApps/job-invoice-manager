@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=18">
-  <script defer src="app.js?v=25"></script>
+  <link rel="stylesheet" href="style.css?v=19">
+  <script defer src="app.js?v=26"></script>
 </head>
 <body>
 
@@ -43,27 +43,30 @@
             <button type="button" class="pile" data-action="openList" data-id="send">
               <span class="pile-copy">
                 <span class="metric-title">Invoices to send</span>
-                <span class="metric-value" x-text="openSendAmount"></span>
-                <span class="metric-sub" x-text="openSendCount"></span>
-                <span class="pile-hint">Finish these and mark them invoiced</span>
+                <span class="metric-value" x-show="openSendHas" x-text="openSendAmount"></span>
+                <span class="metric-sub" x-show="openSendHas" x-text="openSendCount"></span>
+                <span class="pile-hint" x-show="openSendHas">Finish these and mark them invoiced</span>
+                <span class="pile-empty" x-show="openSendEmpty">Nothing waiting here.</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
-            <button type="button" class="pile pile-alt" data-action="openList" data-id="due">
+            <button type="button" class="pile" data-action="openList" data-id="due">
               <span class="pile-copy">
                 <span class="metric-title">Invoices to collect</span>
-                <span class="metric-value" x-text="openCollectAmount"></span>
-                <span class="metric-sub" x-text="openCollectCount"></span>
-                <span class="pile-hint">Sent, waiting on payment</span>
+                <span class="metric-value" x-show="openCollectHas" x-text="openCollectAmount"></span>
+                <span class="metric-sub" x-show="openCollectHas" x-text="openCollectCount"></span>
+                <span class="pile-hint" x-show="openCollectHas">Sent, waiting on payment</span>
+                <span class="pile-empty" x-show="openCollectEmpty">Nothing waiting here.</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
             <button type="button" class="pile" data-action="openList" data-id="done">
               <span class="pile-copy">
                 <span class="metric-title">Finished invoices</span>
-                <span class="metric-value" x-text="openDoneAmount"></span>
-                <span class="metric-sub" x-text="openDoneCount"></span>
-                <span class="pile-hint">Paid or written off</span>
+                <span class="metric-value" x-show="openDoneHas" x-text="openDoneAmount"></span>
+                <span class="metric-sub" x-show="openDoneHas" x-text="openDoneCount"></span>
+                <span class="pile-hint" x-show="openDoneHas">Paid or written off</span>
+                <span class="pile-empty" x-show="openDoneEmpty">Nothing waiting here.</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
@@ -73,7 +76,7 @@
         <div x-show="dashView === 'list'" class="sheet-page">
           <button type="button" class="back-home" data-action="showDashHome">Back to home</button>
           <h2 class="page-title" x-text="listTitle"></h2>
-          <p class="page-lead" x-show="listHint" x-text="listHint"></p>
+          <p class="page-lead" x-show="listShowsHint" x-text="listHint"></p>
           <div class="inv-stack">
             <template x-for="inv in visibleInvoices">
               <article class="inv-card">
@@ -136,7 +139,7 @@
             <button type="button" class="btn-line" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
           </div>
           <h3 class="send-heading">When it has gone out</h3>
-          <button type="button" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
+          <button type="button" id="mark-invoiced" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
           <p class="page-lead">That moves it to invoices to collect.</p>
           <button type="button" class="btn-line btn-auto" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
         </div>
@@ -217,7 +220,7 @@
         <div x-show="clientView === 'list'">
           <section>
             <div class="card-title">Clients</div>
-            <p class="shift-note">Name, address, rate, contact, and payment terms from the ClientRecords sheet.</p>
+            <p class="shift-note">Clients you bill.</p>
             <button type="button" class="btn-alt" data-action="newClient">New client</button>
             <template x-for="client in clientRecords">
               <button type="button" class="inv-row" data-action="editClient" :data-id="client.name">
@@ -230,7 +233,7 @@
                 </span>
               </button>
             </template>
-            <p class="shift-note" x-show="clientRecordsEmpty">No clients on ClientRecords yet.</p>
+            <p class="shift-note" x-show="clientRecordsEmpty">No clients yet.</p>
           </section>
         </div>
         <div x-show="clientView === 'form'">
@@ -378,7 +381,7 @@
       <div x-show="currentTab === 'settings'">
         <section>
           <div class="card-title">Settings</div>
-          <p class="shift-note">Logo, rate, year end, and bank details from the Config sheet. Column A is the setting and column B is the value. The invoice uses these.</p>
+          <p class="shift-note">Your business defaults. The name is the setting and the box is the value.</p>
           <div class="form-group">
             <label>Logo</label>
             <div id="logo-wrap" class="logo-frame">

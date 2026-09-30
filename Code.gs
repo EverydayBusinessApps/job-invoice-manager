@@ -87,7 +87,7 @@ function doPost(e) {
 function fetchInitialAppData() {
   const ss = workbook_();
   const clientSheet = ss.getSheetByName("ClientRecords");
-  if (!clientSheet) return { success: false, error: "Missing ClientRecords tab." };
+  if (!clientSheet) return { success: false, error: "The client list is missing." };
 
   const clientRecords = readClientRows_(ss);
   const clients = clientRecords.map(function (row) { return { name: row.name }; });
@@ -999,7 +999,7 @@ function readClientDirectory_(ss) {
 
 function listClientRecords() {
   const ss = workbook_();
-  if (!ss.getSheetByName("ClientRecords")) return { success: false, error: "Missing ClientRecords tab." };
+  if (!ss.getSheetByName("ClientRecords")) return { success: false, error: "The client list is missing." };
   return { success: true, clientRecords: readClientRows_(ss) };
 }
 
@@ -1173,7 +1173,7 @@ function renameClientOnTimeSheet_(ss, fromName, toName) {
 function saveClientRecord_(payload) {
   const ss = workbook_();
   const sheet = ss.getSheetByName("ClientRecords");
-  if (!sheet) return { success: false, error: "Missing ClientRecords tab." };
+  if (!sheet) return { success: false, error: "The client list is missing." };
 
   const source = payload || {};
   const originalName = clientText_(source.originalName);
@@ -1189,11 +1189,11 @@ function saveClientRecord_(payload) {
   const names = last >= 2 ? sheet.getRange(2, 1, last - 1, 1).getValues() : [];
   const originalHits = originalName ? matchClientIndexes_(names, originalName) : [];
   if (originalName && !originalHits.length) {
-    return { success: false, error: "That client is no longer on ClientRecords." };
+    return { success: false, error: "That client is no longer in the list." };
   }
   const rowIndex = originalName ? originalHits[0] : -1;
   const conflict = matchClientIndexes_(names, name).some(function (idx) { return idx !== rowIndex; });
-  if (conflict) return { success: false, error: "A client named " + name + " is already on ClientRecords." };
+  if (conflict) return { success: false, error: "That client is already in the list." };
 
   let targetRow;
   if (rowIndex >= 0) {
@@ -1581,7 +1581,7 @@ function authorizeEverydayWork() {
     headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
     muteHttpExceptions: true
   });
-  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail. The invoice PDF is the INV-Template sheet with the grid left off" + (sheet ? "" : ", and this workbook has no INV-Template sheet") + ".");
+  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail. The invoice PDF is printed with the grid left off" + (sheet ? "" : ", and this workbook has no invoice to print") + ".");
 }
 
 /**
@@ -1611,7 +1611,7 @@ function exportInvoicePdf(payload) {
   }
 
   const sheet = ss.getSheetByName("INV-Template");
-  if (!sheet) return { success: false, error: "The workbook has no INV-Template sheet." };
+  if (!sheet) return { success: false, error: "There is no invoice to print." };
 
   const lock = LockService.getDocumentLock();
   if (!lock.tryLock(20000)) {
@@ -1652,7 +1652,17 @@ function exportInvoicePdf(payload) {
       url = file.getUrl();
     }
 
-    const marked = markDraftInvoiced_(ss, invoiceId);
+    let marked = { changed: false, status: "" };
+    if (mode === "email") {
+      const invoiceSheet = ss.getSheetByName("InvoiceList");
+      if (invoiceSheet) {
+        let row = findInvoiceListRow_(invoiceSheet, invoiceId);
+        if (!row && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+        if (row) marked.status = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
+      }
+    } else {
+      marked = markDraftInvoiced_(ss, invoiceId);
+    }
     const issued = marked.changed ? " Invoice marked invoiced." : "";
 
     if (mode === "download") {
@@ -1663,21 +1673,21 @@ function exportInvoicePdf(payload) {
         pdfBase64: Utilities.base64Encode(blob.getBytes()),
         markedInvoiced: marked.changed,
         status: marked.status,
-        message: fileName + " is the INV-Template sheet, ready to download." + issued
+        message: fileName + " is the invoice PDF, ready to download." + issued
       };
     }
 
     if (mode === "email") {
-      let message = "Emailed the INV-Template sheet " + fileName + " to " + email + ".";
+      let message = "Emailed " + fileName + " to " + email + ".";
       if (cc) message += " Cc " + cc + ".";
       if (copyTo) message += " A copy went to " + copyTo + " for your records.";
       return {
         success: true,
         mode: mode,
         fileName: fileName,
-        markedInvoiced: marked.changed,
+        markedInvoiced: false,
         status: marked.status,
-        message: message + issued
+        message: message
       };
     }
 
@@ -1722,7 +1732,7 @@ function fetchSettings() {
 
 function readConfigSheet_(ss) {
   const config = ss.getSheetByName("Config");
-  if (!config) return { success: false, error: "The workbook has no Config sheet." };
+  if (!config) return { success: false, error: "Settings are missing." };
   const last = Math.max(config.getLastRow(), 1);
   const rows = config.getRange(1, 1, last, 2).getValues();
   const settings = [];
@@ -1805,7 +1815,7 @@ function checkedConfigValue_(label, raw, isBreak) {
 function saveSettings_(payload) {
   const ss = workbook_();
   const config = ss.getSheetByName("Config");
-  if (!config) return { success: false, error: "The workbook has no Config sheet." };
+  if (!config) return { success: false, error: "Settings are missing." };
   const source = payload || {};
   const settings = Array.isArray(source.settings) ? source.settings : [];
   const breaks = Array.isArray(source.breaks) ? source.breaks : [];
@@ -1828,11 +1838,11 @@ function saveSettings_(payload) {
     if (!row || !label) continue;
     const current = clientText_(config.getRange(row, 1).getValue());
     if (current.toLowerCase() !== label.toLowerCase()) {
-      return { success: false, error: label + " is no longer on that Config row. Use Refresh and try again." };
+      return { success: false, error: label + " is no longer on that row. Use Refresh and try again." };
     }
     const cell = config.getRange(row, 2);
     if (configFormulaLocked_(cell)) {
-      return { success: false, error: label + " is a formula on the Config sheet, so it was left as it is." };
+      return { success: false, error: label + " is a formula, so it was left as it is." };
     }
     const checked = checkedConfigValue_(label, item.value, !!breakRows[row]);
     if (!checked.ok) return { success: false, error: checked.error };
@@ -1842,12 +1852,12 @@ function saveSettings_(payload) {
   let logoNote = "";
   if (logoBlob) {
     const template = ss.getSheetByName("INV-Template");
-    if (!template) return { success: false, error: "Saved the Config sheet. The workbook has no INV-Template sheet for the logo." };
+    if (!template) return { success: false, error: "Saved settings. There is no invoice for the logo." };
     try {
       placeInvoiceLogo_(template, logoBlob);
       logoNote = " The logo is on the invoice.";
     } catch (err) {
-      return { success: false, error: "Saved the Config sheet. " + (err.message || err) };
+      return { success: false, error: "Saved settings. " + (err.message || err) };
     }
   }
   const read = readConfigSheet_(ss);
@@ -2228,7 +2238,7 @@ function templatePdfAuthHint_() {
  */
 function renderInvoicePdf_(ss, sheet) {
   if (sheet.getName && sheet.getName() !== "INV-Template") {
-    throw new Error("The invoice PDF has to be INV-Template, not " + sheet.getName() + ".");
+    throw new Error("The invoice PDF was taken from " + sheet.getName() + " instead of the invoice.");
   }
   if (sheet.setHiddenGridlines) sheet.setHiddenGridlines(true);
   try {
@@ -2253,7 +2263,7 @@ function fetchTemplatePdf_(ss, sheet) {
   for (let i = 0; i < bytes.length && i < 5; i++) header.push(String.fromCharCode(bytes[i] & 255));
   const pdf = header.join("").indexOf("%PDF") === 0;
   if (code === 401 || code === 403 || !pdf) {
-    throw new Error("You do not have permission to call UrlFetchApp.fetch. INV-Template could not be printed without the sheet grid (" + code + ").");
+    throw new Error("You do not have permission to call UrlFetchApp.fetch. The invoice could not be printed without the sheet grid (" + code + ").");
   }
   return blob;
 }
@@ -2334,7 +2344,7 @@ function renderInvoicePdfFromBlob_(ss, sheet) {
     if (header.join("").indexOf("%PDF") !== 0) throw new Error("The spreadsheet did not return a PDF.");
     const first = ss.getSheets()[0];
     if (!first || first.getSheetId() !== sheet.getSheetId()) {
-      throw new Error("The invoice PDF was not taken from INV-Template.");
+      throw new Error("The invoice PDF was not taken from the invoice.");
     }
     return Utilities.newBlob(bytes, "application/pdf");
   } finally {

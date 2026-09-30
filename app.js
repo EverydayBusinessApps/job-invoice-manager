@@ -420,7 +420,8 @@ window.Alpine.data('appState', () => ({
   listShowsCollect: false,
   listShowsDone: false,
   listEmpty: false,
-  listEmptyLabel: "Nothing in this list.",
+  listEmptyLabel: "Nothing waiting here.",
+  listShowsHint: false,
   periodWeekClass: "",
   periodMonthClass: "seg-on",
   periodQuarterClass: "",
@@ -462,10 +463,16 @@ window.Alpine.data('appState', () => ({
   asOf: "",
   openSendAmount: "€0.00",
   openSendCount: "0 invoices",
+  openSendHas: false,
+  openSendEmpty: true,
   openCollectAmount: "€0.00",
   openCollectCount: "0 invoices",
+  openCollectHas: false,
+  openCollectEmpty: true,
   openDoneAmount: "€0.00",
   openDoneCount: "0 invoices",
+  openDoneHas: false,
+  openDoneEmpty: true,
   activeLabel: "",
   activeHours: "0",
   activeShifts: "0 shifts",
@@ -977,7 +984,7 @@ window.Alpine.data('appState', () => ({
         const original = payload.originalName.toLowerCase();
         const duplicate = records.find((row) => row.name.toLowerCase() === payload.name.toLowerCase() && row.name.toLowerCase() !== original);
         if (duplicate) {
-          this.setFeedback("Could not save " + payload.name + ". A client with that name is already on ClientRecords.", true);
+          this.setFeedback("Could not save " + payload.name + ". That client is already in the list.", true);
           return;
         }
         const next = {
@@ -995,7 +1002,7 @@ window.Alpine.data('appState', () => ({
         if (payload.originalName) {
           const index = records.findIndex((row) => row.name.toLowerCase() === original);
           if (index < 0) {
-            this.setFeedback("Could not save " + payload.name + ". That client is no longer on ClientRecords.", true);
+            this.setFeedback("Could not save " + payload.name + ". That client is no longer in the list.", true);
             return;
           }
           records[index] = next;
@@ -1242,7 +1249,8 @@ window.Alpine.data('appState', () => ({
       };
     });
     this.listEmpty = this.visibleInvoices.length === 0;
-    this.listEmptyLabel = "Nothing in this list.";
+    this.listEmptyLabel = "Nothing waiting here.";
+    this.listShowsHint = !this.listEmpty && !!this.listHint;
   },
   applyDashboard(res, keepEmail) {
     const keepView = this.dashView;
@@ -1263,6 +1271,7 @@ window.Alpine.data('appState', () => ({
     if (open.writtenOffCount) doneBits.push(this.countLabel(open.writtenOffCount, "written off", "written off"));
     this.openDoneAmount = this.money(open.paidAmount);
     this.openDoneCount = doneBits.length ? doneBits.join(" · ") : "0 invoices";
+    this.syncOpenPiles(Number(open.draftCount) || 0, Number(open.dueCount) || 0, (Number(open.paidCount) || 0) + (Number(open.writtenOffCount) || 0));
     this.syncPeriodClasses();
     this.syncActive();
     this.syncVisibleInvoices();
@@ -1377,7 +1386,7 @@ window.Alpine.data('appState', () => ({
     }
   },
   noteResyncFailed(res) {
-    const message = this.failMessage(res, "Could not read ClientRecords from the spreadsheet. Use Refresh.");
+    const message = this.failMessage(res, "Could not read the client list. Use Refresh.");
     if (this.feedback.text && !this.feedback.isError) {
       this.setFeedback(this.feedback.text + " " + message, true);
       return;
@@ -1517,11 +1526,34 @@ window.Alpine.data('appState', () => ({
     if (wasDraft) this.restampInvoice(this.detailId, "Invoiced");
     this.setFeedback(wasDraft
       ? "Preview cannot print the PDF. Invoice marked invoiced."
-      : "Preview cannot print the PDF. Saving, downloading, or emailing it marks a draft invoiced.", false);
+      : "Preview cannot print the PDF.", false);
     if (wasDraft) {
       this.dashView = "list";
       this.scrollPage();
     }
+  },
+  homeStatusMessage(status) {
+    if (status === "Paid") return "Marked paid.";
+    if (status === "Written off") return "Written off.";
+    if (status === "Undo") return "Back in invoices to collect.";
+    return "Marked invoiced.";
+  },
+  confirmOnHome(message) {
+    this.currentTab = "dashboard";
+    this.dashView = "home";
+    this.syncTabClasses();
+    this.scrollPage();
+    this.setFeedback(message, false);
+    setTimeout(() => this.scrollPage(), 120);
+  },
+  revealMarkInvoiced() {
+    const go = () => {
+      const node = document.getElementById("mark-invoiced");
+      if (!node) return;
+      try { node.scrollIntoView({ block: "center" }); } catch (err) {}
+    };
+    go();
+    setTimeout(go, 120);
   },
   restampInvoice(id, status) {
     const row = (this.invoiceRows || []).find((item) => item.id === id);
@@ -1555,6 +1587,18 @@ window.Alpine.data('appState', () => ({
     if (written.length) doneBits.push(this.countLabel(written.length, "written off", "written off"));
     this.openDoneAmount = this.money(sum("paid"));
     this.openDoneCount = doneBits.length ? doneBits.join(" · ") : "0 invoices";
+    this.syncOpenPiles(ofKind("draft").length, due.length, paid.length + written.length);
+  },
+  syncOpenPiles(sendCount, collectCount, doneCount) {
+    const send = Number(sendCount) || 0;
+    const collect = Number(collectCount) || 0;
+    const done = Number(doneCount) || 0;
+    this.openSendHas = send > 0;
+    this.openSendEmpty = send < 1;
+    this.openCollectHas = collect > 0;
+    this.openCollectEmpty = collect < 1;
+    this.openDoneHas = done > 0;
+    this.openDoneEmpty = done < 1;
   },
   focusInvoice(id) {
     const row = (this.invoiceRows || []).find((item) => item.id === id);
@@ -1705,7 +1749,8 @@ window.Alpine.data('appState', () => ({
     }
     if (this.previewMode) {
       await this.withInvoiceWait("Sending the invoice…", () => this.wait(1500));
-      this.previewIssue();
+      this.setFeedback("Invoice emailed. Mark it invoiced when it has gone out.", false);
+      this.revealMarkInvoiced();
       return;
     }
     this.clearFeedback();
@@ -1719,13 +1764,8 @@ window.Alpine.data('appState', () => ({
           message: this.detailMessage
         }, { quiet: true, timeoutMs: 60000, write: true });
         if (res && res.success) {
-          this.noteIssued(res);
-          this.setFeedback(res.message || "Invoice emailed.", false);
-          if (res.markedInvoiced) {
-            this.dashView = "list";
-            this.scrollPage();
-            await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-          }
+          this.setFeedback(res.message || "Invoice emailed. Mark it invoiced when it has gone out.", false);
+          this.revealMarkInvoiced();
         } else this.showPdfError(res, "Could not email the PDF.");
       } catch (err) {
         this.setFeedback("Could not email the PDF.", true);
@@ -1753,9 +1793,7 @@ window.Alpine.data('appState', () => ({
     if (this.saving || !this.detailId) return;
     if (this.previewMode) {
       this.restampInvoice(this.detailId, "Invoiced");
-      this.dashView = "list";
-      this.scrollPage();
-      this.setFeedback("Invoice " + (this.detailCode || this.detailId) + " marked invoiced.", false);
+      this.confirmOnHome("Marked invoiced.");
       return;
     }
     this.saving = true;
@@ -1765,9 +1803,7 @@ window.Alpine.data('appState', () => ({
       const res = await this.api("compileInvoice", { invoiceId: this.detailId }, { write: true });
       if (res && res.success) {
         this.setDetailPhase("Invoiced");
-        this.dashView = "list";
-        this.scrollPage();
-        this.setFeedback(res.message || "Invoice marked invoiced.", false);
+        this.confirmOnHome("Marked invoiced.");
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
@@ -1805,13 +1841,9 @@ window.Alpine.data('appState', () => ({
   },
   async markDetailStatus(status) {
     if (this.saving || !this.detailId) return;
-    const code = this.detailCode || this.detailId;
-    const previewMessage = status === "Undo"
-      ? ("Invoice " + code + " is back in invoices to collect.")
-      : ("Invoice " + code + " marked " + status.toLowerCase() + ".");
     if (this.previewMode) {
       this.restampInvoice(this.detailId, status);
-      this.setFeedback(previewMessage, false);
+      this.confirmOnHome(this.homeStatusMessage(status));
       return;
     }
     this.saving = true;
@@ -1821,7 +1853,7 @@ window.Alpine.data('appState', () => ({
       const res = await this.api("updateInvoiceStatus", { invoiceId: this.detailId, status: status }, { write: true });
       if (res && res.success) {
         this.setDetailPhase(res.status || (status === "Undo" ? "Invoiced" : status));
-        this.setFeedback(res.message || previewMessage, false);
+        this.confirmOnHome(this.homeStatusMessage(status));
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
@@ -2042,7 +2074,7 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     const payload = this.settingsPayload();
     if (!payload.settings.length && !payload.logo) {
-      this.setFeedback("Could not save settings. Open Settings again so the Config sheet can load.", true);
+      this.setFeedback("Could not save settings. Open Settings again so settings can load.", true);
       return;
     }
     const problem = this.settingsProblem(payload);
