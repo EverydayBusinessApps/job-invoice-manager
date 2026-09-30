@@ -366,11 +366,42 @@ function test(name, fn) {
 test("first time entry sets InvoiceList column I to Draft", function (api, workbook) {
   const created = api.executeTimeLog(shift());
   assert(created.success, created.error);
+  assert(created.message === "Job logged on invoice INV-JR26-001.", created.message);
   assert(statusCell(workbook, 2) === "Draft", "column I was " + statusCell(workbook, 2));
   assert(String(created.invoiceId) === "1", "invoice id " + created.invoiceId);
-  const again = api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId }));
+  const again = api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId, jobDetails: "Follow-up" }));
   assert(again.success, again.error);
+  assert(again.message === "Job added to invoice INV-JR26-001.", again.message);
+  assert(!again.alreadySaved, "a different job was treated as a repeat");
   assert(statusCell(workbook, 2) === "Draft", "second entry changed status");
+  assert(timeRows(workbook).length === 2, "second job was not stored");
+});
+
+test("a second tap of the same job confirms the save and does not duplicate it", function (api, workbook) {
+  const created = api.executeTimeLog(shift());
+  assert(created.success, created.error);
+  const invoicesBefore = workbook.sheets["InvoiceList"].getLastRow();
+  const rowsBefore = timeRows(workbook).length;
+  const again = api.executeTimeLog(shift());
+  assert(again.success, again.error);
+  assert(again.alreadySaved === true, "repeat was stored as a new job");
+  assert(again.message === "Job logged on invoice INV-JR26-001.", again.message);
+  assert(timeRows(workbook).length === rowsBefore, "a second time row was added");
+  assert(workbook.sheets["InvoiceList"].getLastRow() === invoicesBefore, "a second draft was opened");
+
+  const different = api.executeTimeLog(shift({ jobDetails: "Extra socket" }));
+  assert(different.success && !different.alreadySaved, different.error || different.message);
+  assert(timeRows(workbook).length === rowsBefore + 1, "a different job was not stored");
+
+  api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Paid" });
+  const blocked = api.executeTimeLog(shift({
+    invoiceMode: "existing",
+    invoiceId: created.invoiceId,
+    jobDetails: "Extra socket"
+  }));
+  assert(!blocked.success, "paid add was allowed");
+  assert(/Draft/.test(blocked.error), blocked.error);
+  assert(timeRows(workbook).length === rowsBefore + 1, "a rejected repeat still wrote a row");
 });
 
 test("finish is the end of the shift, so hours are not a fraction of a day", function (api, workbook) {
@@ -392,6 +423,7 @@ test("finish is the end of the shift, so hours are not a fraction of a day", fun
 
   const night = api.executeTimeLog(shift({ start: "18:00", finish: "06:00", overnight: true }));
   assert(night.success, night.error);
+  assert(night.message === "Overnight job logged on invoice INV-JR26-002.", night.message);
   const row2 = time.getLastRow();
   const nightStart = time.getRange(row2, 7).getValue();
   const nightFinish = time.getRange(row2, 9).getValue();
@@ -460,8 +492,7 @@ test("billing desk marks Paid, Unpaid, and Bad debt", function (api, workbook) {
     assert(updated.success, updated.error);
     assert(updated.status === status, updated.status);
     assert(statusCell(workbook, 2) === status, statusCell(workbook, 2));
-    const record = updated.invoices.filter(function (inv) { return inv.id === String(created.invoiceId); })[0];
-    assert(record && record.status === status, "record status " + (record && record.status));
+    assert(updated.message === "Invoice INV-JR26-001 marked " + status + ".", updated.message);
   });
   const rejected = api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Draft" });
   assert(!rejected.success, "Draft was accepted from the billing desk");
@@ -615,6 +646,7 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
   const compiled = api.compileSingleInvoice({ invoiceId: "INV-JR26-014" });
   assert(compiled.success, compiled.error);
   assert(compiled.status === "Invoiced", compiled.status);
+  assert(compiled.message === "Invoice INV-JR26-014 marked invoiced.", compiled.message);
   assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
   const stamped = invoices.getRange(2, 8).getValue();
   assert(stamped && typeof stamped.getTime === "function" && !isNaN(stamped.getTime()), "blank date was not stamped");

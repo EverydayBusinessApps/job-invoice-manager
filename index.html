@@ -7,7 +7,7 @@
   
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=5">
-  <script defer src="app.js?v=8"></script>
+  <script defer src="app.js?v=9"></script>
 </head>
 <body>
 
@@ -15,7 +15,7 @@
     <header>
       <div>
         <h1>EverydayWork</h1>
-        <p>JR ENGINEERING CORE</p>
+        <p>Jobs and invoices</p>
       </div>
       <div class="status-box">
         <button type="button" class="refresh-btn" data-action="refreshBooks">Refresh</button>
@@ -23,7 +23,7 @@
       </div>
     </header>
 
-    <div class="banner" x-show="loading">Communicating with secure workbook data layers...</div>
+    <div class="banner" x-show="loading" x-text="loadingLabel"></div>
     <div class="banner sample" x-show="dashboardNote" x-text="dashboardNote"></div>
 
     <main>
@@ -189,10 +189,10 @@
             <input type="email" x-model="detailEmail" placeholder="client@company.com">
           </div>
           <button type="button" class="btn-ghost" data-action="emailInvoicePdf">Email PDF</button>
-          <button type="button" class="btn-alt" x-show="detailIsDraft" data-action="compileOpenInvoice">Mark Invoiced</button>
-          <button type="button" class="btn-paid" data-action="markDetailPaid">Mark Paid</button>
-          <button type="button" class="btn-unpaid" data-action="markDetailUnpaid">Mark Unpaid</button>
-          <button type="button" class="btn-bad" data-action="markDetailBad">Mark Bad debt</button>
+          <button type="button" class="btn-alt" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
+          <button type="button" class="btn-paid" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
+          <button type="button" class="btn-unpaid" data-action="markDetailUnpaid" data-disable-when="saving">Mark unpaid</button>
+          <button type="button" class="btn-bad" data-action="markDetailBad" data-disable-when="saving">Mark bad debt</button>
           <button type="button" class="btn-ghost" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
         </section>
         </div>
@@ -201,12 +201,12 @@
       <!-- VIEW 1: TIME TRACKER LOGS -->
       <div x-show="currentTab === 'tracker'">
         <section>
-          <div class="card-title">Log Service Event</div>
+          <div class="card-title">Log a job</div>
           
           <div class="form-group">
-            <label>Client Account</label>
+            <label>Client</label>
             <select x-model="form.clientName" @change="onClientChange">
-              <option value="">-- Choose Account --</option>
+              <option value="">-- Choose client --</option>
               <template x-for="client in clients">
                 <option :value="client.name" x-text="client.name"></option>
               </template>
@@ -216,8 +216,8 @@
           <div class="form-group">
             <label>Invoice</label>
             <select x-model="form.invoiceMode" @change="onInvoiceModeChange">
-              <option value="new">Create new invoice</option>
-              <option value="existing">Add to an existing invoice</option>
+              <option value="new">New invoice</option>
+              <option value="existing">Add to invoice</option>
             </select>
           </div>
           <div class="form-group" x-show="showExistingInvoices">
@@ -237,8 +237,8 @@
           </div>
 
           <div class="form-group">
-            <label>Scope of Work / Job Details</label>
-            <textarea x-model="form.jobDetails" rows="2" placeholder="Describe tactical service delivery..."></textarea>
+            <label>Job</label>
+            <textarea x-model="form.jobDetails" rows="2" placeholder="What did you do?"></textarea>
           </div>
 
           <div class="grid-2">
@@ -254,7 +254,7 @@
           <p class="shift-note" x-show="overnight" x-text="overnightLabel"></p>
 
           <div class="form-group">
-            <label>Break Deduct</label>
+            <label>Break</label>
             <select x-model="form.lunch">
               <option value="na">None</option>
               <option value="half hour">30 mins</option>
@@ -264,7 +264,7 @@
             </select>
           </div>
 
-          <button @click="submitForm">Commit Event to Spreadsheet</button>
+          <button type="button" data-disable-when="saving" @click="submitForm" x-text="logButtonLabel"></button>
         </section>
       </div>
 
