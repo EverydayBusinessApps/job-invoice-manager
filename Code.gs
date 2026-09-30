@@ -5,7 +5,7 @@
  */
 
 function invoicePdfEngine_() {
-  return "inv-template-sheet";
+  return "inv-template-plain";
 }
 
 function doGet(e) {
@@ -1008,13 +1008,18 @@ function authorizeEverydayWork() {
   const fileName = DriveApp.getFileById(ss.getId()).getName();
   const remaining = MailApp.getRemainingDailyQuota();
   const sheet = ss.getSheetByName("INV-Template");
-  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail. The invoice PDF is the INV-Template sheet" + (sheet ? "" : ", which is missing from this workbook") + ".");
+  if (sheet && sheet.setHiddenGridlines) sheet.setHiddenGridlines(true);
+  UrlFetchApp.fetch(templatePdfUrl_(ss, sheet), {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  console.log("EverydayWork can save invoices for " + fileName + ". Mail remaining today: " + remaining + ". Invoice email is sent through Gmail. The invoice PDF is the INV-Template sheet with the grid left off" + (sheet ? "" : ", and this workbook has no INV-Template sheet") + ".");
 }
 
 /**
  * Write the selected invoice into INV-Template!B1, then print that sheet.
  * Row 1 is the on-sheet dropdown, so the PDF starts at row 2. The file is
- * the spreadsheet's own PDF of INV-Template, including the logo and bank block.
+ * the INV-Template page with the sheet grid left off, including the logo and bank block.
  */
 function exportInvoicePdf(payload) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1172,16 +1177,77 @@ function templatePdfAuthHint_() {
 }
 
 /**
- * Print INV-Template itself. getBlob() follows the first visible sheet, which
- * is why an earlier download was Time & Attendance. Other tabs are hidden,
- * the template moves to the first tab, and row 1 (the dropdown) is hidden.
- * Rows 2–36 and columns A–G stay visible, so the logo and bank block are the
- * sheet's own. Everything is put back after the bytes are read.
+ * Print INV-Template with the sheet grid left off. The export asks for
+ * gridlines=false. If that connection is not allowed yet, the spreadsheet
+ * PDF is used after the grid is hidden on INV-Template.
  */
 function renderInvoicePdf_(ss, sheet) {
   if (sheet.getName && sheet.getName() !== "INV-Template") {
     throw new Error("The invoice PDF has to be INV-Template, not " + sheet.getName() + ".");
   }
+  if (sheet.setHiddenGridlines) sheet.setHiddenGridlines(true);
+  try {
+    return fetchTemplatePdf_(ss, sheet);
+  } catch (err) {
+    const text = String(err && err.message ? err.message : err);
+    if (!/permission|authorization|external_request|UrlFetchApp/i.test(text)) throw err;
+    return renderInvoicePdfFromBlob_(ss, sheet);
+  }
+}
+
+function fetchTemplatePdf_(ss, sheet) {
+  SpreadsheetApp.flush();
+  const response = UrlFetchApp.fetch(templatePdfUrl_(ss, sheet), {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  const code = response.getResponseCode();
+  const blob = response.getBlob();
+  const bytes = blob && blob.getBytes ? blob.getBytes() : [];
+  const header = [];
+  for (let i = 0; i < bytes.length && i < 5; i++) header.push(String.fromCharCode(bytes[i] & 255));
+  const pdf = header.join("").indexOf("%PDF") === 0;
+  if (code === 401 || code === 403 || !pdf) {
+    throw new Error("You do not have permission to call UrlFetchApp.fetch. INV-Template could not be printed without the sheet grid (" + code + ").");
+  }
+  return blob;
+}
+
+function templatePdfUrl_(ss, sheet) {
+  const params = [
+    "format=pdf",
+    "gridlines=false",
+    "portrait=true",
+    "size=letter",
+    "scale=2",
+    "fitw=true",
+    "sheetnames=false",
+    "title=false",
+    "fzr=false",
+    "fzc=false",
+    "top_margin=0.75",
+    "bottom_margin=0.75",
+    "left_margin=0.7",
+    "right_margin=0.7"
+  ];
+  if (sheet && sheet.getSheetId) {
+    params.push("gid=" + sheet.getSheetId());
+    params.push("r1=1");
+    params.push("c1=0");
+    params.push("r2=36");
+    params.push("c2=7");
+  }
+  return "https://docs.google.com/spreadsheets/d/" + ss.getId() + "/export?" + params.join("&");
+}
+
+/**
+ * Print INV-Template from the spreadsheet file. getBlob() follows the first
+ * visible sheet, so other tabs are hidden, the template moves to the first
+ * tab, and row 1 (the dropdown) is hidden. Rows 2–36 and columns A–G stay
+ * visible. Those tabs are put back after the bytes are read. The grid on
+ * INV-Template stays hidden.
+ */
+function renderInvoicePdfFromBlob_(ss, sheet) {
   const state = {
     showedTemplate: false,
     hiddenSheets: [],

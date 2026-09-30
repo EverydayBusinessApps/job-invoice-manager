@@ -24,6 +24,7 @@ function createSheet(name) {
   let sheetHidden = false;
   const hiddenRows = {};
   const hiddenCols = {};
+  let gridHidden = false;
   function key(row, col) { return row + ":" + col; }
   function get(row, col) {
     return Object.prototype.hasOwnProperty.call(cells, key(row, col)) ? cells[key(row, col)] : "";
@@ -158,7 +159,9 @@ function parseA1(a1) {
     },
     showColumns: function (col, count) {
       for (let i = 0; i < count; i++) delete hiddenCols[col + i];
-    }
+    },
+    hasHiddenGridlines: function () { return !!gridHidden; },
+    setHiddenGridlines: function (hidden) { gridHidden = !!hidden; }
   };
 }
 
@@ -551,7 +554,7 @@ test("dashboard splits hours and invoices across month, quarter, and year", func
   assert(report.unbilled["Other Co"].totalHours === 1 && report.unbilled["Other Co"].totalAmount === 50, JSON.stringify(report.unbilled));
   assert(!report.unbilled.Acme, "paid and invoiced time was left open");
   assert(report.clients.map(function (client) { return client.name; }).join(",") === "Acme,Other Co", JSON.stringify(report.clients));
-  assert(report.invoicePdf === "inv-template-sheet", report.invoicePdf);
+  assert(report.invoicePdf === "inv-template-plain", report.invoicePdf);
   assert(api.fetchAppSnapshot().success, "snapshot action");
   assert(lines[0].date === "2026-09-02" && lines[0].hours === 4 && lines[0].amount === 200, JSON.stringify(lines[0]));
   assert(lines[0].start === "08:00" && lines[0].finish === "12:00", lines[0].start + " " + lines[0].finish);
@@ -586,10 +589,10 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
 
 test("invoice pdf prints INV-Template from row 2 and restores the workbook", function (api, workbook) {
   const source = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
-  assert(!/UrlFetchApp/.test(source), "PDF export asks for a new external permission");
-  assert(/ss\.getBlob\s*\(/.test(source), "PDF export no longer prints the sheet");
+  assert(/gridlines=false/.test(source), "PDF export still prints the sheet grid");
+  assert(/setHiddenGridlines\(true\)/.test(source), "INV-Template still shows its grid");
   assert(!/buildInvoicePdf_/.test(source), "PDF export still draws its own page");
-  assert(api.invoicePdfEngine_() === "inv-template-sheet", api.invoicePdfEngine_());
+  assert(api.invoicePdfEngine_() === "inv-template-plain", api.invoicePdfEngine_());
 
   const template = createSheet("INV-Template");
   const archive = createSheet("Archive");
@@ -602,7 +605,8 @@ test("invoice pdf prints INV-Template from row 2 and restores the workbook", fun
   const orderBefore = workbook.getSheets().map(function (item) { return item.getName(); });
   const activeBefore = workbook.getActiveSheet().getName();
   let seen = null;
-  workbook.getBlob = function () {
+  const originalFetch = api.UrlFetchApp.fetch;
+  api.UrlFetchApp.fetch = function (url, options) {
     seen = {
       b1: template.getRange("B1").getValue(),
       row1: template.isRowHiddenByUser(1),
@@ -610,17 +614,15 @@ test("invoice pdf prints INV-Template from row 2 and restores the workbook", fun
       row3: template.isRowHiddenByUser(3),
       row37: template.isRowHiddenByUser(37),
       col8: template.isColumnHiddenByUser(8),
-      first: workbook.getSheets()[0].getName(),
+      grid: template.hasHiddenGridlines(),
       timeHidden: workbook.sheets["Time&Attendance"].isSheetHidden(),
       clientsHidden: workbook.sheets.ClientRecords.isSheetHidden(),
       archiveHidden: archive.isSheetHidden(),
       templateHidden: template.isSheetHidden()
     };
-    return {
-      getBytes: function () { return [37, 80, 68, 70, 45, 49, 46, 52, 10]; },
-      getContentType: function () { return "application/pdf"; }
-    };
+    return originalFetch.call(this, url, options);
   };
+  workbook.getBlob = function () { throw new Error("getBlob should not run"); };
   const touches = api.driveTouches;
 
   const saved = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
@@ -632,21 +634,29 @@ test("invoice pdf prints INV-Template from row 2 and restores the workbook", fun
   const pdf = Buffer.from(saved.pdfBase64, "base64").toString("latin1");
   assert(pdf.indexOf("%PDF-1.4") === 0, "pdf header");
   assert(seen && seen.b1 === "INV-JR26-013", "B1 during print " + (seen && seen.b1));
-  assert(seen.row1 === true, "picker row stayed on the PDF");
+  assert(seen.grid === true, "the sheet grid was still on during the print");
+  assert(seen.row1 === false, "picker row was hidden on the sheet");
   assert(seen.row2 === true, "row 2 was shown during the print");
   assert(seen.row3 === false, "row 3 was hidden during the print");
-  assert(seen.row37 === true, "rows below the bank block stayed on the PDF");
-  assert(seen.col8 === true, "columns past G stayed on the PDF");
-  assert(seen.first === "INV-Template", "first tab during print " + seen.first);
-  assert(seen.timeHidden && seen.clientsHidden && !seen.templateHidden, "other tabs stayed visible");
+  assert(seen.row37 === false, "rows below the bank block were hidden");
+  assert(seen.col8 === false, "columns past G were hidden");
+  assert(!seen.timeHidden && !seen.clientsHidden && !seen.templateHidden, "tabs were hidden for the print");
   assert(seen.archiveHidden, "Archive was shown during the print");
+  assert(api.lastFetch && api.lastFetch.url.indexOf("gridlines=false") !== -1, api.lastFetch && api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("gid=" + template.getSheetId()) !== -1, api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("gid=" + workbook.sheets["Time&Attendance"].getSheetId()) === -1, api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("r1=1") !== -1 && api.lastFetch.url.indexOf("r2=36") !== -1, api.lastFetch.url);
+  assert(api.lastFetch.url.indexOf("c1=0") !== -1 && api.lastFetch.url.indexOf("c2=7") !== -1, api.lastFetch.url);
+  assert(api.lastFetch.options.headers.Authorization === "Bearer token", JSON.stringify(api.lastFetch.options));
   assert(template.getRange("B1").getValue() === "OLD", "B1 was not restored");
+  assert(template.hasHiddenGridlines(), "the sheet grid was turned back on");
+  assert(!workbook.sheets.ClientRecords.hasHiddenGridlines(), "ClientRecords lost its grid");
   assert(!template.isRowHiddenByUser(1), "picker row stayed hidden");
   assert(template.isRowHiddenByUser(2), "row 2 was unhidden");
   assert(!template.isRowHiddenByUser(37), "tail rows stayed hidden");
   assert(!template.isColumnHiddenByUser(8), "columns stayed hidden");
   assert(api.driveTouches === touches, "download called Drive");
-  assert(api.fetchTouches === 0, "download asked for an external connection");
+  assert(api.fetchTouches === 1, "download did not request the sheet print");
   assert(archive.isSheetHidden(), "Archive was unhidden");
   assert(!workbook.sheets.ClientRecords.isSheetHidden(), "ClientRecords was hidden");
   assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet was hidden");
@@ -702,7 +712,8 @@ test("a failed pdf export restores the invoice selected in B1", function (api, w
   template.getRange = function (rowOrA1) {
     return originalRange.apply(this, arguments);
   };
-  workbook.getBlob = function () { throw new Error("boom"); };
+  api.fetchError = "boom";
+  workbook.getBlob = function () { throw new Error("blob ran"); };
   const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "download" });
   assert(!failed.success, "failure was treated as success");
   assert(/boom/.test(failed.error), failed.error);
@@ -727,7 +738,8 @@ test("drive and email permission errors tell Jane how to authorize", function (a
   assert(/New deployment/.test(download), download);
   api.authorizeEverydayWork();
   assert(api.driveTouches === 1 && api.mailTouches === 1, "authorize did not touch Drive and Mail");
-  assert(api.fetchTouches === 0, "authorize asked for an external connection");
+  assert(api.fetchTouches === 1, "authorize did not request the gridless print");
+  assert(/gridlines=false/.test(api.lastFetch.url), api.lastFetch.url);
 });
 
 test("email without mail permission explains how to allow it", function (api, workbook) {
