@@ -314,6 +314,51 @@ function yearEndParts(value) {
   return { month: month, day: day };
 }
 
+function roundCents(value) {
+  const n = Number(value);
+  if (!isFinite(n)) return 0;
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+function estimateSoleTraderTax(profit) {
+  const income = Math.max(0, roundCents(profit));
+  const standard = Math.min(income, 44000);
+  const higher = Math.max(0, income - 44000);
+  const incomeTax = roundCents(Math.max(0, standard * 0.2 + higher * 0.4 - 4000));
+  let usc = 0;
+  if (income > 13000) {
+    const bands = [
+      [12012, 0.005],
+      [16688, 0.02],
+      [41344, 0.03],
+      [29956, 0.08]
+    ];
+    let left = income;
+    bands.forEach(function (band) {
+      const slice = Math.min(left, band[0]);
+      usc += slice * band[1];
+      left = Math.max(0, left - band[0]);
+    });
+    if (left > 0) usc += left * 0.11;
+    usc = roundCents(usc);
+  }
+  const prsi = income >= 5000 ? roundCents(Math.max(650, income * 0.042)) : 0;
+  return {
+    profit: income,
+    incomeTax: incomeTax,
+    usc: usc,
+    prsi: prsi,
+    total: roundCents(incomeTax + usc + prsi)
+  };
+}
+
+function expenseAmount(value) {
+  const text = String(value == null ? "" : value).replace(/,/g, "").trim();
+  if (!text) return 0;
+  if (!/^\d+(\.\d{0,2})?$/.test(text)) return null;
+  return roundCents(text);
+}
+
 // ==========================================
 // APPLICATION CONTROLLER STATE MACHINE
 // ==========================================
@@ -381,7 +426,21 @@ window.Alpine.data('appState', () => ({
   tabDashClass: "nav-on",
   tabClientsClass: "",
   tabTrackerClass: "",
+  tabSummaryClass: "",
   tabSettingsClass: "",
+  taxExpenses: "",
+  summaryPeriod: "Financial year",
+  summaryWork: "€0.00",
+  summaryHours: "0 shifts",
+  summaryPaid: "€0.00",
+  summaryDue: "€0.00",
+  summaryWrittenOff: "€0.00",
+  summaryProfit: "€0.00",
+  summaryIncomeTax: "€0.00",
+  summaryUsc: "€0.00",
+  summaryPrsi: "€0.00",
+  summaryTax: "€0.00",
+  summaryExpenseNote: "",
   logoPreview: "logo.png?v=1",
   logoDirty: false,
   logoEmpty: false,
@@ -669,6 +728,7 @@ window.Alpine.data('appState', () => ({
     this.tabDashClass = this.currentTab === "dashboard" ? "nav-on" : "";
     this.tabClientsClass = this.currentTab === "clients" ? "nav-on" : "";
     this.tabTrackerClass = this.currentTab === "tracker" ? "nav-on" : "";
+    this.tabSummaryClass = this.currentTab === "summary" ? "nav-on" : "";
     this.tabSettingsClass = this.currentTab === "settings" ? "nav-on" : "";
   },
   setDashTab() {
@@ -683,6 +743,12 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
   },
   setTrackerTab() { this.currentTab = 'tracker'; this.syncTabClasses(); this.clearFeedback(); },
+  setSummaryTab() {
+    this.currentTab = "summary";
+    this.syncTabClasses();
+    this.clearFeedback();
+    this.syncSummary();
+  },
   async setSettingsTab() {
     this.currentTab = "settings";
     this.syncTabClasses();
@@ -1083,6 +1149,27 @@ window.Alpine.data('appState', () => ({
       year: "Hours and value are for this financial year. The totals above are everything still open."
     };
     this.periodNote = notes[this.period] || notes.month;
+    this.syncSummary();
+  },
+  syncSummary() {
+    const year = (this.periodData && this.periodData.year) || {};
+    const work = roundCents(year.billable);
+    const writtenOff = roundCents(year.writtenOff != null ? year.writtenOff : year.badDebt);
+    const expenses = expenseAmount(this.taxExpenses);
+    const profit = expenses == null ? null : roundCents(work - writtenOff - expenses);
+    const tax = estimateSoleTraderTax(profit == null ? 0 : profit);
+    this.summaryPeriod = year.label || "Financial year";
+    this.summaryWork = this.money(work);
+    this.summaryHours = this.countLabel(year.shifts, "shift", "shifts");
+    this.summaryPaid = this.money(year.paid);
+    this.summaryDue = this.money(year.due);
+    this.summaryWrittenOff = this.money(writtenOff);
+    this.summaryExpenseNote = expenses == null ? "Enter expenses as a number, for example 1500." : "";
+    this.summaryProfit = profit == null ? "—" : this.money(profit);
+    this.summaryIncomeTax = this.money(tax.incomeTax);
+    this.summaryUsc = this.money(tax.usc);
+    this.summaryPrsi = this.money(tax.prsi);
+    this.summaryTax = this.money(profit == null ? 0 : tax.total);
   },
   dueNote(row) {
     if (!row || !row.dueDate) return row && row.kind === "draft" ? "Not sent" : "";

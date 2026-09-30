@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=12">
-  <script defer src="app.js?v=19"></script>
+  <link rel="stylesheet" href="style.css?v=13">
+  <script defer src="app.js?v=20"></script>
 </head>
 <body>
 
@@ -313,6 +313,63 @@
         </div>
       </div>
 
+      <!-- VIEW: FINANCIAL SUMMARY -->
+      <div x-show="currentTab === 'summary'">
+        <section>
+          <div class="card-title">Financial summary</div>
+          <p class="shift-note">This is an indication only. It is not a substitute for accountancy.</p>
+          <div class="card-title" x-text="summaryPeriod"></div>
+          <div class="grid-2">
+            <div class="metric-box">
+              <span class="metric-title">Work recorded</span>
+              <span class="metric-value" x-text="summaryWork"></span>
+              <span class="metric-sub" x-text="summaryHours"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Paid</span>
+              <span class="metric-value" x-text="summaryPaid"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Still to collect</span>
+              <span class="metric-value" x-text="summaryDue"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">Written off</span>
+              <span class="metric-value" x-text="summaryWrittenOff"></span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Allowable expenses</label>
+            <input type="text" inputmode="decimal" x-model="taxExpenses" @input="syncSummary" placeholder="0" data-disable-when="saving">
+          </div>
+          <p class="shift-note" x-show="summaryExpenseNote" x-text="summaryExpenseNote"></p>
+          <div class="metric-box">
+            <span class="metric-title">Estimated profit</span>
+            <span class="metric-value" x-text="summaryProfit"></span>
+          </div>
+          <div class="card-title">Tax to set aside</div>
+          <div class="grid-2">
+            <div class="metric-box">
+              <span class="metric-title">Income tax</span>
+              <span class="metric-value" x-text="summaryIncomeTax"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">USC</span>
+              <span class="metric-value" x-text="summaryUsc"></span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-title">PRSI</span>
+              <span class="metric-value" x-text="summaryPrsi"></span>
+            </div>
+            <div class="metric-box alt">
+              <span class="metric-title">Set aside</span>
+              <span class="metric-value" x-text="summaryTax"></span>
+            </div>
+          </div>
+          <p class="shift-note">For a single sole trader, on 2026 Irish rates, using this financial year’s recorded work minus written-off invoices and the expenses you type. No other income is included. Income tax is 20% up to €44,000 and 40% after that, with a €2,000 personal credit and a €2,000 earned income credit. USC starts above €13,000, and self-employed income over €100,000 is at 11%. PRSI is Class S at 4.2%, with a €650 minimum from €5,000 of income. That rate rises to 4.35% from 1 October 2026. VAT, pensions, and other credits are left out.</p>
+        </section>
+      </div>
+
       <!-- VIEW: SETTINGS -->
       <div x-show="currentTab === 'settings'">
         <section>
@@ -376,6 +433,7 @@
       <button :class="tabDashClass ? 'nav-on' : ''" @click="setDashTab">📊 Dashboard</button>
       <button :class="tabClientsClass ? 'nav-on' : ''" @click="setClientsTab">👤 Clients</button>
       <button :class="tabTrackerClass ? 'nav-on' : ''" @click="setTrackerTab">🕒 Log</button>
+      <button :class="tabSummaryClass ? 'nav-on' : ''" @click="setSummaryTab">💶 Summary</button>
       <button :class="tabSettingsClass ? 'nav-on' : ''" @click="setSettingsTab">⚙️ Settings</button>
     </nav>
   </div>
