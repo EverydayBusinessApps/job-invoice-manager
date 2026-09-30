@@ -265,12 +265,13 @@ function sampleDashboard() {
       year: { label: "2026", hours: 12, shifts: 5, clients: 2, billable: 470, avgRate: 39.17, topClient: "Acme", topClientHours: 9, paid: 100, paidCount: 1, sent: 420, sentCount: 4, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 80, badDebtCount: 1 }
     },
     invoices: [
-      row({ id: "INV-JR26-002", code: "INV-JR26-002", clientName: "Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
-      row({ id: "INV-JR26-005", code: "INV-JR26-005", clientName: "Other Co", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
-      row({ id: "INV-JR26-003", code: "INV-JR26-003", clientName: "Other Co", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
-      row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
-      row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
+      row({ id: "INV-JR26-002", code: "INV-JR26-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
+      row({ id: "INV-JR26-005", code: "INV-JR26-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
+      row({ id: "INV-JR26-003", code: "INV-JR26-003", clientName: "Other Co", contact: "Owen Other", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "owen@other.test", terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
+      row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
+      row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", contact: "Ann Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
     ],
+    businessName: "Everyday Business",
     clients: [{ name: "Acme" }, { name: "Other Co" }],
     clientRecords: [
       { name: "Acme", address1: "1 Dock Road", address2: "Dublin", address3: "", address4: "", rate: 50, contact: "Ann Acme", email: "acme@example.com", phone: "01 555 0100", terms: 14 },
@@ -377,6 +378,8 @@ window.Alpine.data('appState', () => ({
   detailService: "",
   detailJob: "",
   detailEmail: "",
+  detailMessage: "",
+  businessName: "EverydayWork",
   detailIsDraft: false,
   detailCanFinish: false,
   detailCanUndo: false,
@@ -879,6 +882,7 @@ window.Alpine.data('appState', () => ({
   applyDashboard(res, keepEmail) {
     const keepView = this.dashView;
     const keepId = this.detailId;
+    if (res.businessName) this.businessName = res.businessName;
     this.asOf = res.asOf || "";
     this.periodData = res.periods || {};
     this.invoiceRows = Array.isArray(res.invoices) ? res.invoices : [];
@@ -1079,7 +1083,42 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     this.syncVisibleInvoices();
   },
+  prettyPeriod(text) {
+    const raw = String(text || "").trim();
+    if (!raw || raw === "—") return "";
+    return raw.split(/\s+-\s+/).map((part) => {
+      const pretty = this.prettyDate(part.trim());
+      return pretty === "—" ? part.trim() : pretty;
+    }).join(" – ");
+  },
+  invoiceEmailDraft(row) {
+    const lines = row.lines || [];
+    const works = row.jobDetails || (lines[0] && lines[0].details) || "";
+    const period = this.prettyPeriod(row.servicePeriod) || (row.date ? this.prettyDate(row.date) : "");
+    const contact = row.contact || row.clientName || "";
+    const name = this.businessName || "EverydayWork";
+    return [
+      "To " + (contact || "there"),
+      "Please find attached invoice for " + (period || "this period"),
+      "Total owed " + this.money(row.total),
+      "For works " + (works || "the works listed"),
+      "",
+      "Kind Regards",
+      name
+    ].join("\n");
+  },
+  noteIssued(res) {
+    if (res && res.markedInvoiced) this.setDetailPhase("Invoiced");
+  },
+  previewIssue() {
+    const wasDraft = this.detailIsDraft;
+    if (wasDraft) this.setDetailPhase("Invoiced");
+    this.setFeedback(wasDraft
+      ? "Preview cannot print the PDF. Invoice marked invoiced."
+      : "Preview cannot print the PDF. Saving, downloading, or emailing it marks a draft invoiced.", false);
+  },
   fillDetail(row, lines, keepEmail) {
+    const sameInvoice = !!keepEmail && this.detailId === row.id;
     this.detailId = row.id;
     this.detailCode = row.code || row.id;
     this.detailClient = row.clientName || "No client";
@@ -1095,7 +1134,10 @@ window.Alpine.data('appState', () => ({
     this.detailIsDraft = row.kind === "draft";
     this.detailCanFinish = row.kind === "due";
     this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
-    if (!keepEmail) this.detailEmail = row.email || "";
+    if (!sameInvoice) {
+      this.detailEmail = row.email || "";
+      this.detailMessage = this.invoiceEmailDraft(row);
+    }
     this.detailLinesRaw = lines || [];
     this.detailLines = this.detailLinesRaw.map((line) => ({
       when: this.prettyDate(line.date),
@@ -1128,18 +1170,17 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("Could not load the invoice lines.", true);
     }
   },
-  previewPdfNote() {
-    this.setFeedback("Preview cannot print INV-Template. After Code.gs is deployed on the EverydayWork spreadsheet, the PDF is that sheet, including the logo and bank details.", false);
-  },
   async saveInvoicePdf() {
     if (!this.detailId) return;
-    if (this.previewMode) return this.previewPdfNote();
+    if (this.previewMode) return this.previewIssue();
     this.clearFeedback();
     try {
       const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "drive" });
       if (res && res.success) {
         this.driveUrl = res.url || "";
+        this.noteIssued(res);
         this.setFeedback(res.message || "Saved to the Invoices folder.", false);
+        if (res.markedInvoiced) this.refreshSnapshot({ quiet: true, announce: false });
       } else {
         this.showPdfError(res, "Could not save the PDF.");
       }
@@ -1149,13 +1190,15 @@ window.Alpine.data('appState', () => ({
   },
   async downloadInvoicePdf() {
     if (!this.detailId) return;
-    if (this.previewMode) return this.previewPdfNote();
+    if (this.previewMode) return this.previewIssue();
     this.clearFeedback();
     try {
       const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "download" });
       if (res && res.success && res.pdfBase64) {
         this.savePdfFile(res.fileName, res.pdfBase64);
+        this.noteIssued(res);
         this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
+        if (res.markedInvoiced) this.refreshSnapshot({ quiet: true, announce: false });
       } else {
         this.setFeedback(this.failMessage(res, "Could not download the PDF."), true);
       }
@@ -1170,12 +1213,20 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("Enter an email address to send the PDF.", true);
       return;
     }
-    if (this.previewMode) return this.previewPdfNote();
+    if (this.previewMode) return this.previewIssue();
     this.clearFeedback();
     try {
-      const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "email", email: email });
-      if (res && res.success) this.setFeedback(res.message || "Invoice emailed.", false);
-      else this.showPdfError(res, "Could not email the PDF.");
+      const res = await this.api("exportInvoicePdf", {
+        invoiceId: this.detailId,
+        mode: "email",
+        email: email,
+        message: this.detailMessage
+      });
+      if (res && res.success) {
+        this.noteIssued(res);
+        this.setFeedback(res.message || "Invoice emailed.", false);
+        if (res.markedInvoiced) this.refreshSnapshot({ quiet: true, announce: false });
+      } else this.showPdfError(res, "Could not email the PDF.");
     } catch (err) {
       this.setFeedback("Could not email the PDF.", true);
     }

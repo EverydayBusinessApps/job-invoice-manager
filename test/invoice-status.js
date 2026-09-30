@@ -752,6 +752,44 @@ test("invoice pdf prints INV-Template from row 2 and restores the workbook", fun
   assert(workbook.getActiveSheet().getName() === activeBefore, "active tab changed");
 });
 
+test("saving or emailing a draft marks it invoiced and sends the edited letter", function (api, workbook) {
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  const created = api.executeTimeLog(shift());
+  assert(created.success, created.error);
+  const downloaded = api.exportInvoicePdf({ invoiceId: created.invoiceId, mode: "download" });
+  assert(downloaded.success, downloaded.error);
+  assert(downloaded.markedInvoiced === true, downloaded.message || "download did not mark the draft");
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+  assert(/marked invoiced/.test(downloaded.message), downloaded.message);
+
+  const again = api.exportInvoicePdf({ invoiceId: created.invoiceId, mode: "download" });
+  assert(again.success && !again.markedInvoiced, "a second download changed the status");
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  const paid = api.updateInvoiceStatus({ invoiceId: created.invoiceId, status: "Paid" });
+  assert(paid.success, paid.error);
+  const paidDownload = api.exportInvoicePdf({ invoiceId: created.invoiceId, mode: "download" });
+  assert(paidDownload.success && !paidDownload.markedInvoiced, "a paid invoice was moved back");
+  assert(statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
+
+  const other = api.executeTimeLog(shift({ clientName: "Other Co", jobDetails: "Survey" }));
+  assert(other.success, other.error);
+  const letter = "To Owen\nPlease find attached invoice for 10 Sep 2026\nTotal owed €50.00\nFor works Survey\n\nKind Regards\nEveryday Business";
+  const sent = api.exportInvoicePdf({
+    invoiceId: other.invoiceId,
+    mode: "email",
+    email: "owen@other.test",
+    message: letter
+  });
+  assert(sent.success, sent.error);
+  assert(sent.markedInvoiced === true, "email did not mark the draft");
+  assert(statusCell(workbook, 3) === "Invoiced", statusCell(workbook, 3));
+  assert(api.lastEmail.body === letter, api.lastEmail.body);
+  assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+  assert(api.lastEmail.htmlBody.indexOf("For works Survey") !== -1, api.lastEmail.htmlBody);
+});
+
 test("email sends the invoice to the client and a copy to us", function (api, workbook) {
   const template = createSheet("INV-Template");
   workbook.sheets["INV-Template"] = template;
@@ -774,6 +812,8 @@ test("email sends the invoice to the client and a copy to us", function (api, wo
   assert(api.lastEmail.name === "Everyday Business", api.lastEmail.name);
   assert(api.lastEmail.replyTo === "records@everydaybusiness.ie", api.lastEmail.replyTo);
   assert(api.lastEmail.htmlBody && api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+  assert(api.lastEmail.body.indexOf("Please find attached invoice for") !== -1, api.lastEmail.body);
+  assert(api.lastEmail.body.indexOf("Kind Regards") !== -1 && api.lastEmail.body.indexOf("Everyday Business") !== -1, api.lastEmail.body);
   assert(api.lastEmail.subject === "Invoice INV-JR26-011", api.lastEmail.subject);
   assert(/jane@everydaybusiness.ie/.test(sent.message), sent.message);
   assert(api.lastEmail.attachments && api.lastEmail.attachments.length === 1, "missing attachment");
@@ -835,8 +875,11 @@ test("email without mail permission explains how to allow it", function (api, wo
   api.GmailApp.sendEmail = function () {
     throw new Error("You do not have permission to call GmailApp.sendEmail. Required permissions: https://www.googleapis.com/auth/gmail.send");
   };
+  workbook.sheets.InvoiceList.getRange(2, 1).setValue("INV-JR26-013");
+  workbook.sheets.InvoiceList.getRange(2, 9).setValue("Draft");
   const failed = api.exportInvoicePdf({ invoiceId: "INV-JR26-013", mode: "email", email: "accounts@example.com" });
   assert(!failed.success, "mail failure was treated as success");
+  assert(workbook.sheets.InvoiceList.getRange(2, 9).getValue() === "Draft", "a failed email marked the invoice");
   assert(/gmail\.send/.test(failed.error), failed.error);
   assert(/Allow email sending/.test(failed.error), failed.error);
   assert(!workbook.sheets["Time&Attendance"].isSheetHidden(), "time sheet stayed hidden");

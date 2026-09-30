@@ -862,7 +862,8 @@ function clientDirectoryFromRows_(rows) {
     const terms = Number(row.terms);
     map[row.name] = {
       email: row.email,
-      terms: terms > 0 ? terms : 0
+      terms: terms > 0 ? terms : 0,
+      contact: row.contact || ""
     };
   });
   return map;
@@ -1235,7 +1236,7 @@ function buildDashboardReport_(ss, asOfDate) {
       const named = shiftRows.filter(function (shift) { return shift.client; })[0];
       client = named ? named.client : "";
     }
-    const profile = clients[client] || { email: "", terms: 0 };
+    const profile = clients[client] || { email: "", terms: 0, contact: "" };
     const shiftHours = shiftRows.reduce(function (sum, shift) { return sum + shift.hours; }, 0);
     const shiftCharge = shiftRows.reduce(function (sum, shift) { return sum + shift.charge; }, 0);
     const dates = shiftRows.map(function (shift) { return shift.date; }).filter(Boolean).sort();
@@ -1267,6 +1268,7 @@ function buildDashboardReport_(ss, asOfDate) {
       servicePeriod: service,
       jobDetails: job,
       email: profile.email,
+      contact: profile.contact || "",
       terms: profile.terms,
       inMonth: inIsoRange_(anchor, windows.month.start, windows.month.end),
       inQuarter: inIsoRange_(anchor, windows.quarter.start, windows.quarter.end),
@@ -1361,6 +1363,7 @@ function buildDashboardReport_(ss, asOfDate) {
     clients: clientList,
     clientRecords: clientRows,
     unbilled: unbilled,
+    businessName: businessProfile_(ss).name,
     invoicePdf: invoicePdfEngine_()
   };
 }
@@ -1465,6 +1468,25 @@ function exportInvoicePdf(payload) {
     const today = Utilities.formatDate(new Date(), timezone, "yyyy-MM-dd");
     const fileName = invoicePdfName_(code, today);
     const blob = renderInvoicePdf_(ss, sheet).setName(fileName);
+    const letter = invoiceEmailText_(ss, invoiceId, payload && payload.message);
+
+    if (mode === "email") {
+      const copyTo = recordsEmail_(ss, email);
+      sendInvoiceEmail_(ss, email, code, blob, copyTo, letter);
+    }
+
+    let stored = fileName;
+    let url = "";
+    if (mode === "drive") {
+      const folder = invoicesFolder_(ss);
+      stored = uniqueFileName_(folder, fileName);
+      blob.setName(stored);
+      const file = folder.createFile(blob);
+      url = file.getUrl();
+    }
+
+    const marked = markDraftInvoiced_(ss, invoiceId);
+    const issued = marked.changed ? " Invoice marked invoiced." : "";
 
     if (mode === "download") {
       return {
@@ -1472,33 +1494,34 @@ function exportInvoicePdf(payload) {
         mode: mode,
         fileName: fileName,
         pdfBase64: Utilities.base64Encode(blob.getBytes()),
-        message: fileName + " is the INV-Template sheet, ready to download."
+        markedInvoiced: marked.changed,
+        status: marked.status,
+        message: fileName + " is the INV-Template sheet, ready to download." + issued
       };
     }
 
     if (mode === "email") {
       const copyTo = recordsEmail_(ss, email);
-      sendInvoiceEmail_(ss, email, code, blob, copyTo);
       return {
         success: true,
         mode: mode,
         fileName: fileName,
-        message: copyTo
+        markedInvoiced: marked.changed,
+        status: marked.status,
+        message: (copyTo
           ? "Emailed the INV-Template sheet " + fileName + " to " + email + ". A copy went to " + copyTo + " for your records."
-          : "Emailed the INV-Template sheet " + fileName + " to " + email + "."
+          : "Emailed the INV-Template sheet " + fileName + " to " + email + ".") + issued
       };
     }
 
-    const folder = invoicesFolder_(ss);
-    const stored = uniqueFileName_(folder, fileName);
-    blob.setName(stored);
-    const file = folder.createFile(blob);
     return {
       success: true,
       mode: mode,
       fileName: stored,
-      url: file.getUrl(),
-      message: "Saved " + stored + " to the Invoices folder on Google Drive."
+      url: url,
+      markedInvoiced: marked.changed,
+      status: marked.status,
+      message: "Saved " + stored + " to the Invoices folder on Google Drive." + issued
     };
   } catch (err) {
     return { success: false, error: invoicePdfError_(err, mode) };
@@ -1540,11 +1563,11 @@ function businessProfile_(ss) {
  * Send through Gmail so the message is signed for the account that runs
  * EverydayWork. MailApp leaves the sender unverified, and Gmail files that as spam.
  */
-function sendInvoiceEmail_(ss, email, code, blob, copyTo) {
+function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain) {
   const profile = businessProfile_(ss);
   const sender = profile.name || "EverydayWork";
-  const plain = "Please find invoice " + code + " attached.\n\n" + sender;
-  const html = "<p>Please find invoice " + pdfEscapeHtml_(code) + " attached.</p><p>" + pdfEscapeHtml_(sender) + "</p>";
+  const text = String(plain || "").trim() || invoiceEmailDraft_({ tradename: sender });
+  const html = invoiceEmailHtml_(text);
   const options = {
     attachments: [blob],
     name: sender,
@@ -1552,7 +1575,124 @@ function sendInvoiceEmail_(ss, email, code, blob, copyTo) {
   };
   if (copyTo) options.bcc = copyTo;
   if (profile.email && profile.email.toLowerCase() !== String(email || "").toLowerCase()) options.replyTo = profile.email;
-  GmailApp.sendEmail(email, "Invoice " + code, plain, options);
+  GmailApp.sendEmail(email, "Invoice " + code, text, options);
+}
+
+function invoiceEmailText_(ss, invoiceId, custom) {
+  const written = String(custom || "").trim();
+  if (written) return written;
+  return invoiceEmailDraft_(invoiceLetterParts_(ss, invoiceId));
+}
+
+function invoiceEmailDraft_(parts) {
+  const source = parts || {};
+  const contact = clientText_(source.contact) || clientText_(source.clientName) || "there";
+  const period = prettyPeriod_(source.period) || "this period";
+  const amount = clientText_(source.amount) || "the amount on the invoice";
+  const works = clientText_(source.works) || "the works listed";
+  const name = clientText_(source.tradename) || "EverydayWork";
+  return "To " + contact + "\n"
+    + "Please find attached invoice for " + period + "\n"
+    + "Total owed " + amount + "\n"
+    + "For works " + works + "\n"
+    + "\n"
+    + "Kind Regards\n"
+    + name;
+}
+
+function invoiceEmailHtml_(plain) {
+  return String(plain || "").split(/\n{2,}/).map(function (block) {
+    const lines = block.split(/\n/).map(function (line) { return pdfEscapeHtml_(line); }).join("<br>");
+    return "<p>" + lines + "</p>";
+  }).join("");
+}
+
+function prettyPeriod_(value) {
+  const raw = clientText_(value);
+  if (!raw) return "";
+  return raw.split(/\s+-\s+/).map(function (part) {
+    const iso = isoDate_(part);
+    if (!iso) return part;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const bits = iso.split("-");
+    return Number(bits[2]) + " " + months[Number(bits[1]) - 1] + " " + bits[0];
+  }).join(" – ");
+}
+
+function euroText_(value) {
+  const n = Number(value);
+  if (!isFinite(n)) return "";
+  const sign = n < 0 ? "-" : "";
+  const parts = Math.abs(n).toFixed(2).split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return sign + "€" + parts[0] + "." + parts[1];
+}
+
+function invoiceLetterParts_(ss, invoiceId) {
+  const profile = businessProfile_(ss);
+  const parts = {
+    contact: "",
+    clientName: "",
+    period: "",
+    amount: "",
+    works: "",
+    tradename: profile.name || "EverydayWork"
+  };
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  const code = invoicePrintCode_(ss, invoiceId);
+  let row = invoiceSheet ? findInvoiceListRow_(invoiceSheet, invoiceId) : 0;
+  if (!row && invoiceSheet && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+  if (row) {
+    const values = invoiceSheet.getRange(row, 1, 1, 9).getValues()[0];
+    parts.clientName = clientText_(values[1]);
+    parts.works = clientText_(values[2]);
+    parts.period = clientText_(values[3]) || isoDate_(values[7]);
+    if (values[6] !== "" && values[6] != null) parts.amount = euroText_(values[6]);
+  }
+  if (parts.clientName) {
+    const clients = readClientRows_(ss);
+    for (let i = 0; i < clients.length; i++) {
+      if (clients[i].name.toLowerCase() === parts.clientName.toLowerCase()) {
+        parts.contact = clients[i].contact;
+        break;
+      }
+    }
+  }
+  if (!parts.works) {
+    const timeSheet = ss.getSheetByName("Time&Attendance");
+    const last = timeSheet ? lastFilledRow_(timeSheet, 4) : 0;
+    if (timeSheet && last >= 2) {
+      const data = timeSheet.getRange(2, 2, last - 1, 5).getValues();
+      for (let i = 0; i < data.length; i++) {
+        const rowCode = clientText_(data[i][0]);
+        const intId = clientText_(data[i][1]);
+        if (rowCode !== code && intId !== String(invoiceId) && rowCode !== String(invoiceId)) continue;
+        const job = clientText_(data[i][4]);
+        if (job) {
+          parts.works = job;
+          if (!parts.clientName) parts.clientName = clientText_(data[i][2]);
+          if (!parts.period) parts.period = isoDate_(data[i][3]);
+          break;
+        }
+      }
+    }
+  }
+  return parts;
+}
+
+function markDraftInvoiced_(ss, invoiceId) {
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return { changed: false, status: "" };
+  const code = invoicePrintCode_(ss, invoiceId);
+  let row = findInvoiceListRow_(invoiceSheet, invoiceId);
+  if (!row && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+  if (!row) return { changed: false, status: "" };
+  const status = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
+  if (status !== "Draft") return { changed: false, status: status };
+  invoiceSheet.getRange(row, 9).setValue("Invoiced");
+  if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
+  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId, code] });
+  return { changed: true, status: "Invoiced" };
 }
 
 function pdfEscapeHtml_(value) {

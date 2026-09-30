@@ -7,7 +7,7 @@
   
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=6">
-  <script defer src="app.js?v=10"></script>
+  <script defer src="app.js?v=11"></script>
 </head>
 <body>
 
@@ -150,6 +150,10 @@
           <div class="form-group">
             <label>Email the PDF</label>
             <input type="email" x-model="detailEmail" placeholder="client@company.com">
+          </div>
+          <div class="form-group">
+            <label>Email message</label>
+            <textarea x-model="detailMessage" rows="9"></textarea>
           </div>
           <button type="button" class="btn-ghost" data-action="emailInvoicePdf">Email PDF</button>
           <button type="button" class="btn-alt" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
