@@ -266,6 +266,7 @@ function sampleDashboard() {
       row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
       row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", status: "Bad debt", kind: "bad", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
     ],
+    clients: [{ name: "Acme" }, { name: "Other Co" }],
     unbilled: { "Other Co": { totalHours: 1, totalAmount: 50 } }
   };
 }
@@ -281,15 +282,8 @@ window.Alpine.data('appState', () => ({
   
   apiUrl: "https://script.google.com/macros/s/AKfycbzVJ3wV-heWwuT0xD5uKQum8xMp9NJ165pTWESf170vNvsgpI6ApGIX2BjoyuW5Z3tS/exec",
 
-  invoiceForm: { clientName: '' },
-  unbilledData: { totalHours: 0, totalAmount: 0 },
   invoices: [],
   clientInvoices: [],
-  draftInvoices: [],
-  showDraftList: false,
-  noDraftInvoices: false,
-  noDraftLabel: '',
-  billing: { invoiceId: '', statusLabel: '—' },
   showExistingInvoices: false,
   invoiceHint: 'This shift will open a new draft invoice.',
   overnight: false,
@@ -315,8 +309,6 @@ window.Alpine.data('appState', () => ({
   periodYearClass: "",
   tabDashClass: "nav-on",
   tabTrackerClass: "",
-  tabInvoicerClass: "",
-  tabBillingClass: "",
   asOf: "",
   openDueAmount: "€0.00",
   openDueCount: "0 invoices",
@@ -418,17 +410,6 @@ window.Alpine.data('appState', () => ({
     }
     this.syncInvoiceHint();
   },
-  refreshDraftInvoices() {
-    const name = this.invoiceForm.clientName;
-    this.showDraftList = !!name;
-    this.draftInvoices = !name ? [] : (this.invoices || []).filter((inv) => {
-      return inv.clientName === name && this.isDraftStatus(inv.status);
-    });
-    this.noDraftInvoices = !!(name && !this.draftInvoices.length);
-    this.noDraftLabel = this.noDraftInvoices
-      ? 'No draft invoices for this account. Compile still closes unbilled time that has no invoice yet.'
-      : '';
-  },
   syncInvoiceHint() {
     const existing = this.form.invoiceMode === 'existing';
     this.showExistingInvoices = existing;
@@ -450,11 +431,6 @@ window.Alpine.data('appState', () => ({
     this.invoiceHint = this.form.invoiceId
       ? ('This shift will be added to draft invoice ' + this.form.invoiceId + '.')
       : 'Choose a draft invoice. Time cannot be added once an invoice leaves Draft.';
-  },
-  syncBillingStatus() {
-    const id = this.billing.invoiceId;
-    const inv = (this.invoices || []).find((item) => item.id === String(id));
-    this.billing.statusLabel = inv ? (inv.status || 'Draft') : '—';
   },
   onClientChange() {
     this.form.invoiceId = '';
@@ -501,8 +477,6 @@ window.Alpine.data('appState', () => ({
   syncTabClasses() {
     this.tabDashClass = this.currentTab === "dashboard" ? "nav-on" : "";
     this.tabTrackerClass = this.currentTab === "tracker" ? "nav-on" : "";
-    this.tabInvoicerClass = this.currentTab === "invoicer" ? "nav-on" : "";
-    this.tabBillingClass = this.currentTab === "billing" ? "nav-on" : "";
   },
   setDashTab() {
     this.currentTab = "dashboard";
@@ -510,20 +484,6 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
   },
   setTrackerTab() { this.currentTab = 'tracker'; this.syncTabClasses(); this.clearFeedback(); },
-  setInvoicerTab() {
-    this.currentTab = 'invoicer';
-    this.syncTabClasses();
-    this.clearFeedback();
-    this.refreshDraftInvoices();
-    if (this.invoiceForm.clientName) this.loadUnbilledEntries();
-    else this.unbilledData = { totalHours: 0, totalAmount: 0 };
-  },
-  setBillingTab() {
-    this.currentTab = 'billing';
-    this.syncTabClasses();
-    this.clearFeedback();
-    this.syncBillingStatus();
-  },
 
   async submitForm() {
     this.clearFeedback();
@@ -576,7 +536,6 @@ window.Alpine.data('appState', () => ({
           }
         }
         this.refreshClientInvoices();
-        this.refreshDraftInvoices();
       } else {
         this.setFeedback(this.failMessage(result, "API Connection dropped."), true);
       }
@@ -584,83 +543,6 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("API Connection dropped.", true);
     }
   },
-  async loadUnbilledEntries() {
-    this.refreshDraftInvoices();
-    if (!this.invoiceForm.clientName) { this.unbilledData = { totalHours: 0, totalAmount: 0 }; return; }
-    const local = this.unbilled && this.unbilled[this.invoiceForm.clientName];
-    if (local || this.previewMode) {
-      this.unbilledData.totalHours = local ? (Number(local.totalHours) || 0) : 0;
-      this.unbilledData.totalAmount = local ? (Number(local.totalAmount) || 0) : 0;
-      return;
-    }
-    try {
-      const res = await this.api('getUnbilledSummary', { clientName: this.invoiceForm.clientName });
-      if (res && res.success) {
-        this.unbilledData.totalHours = Number(res.totalHours) || 0;
-        this.unbilledData.totalAmount = Number(res.totalAmount) || 0;
-      } else {
-        this.setFeedback(this.failMessage(res, "Metrics sync failed."), true);
-      }
-    } catch (err) {
-      this.setFeedback("Metrics sync failed.", true);
-    }
-  },
-  async processInvoice() {
-    this.clearFeedback();
-    if (!this.invoiceForm.clientName) {
-      this.setFeedback("Choose a client account first.", true);
-      return;
-    }
-    try {
-      const res = await this.api('compileFinalInvoice', { clientName: this.invoiceForm.clientName });
-      if (res && res.success) {
-        this.setFeedback(res.message || ("Invoice Ref: " + res.invoiceId + " set to Invoiced."), false);
-        this.invoiceForm.clientName = '';
-        this.unbilledData = { totalHours: 0, totalAmount: 0 };
-        if (this.adoptWrite(res)) {
-          this.refreshDraftInvoices();
-          this.syncBillingStatus();
-        } else if (res.invoices) {
-          this.invoices = this.mapInvoices(res.invoices);
-          this.refreshClientInvoices();
-        }
-        this.refreshDraftInvoices();
-        this.syncBillingStatus();
-      } else {
-        this.setFeedback(this.failMessage(res, "Processing timeout."), true);
-      }
-    } catch (err) {
-      this.setFeedback("Processing timeout.", true);
-    }
-  },
-  async markInvoiceStatus(status) {
-    this.clearFeedback();
-    if (!this.billing.invoiceId) {
-      this.setFeedback("Choose an invoice first.", true);
-      return;
-    }
-    try {
-      const res = await this.api('updateInvoiceStatus', {
-        invoiceId: this.billing.invoiceId,
-        status: status
-      });
-      if (res && res.success) {
-        if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
-        this.refreshClientInvoices();
-        this.refreshDraftInvoices();
-        this.syncBillingStatus();
-        if (!res.snapshot && this.dashboardLive) await this.loadDashboard({ quiet: true });
-        this.setFeedback(res.message || ("Invoice " + this.billing.invoiceId + " marked " + status + "."), false);
-      } else {
-        this.setFeedback(this.failMessage(res, "Could not update invoice status."), true);
-      }
-    } catch (err) {
-      this.setFeedback("Could not update invoice status.", true);
-    }
-  },
-  markPaid() { return this.markInvoiceStatus('Paid'); },
-  markUnpaid() { return this.markInvoiceStatus('Unpaid'); },
-  markBadDebt() { return this.markInvoiceStatus('Bad debt'); },
 
   money(n) {
     const value = Number(n) || 0;
@@ -803,7 +685,6 @@ window.Alpine.data('appState', () => ({
     if (Array.isArray(res.invoices)) {
       this.invoices = this.mapInvoices(res.invoices);
       this.refreshClientInvoices();
-      this.refreshDraftInvoices();
     }
     if (!this.previewMode && res.invoicePdf !== "inv-template-plain") {
       this.dashboardNote = "The invoice still shows the sheet grid. Open the EverydayWork spreadsheet https://docs.google.com/spreadsheets/d/1YN1xWdA7OScbXZj72yB5EyjrYA2zsJqwTTJ7-VdTxhM/edit then Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. Keep this web app URL.";
@@ -869,6 +750,9 @@ window.Alpine.data('appState', () => ({
       this.dashboardNote = "Sample figures for the layout. Live totals appear after Code.gs is pasted into Apps Script and deployed.";
       const sample = sampleDashboard();
       this.unbilled = sample.unbilled || {};
+      this.applyClientList(sample.clients || []);
+      this.invoices = this.mapInvoices(sample.invoices);
+      this.refreshClientInvoices();
       this.applyDashboard(sample, true);
       return;
     }
@@ -906,7 +790,7 @@ window.Alpine.data('appState', () => ({
     const titles = {
       due: "Still to collect",
       overdue: "Overdue",
-      draft: "Ready to compile",
+      draft: "Drafts",
       paid: "Paid",
       sent: "Sent",
       bad: "Bad debt"
@@ -915,7 +799,7 @@ window.Alpine.data('appState', () => ({
     const hints = {
       due: "Sent, and not paid yet. Open one to download the PDF or mark it paid.",
       overdue: "Past the client payment terms. Open one to chase it.",
-      draft: "Not sent yet. Compile marks the draft as Invoiced, then create the PDF.",
+      draft: "Not sent yet. Open one and mark it Invoiced, then create the PDF.",
       paid: "Invoices in this period that are marked Paid.",
       sent: "Issued in this period, including ones later paid or written off.",
       bad: "Written off. These are not included in still to collect."
@@ -1056,7 +940,7 @@ window.Alpine.data('appState', () => ({
   async compileOpenInvoice() {
     if (!this.detailId) return;
     if (this.previewMode) {
-      this.setFeedback("Compile marks this draft as Invoiced after the script is updated.", false);
+      this.setFeedback("Mark Invoiced saves this draft as Invoiced after the script is updated.", false);
       return;
     }
     this.clearFeedback();
@@ -1065,16 +949,15 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
         this.refreshClientInvoices();
-        this.refreshDraftInvoices();
         if (!res.snapshot) await this.loadDashboard({ quiet: true });
         const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
         if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], true);
         this.setFeedback(res.message || "Invoice set to Invoiced.", false);
       } else {
-        this.setFeedback(this.failMessage(res, "Could not compile that invoice."), true);
+        this.setFeedback(this.failMessage(res, "Could not mark that invoice Invoiced."), true);
       }
     } catch (err) {
-      this.setFeedback("Could not compile that invoice.", true);
+      this.setFeedback("Could not mark that invoice Invoiced.", true);
     }
   },
   async markDetailPaid() { return this.markDetailStatus("Paid"); },
@@ -1092,8 +975,6 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
         this.refreshClientInvoices();
-        this.refreshDraftInvoices();
-        this.syncBillingStatus();
         if (!res.snapshot) await this.loadDashboard({ quiet: true });
         const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
         if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], true);
