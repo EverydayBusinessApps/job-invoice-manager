@@ -25,7 +25,8 @@ function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({ 
     success: true, 
     message: "EverydayWork is ready.",
-    invoicePdf: invoicePdfEngine_()
+    invoicePdf: invoicePdfEngine_(),
+    emailCc: true
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -1517,7 +1518,8 @@ function buildDashboardReport_(ss, asOfDate) {
     clientRecords: clientRows,
     unbilled: unbilled,
     businessName: businessProfile_(ss).name,
-    invoicePdf: invoicePdfEngine_()
+    invoicePdf: invoicePdfEngine_(),
+    emailCc: true
   };
 }
 
@@ -1598,8 +1600,14 @@ function exportInvoicePdf(payload) {
 
   const code = invoicePrintCode_(ss, invoiceId);
   const email = String((payload && payload.email) || "").trim();
+  let cc = "";
   if (mode === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { success: false, error: "Enter an email address to send the PDF." };
+  }
+  if (mode === "email") {
+    const parsed = invoiceCopyList_(payload && payload.cc, [email]);
+    if (!parsed.ok) return { success: false, error: parsed.error };
+    cc = parsed.list.join(", ");
   }
 
   const sheet = ss.getSheetByName("INV-Template");
@@ -1623,9 +1631,15 @@ function exportInvoicePdf(payload) {
     const blob = renderInvoicePdf_(ss, sheet).setName(fileName);
     const prepared = invoiceEmailText_(ss, invoiceId, payload && payload.message);
 
+    let copyTo = "";
     if (mode === "email") {
-      const copyTo = recordsEmail_(ss, email);
-      sendInvoiceEmail_(ss, email, code, blob, copyTo, prepared.text, prepared.contact);
+      copyTo = recordsEmail_(ss, email);
+      if (copyTo) {
+        cc = cc.split(", ").filter(function (item) {
+          return item.toLowerCase() !== copyTo.toLowerCase();
+        }).join(", ");
+      }
+      sendInvoiceEmail_(ss, email, code, blob, copyTo, prepared.text, prepared.contact, cc);
     }
 
     let stored = fileName;
@@ -1654,16 +1668,16 @@ function exportInvoicePdf(payload) {
     }
 
     if (mode === "email") {
-      const copyTo = recordsEmail_(ss, email);
+      let message = "Emailed the INV-Template sheet " + fileName + " to " + email + ".";
+      if (cc) message += " Cc " + cc + ".";
+      if (copyTo) message += " A copy went to " + copyTo + " for your records.";
       return {
         success: true,
         mode: mode,
         fileName: fileName,
         markedInvoiced: marked.changed,
         status: marked.status,
-        message: (copyTo
-          ? "Emailed the INV-Template sheet " + fileName + " to " + email + ". A copy went to " + copyTo + " for your records."
-          : "Emailed the INV-Template sheet " + fileName + " to " + email + ".") + issued
+        message: message + issued
       };
     }
 
@@ -2001,7 +2015,30 @@ function businessProfile_(ss) {
  * Send through Gmail so the message is signed for the account that runs
  * EverydayWork. MailApp leaves the sender unverified, and Gmail files that as spam.
  */
-function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain, contact) {
+function invoiceCopyList_(raw, skip) {
+  const text = String(raw || "").trim();
+  if (!text) return { ok: true, list: [] };
+  const parts = text.split(/[;,]/).map(function (part) { return String(part || "").trim(); }).filter(Boolean);
+  const skipSet = {};
+  (skip || []).forEach(function (item) {
+    const key = String(item || "").trim().toLowerCase();
+    if (key) skipSet[key] = true;
+  });
+  const list = [];
+  const seen = {};
+  for (let i = 0; i < parts.length; i++) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parts[i])) {
+      return { ok: false, error: "Enter a valid Cc address, or leave it blank." };
+    }
+    const key = parts[i].toLowerCase();
+    if (skipSet[key] || seen[key]) continue;
+    seen[key] = true;
+    list.push(parts[i]);
+  }
+  return { ok: true, list: list };
+}
+
+function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain, contact, cc) {
   const profile = businessProfile_(ss);
   const sender = clientText_(profile.name) || "EverydayWork";
   const text = String(plain || "").trim() || invoiceEmailDraft_({ tradename: sender });
@@ -2012,6 +2049,7 @@ function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain, contact) {
     htmlBody: html
   };
   if (copyTo) options.bcc = copyTo;
+  if (cc) options.cc = cc;
   if (profile.email && profile.email.toLowerCase() !== String(email || "").toLowerCase()) options.replyTo = profile.email;
   GmailApp.sendEmail(invoiceRecipient_(email, contact), invoiceEmailSubject_(sender, code), text, options);
 }

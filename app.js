@@ -498,6 +498,8 @@ window.Alpine.data('appState', () => ({
   detailService: "",
   detailJob: "",
   detailEmail: "",
+  detailCc: "",
+  ccNeedsDeploy: false,
   detailFrom: "",
   detailSubject: "",
   detailMessage: "",
@@ -1302,6 +1304,7 @@ window.Alpine.data('appState', () => ({
       this.invoices = this.mapInvoices(res.invoices);
       this.refreshClientInvoices();
     }
+    this.ccNeedsDeploy = !this.previewMode && res.emailCc !== true;
     if (!this.previewMode && res.invoicePdf !== "inv-template-plain") {
       this.dashboardNote = "The invoice still shows the sheet grid. Open the EverydayWork spreadsheet https://docs.google.com/spreadsheets/d/1YN1xWdA7OScbXZj72yB5EyjrYA2zsJqwTTJ7-VdTxhM/edit then Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. Keep this web app URL.";
     }
@@ -1451,6 +1454,24 @@ window.Alpine.data('appState', () => ({
       return pretty === "—" ? part.trim() : pretty;
     }).join(" – ");
   },
+  ccList(to) {
+    const text = String(this.detailCc || "").trim();
+    if (!text) return { ok: true, value: "" };
+    const skip = String(to || "").trim().toLowerCase();
+    const parts = text.split(/[;,]/).map((part) => part.trim()).filter(Boolean);
+    const kept = [];
+    const seen = {};
+    for (let i = 0; i < parts.length; i++) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parts[i])) {
+        return { ok: false, error: "Enter a valid Cc address, or leave it blank." };
+      }
+      const key = parts[i].toLowerCase();
+      if (key === skip || seen[key]) continue;
+      seen[key] = true;
+      kept.push(parts[i]);
+    }
+    return { ok: true, value: kept.join(", ") };
+  },
   invoiceEmailSubject(name, code) {
     const business = String(name || "").trim();
     const invoice = String(code || "").trim();
@@ -1543,6 +1564,7 @@ window.Alpine.data('appState', () => ({
     const letterRow = this.invoiceLetterRow(row);
     const drafted = this.invoiceEmailDraft(letterRow);
     this.detailEmail = this.invoiceAddress(row);
+    if (!sameInvoice) this.detailCc = "";
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.detailIsDraft = row.kind === "draft";
@@ -1655,6 +1677,11 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("Enter an email address to send the PDF.", true);
       return;
     }
+    const cc = this.ccList(email);
+    if (!cc.ok) {
+      this.setFeedback(cc.error, true);
+      return;
+    }
     if (this.previewMode) {
       await this.withInvoiceWait("Sending the invoice…", () => this.wait(1500));
       this.previewIssue();
@@ -1667,6 +1694,7 @@ window.Alpine.data('appState', () => ({
           invoiceId: this.detailId,
           mode: "email",
           email: email,
+          cc: cc.value,
           message: this.detailMessage
         }, { quiet: true, timeoutMs: 60000, write: true });
         if (res && res.success) {

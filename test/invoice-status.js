@@ -270,6 +270,7 @@ function loadApi(workbook) {
           subject: subject,
           body: body,
           bcc: options && options.bcc,
+          cc: options && options.cc,
           attachments: options && options.attachments,
           name: options && options.name,
           htmlBody: options && options.htmlBody,
@@ -665,6 +666,7 @@ test("dashboard splits hours and invoices across month, quarter, and year", func
   assert(!report.unbilled.Acme, "paid and invoiced time was left open");
   assert(report.clients.map(function (client) { return client.name; }).join(",") === "Acme,Other Co", JSON.stringify(report.clients));
   assert(report.invoicePdf === "inv-template-plain", report.invoicePdf);
+  assert(report.emailCc === true, "snapshot does not offer Cc");
   assert(api.fetchAppSnapshot().success, "snapshot action");
   assert(lines[0].date === "2026-09-02" && lines[0].hours === 4 && lines[0].amount === 200, JSON.stringify(lines[0]));
   assert(lines[0].start === "08:00" && lines[0].finish === "12:00", lines[0].start + " " + lines[0].finish);
@@ -862,6 +864,47 @@ test("email sends the invoice to the client and a copy to us", function (api, wo
   const same = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "email", email: "jane@everydaybusiness.ie" });
   assert(same.success, same.error);
   assert(!api.lastEmail.bcc, "a copy was addressed to the same inbox");
+  assert(!api.lastEmail.cc, "an empty Cc was sent");
+
+  const copied = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    cc: "accounts@bakewell.test, boss@bakewell.test"
+  });
+  assert(copied.success, copied.error);
+  assert(api.lastEmail.cc === "accounts@bakewell.test, boss@bakewell.test", api.lastEmail.cc);
+  assert(/Cc accounts@bakewell.test, boss@bakewell.test/.test(copied.message), copied.message);
+  assert(api.lastEmail.bcc === "jane@everydaybusiness.ie", api.lastEmail.bcc);
+
+  const sameAsTo = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    cc: "client@bakewell.test"
+  });
+  assert(sameAsTo.success, sameAsTo.error);
+  assert(!api.lastEmail.cc, "Cc repeated the To address");
+
+  const recordsCopy = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    cc: "jane@everydaybusiness.ie"
+  });
+  assert(recordsCopy.success, recordsCopy.error);
+  assert(!api.lastEmail.cc, "Cc repeated the records copy");
+  assert(api.lastEmail.bcc === "jane@everydaybusiness.ie", api.lastEmail.bcc);
+
+  const statusBefore = workbook.sheets.InvoiceList.getRange(2, 9).getValue();
+  const badCc = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    cc: "not-an-email"
+  });
+  assert(!badCc.success && /Cc/.test(badCc.error), badCc.error);
+  assert(workbook.sheets.InvoiceList.getRange(2, 9).getValue() === statusBefore, "a rejected Cc changed the invoice");
 });
 
 test("a failed pdf export restores the invoice selected in B1", function (api, workbook) {
