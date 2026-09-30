@@ -267,7 +267,7 @@ function sampleDashboard() {
     invoices: [
       row({ id: "INV-JR26-002", code: "INV-JR26-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
       row({ id: "INV-JR26-005", code: "INV-JR26-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
-      row({ id: "INV-JR26-003", code: "INV-JR26-003", clientName: "Other Co", contact: "Owen Other", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "owen@other.test", terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
+      row({ id: "INV-JR26-003", code: "INV-JR26-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-JR26-001", code: "INV-JR26-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
       row({ id: "INV-JR26-004", code: "INV-JR26-004", clientName: "Acme", contact: "Ann Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
     ],
@@ -378,10 +378,10 @@ window.Alpine.data('appState', () => ({
   detailService: "",
   detailJob: "",
   detailEmail: "",
-  detailTo: "",
   detailFrom: "",
   detailSubject: "",
   detailMessage: "",
+  detailMessageAuto: "",
   businessName: "EverydayWork",
   detailIsDraft: false,
   detailCanFinish: false,
@@ -535,7 +535,7 @@ window.Alpine.data('appState', () => ({
     }
     const stored = this.storedSnapshot();
     if (stored) this.applySnapshot(stored, true);
-    await this.refreshSnapshot({ quiet: !!stored, announce: !stored });
+    await this.refreshSnapshot({ quiet: !!stored, announce: !stored, resync: true });
   },
   syncTabClasses() {
     this.tabDashClass = this.currentTab === "dashboard" ? "nav-on" : "";
@@ -610,12 +610,57 @@ window.Alpine.data('appState', () => ({
       };
     }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
   },
+  clientRecordFor(name) {
+    const wanted = this.clientField(name).toLowerCase();
+    if (!wanted) return null;
+    return (this.clientRecords || []).find((item) => this.clientField(item.name).toLowerCase() === wanted) || null;
+  },
+  invoiceAddress(row) {
+    const record = this.clientRecordFor(row && row.clientName);
+    if (record && !record.partial) return this.clientField(record.email);
+    return this.clientField(row && row.email);
+  },
+  invoiceLetterRow(row) {
+    const record = this.clientRecordFor(row && row.clientName);
+    if (!record || record.partial) return row || {};
+    return Object.assign({}, row, {
+      contact: this.clientField(record.contact),
+      email: this.clientField(record.email)
+    });
+  },
   applyClientRecords(rows) {
     const decorated = this.decorateClientRecords(rows);
     this.clientRecords = decorated;
     this.clientRecordsEmpty = decorated.length === 0;
     this.clientDetailsLive = !decorated.some((row) => row.partial);
     this.applyClientList(decorated);
+    this.syncOpenClientForm();
+    this.syncOpenInvoiceAddress();
+  },
+  syncOpenClientForm() {
+    if (this.currentTab !== "clients" || this.clientView !== "form") return;
+    const original = this.clientField(this.clientForm && this.clientForm.originalName);
+    if (!original) return;
+    const row = this.clientRecordFor(original);
+    if (!row || row.partial) return;
+    this.clientForm = {
+      originalName: row.name,
+      name: row.name,
+      address1: row.address1 || "",
+      address2: row.address2 || "",
+      address3: row.address3 || "",
+      address4: row.address4 || "",
+      rate: row.rate === "" || row.rate == null ? "" : String(row.rate),
+      contact: row.contact || "",
+      email: row.email || "",
+      phone: row.phone || "",
+      terms: row.terms === "" || row.terms == null ? "" : String(row.terms)
+    };
+  },
+  syncOpenInvoiceAddress() {
+    if (this.dashView !== "detail") return;
+    const row = (this.invoiceRows || []).find((item) => item.id === this.detailId) || { clientName: this.detailClient, email: this.detailEmail };
+    this.detailEmail = this.invoiceAddress(row);
   },
   newClient() {
     this.clientForm = this.blankClientForm();
@@ -806,7 +851,7 @@ window.Alpine.data('appState', () => ({
         this.form.jobDetails = "";
         this.rememberLoggedJob(result.invoiceCode || result.invoiceId, result.invoiceId);
         this.setFeedback(result.message || (adding ? "Job added to the invoice." : "Job logged."), false);
-        this.refreshSnapshot({ quiet: true, announce: false });
+        await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
       this.setFeedback(this.failMessage(result, this.unreachableMessage(true)), true);
@@ -969,7 +1014,7 @@ window.Alpine.data('appState', () => ({
   },
   async refreshBooks() {
     if (this.previewMode) return;
-    await this.refreshSnapshot({ quiet: false, announce: true });
+    await this.refreshSnapshot({ quiet: false, announce: true, resync: true });
   },
   async refreshSnapshot(opts) {
     const quiet = !!(opts && opts.quiet);
@@ -1005,12 +1050,20 @@ window.Alpine.data('appState', () => ({
         this.dashboardLive = false;
         this.dashboardNote = "The live script does not have the dashboard yet. Replace Code.gs in Apps Script, deploy a new version, and approve Drive access.";
         this.setFeedback(this.dashboardNote, true);
-      } else if (!quiet) {
-        this.setFeedback(this.failMessage(res, "Could not load the dashboard."), true);
+      } else if (!quiet || (opts && opts.resync)) {
+        this.noteResyncFailed(res);
       }
     } catch (err) {
-      if (!quiet) this.setFeedback("Could not load the dashboard.", true);
+      if (!quiet || (opts && opts.resync)) this.noteResyncFailed(null);
     }
+  },
+  noteResyncFailed(res) {
+    const message = this.failMessage(res, "Could not read ClientRecords from the spreadsheet. Use Refresh.");
+    if (this.feedback.text && !this.feedback.isError) {
+      this.setFeedback(this.feedback.text + " " + message, true);
+      return;
+    }
+    this.setFeedback(message, true);
   },
   async loadDashboard(opts) {
     const quiet = opts && opts.quiet;
@@ -1140,15 +1193,17 @@ window.Alpine.data('appState', () => ({
     this.detailTotal = this.money(row.total);
     this.detailService = row.servicePeriod || "—";
     this.detailJob = row.jobDetails || "—";
-    this.detailTo = String(row.contact || "").trim();
+    const letterRow = this.invoiceLetterRow(row);
+    const drafted = this.invoiceEmailDraft(letterRow);
+    this.detailEmail = this.invoiceAddress(row);
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.detailIsDraft = row.kind === "draft";
     this.detailCanFinish = row.kind === "due";
     this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
-    if (!sameInvoice) {
-      this.detailEmail = row.email || "";
-      this.detailMessage = this.invoiceEmailDraft(row);
+    if (!sameInvoice || this.detailMessage === this.detailMessageAuto) {
+      this.detailMessage = drafted;
+      this.detailMessageAuto = drafted;
     }
     this.detailLinesRaw = lines || [];
     this.detailLines = this.detailLinesRaw.map((line) => ({
@@ -1192,7 +1247,7 @@ window.Alpine.data('appState', () => ({
         this.driveUrl = res.url || "";
         this.noteIssued(res);
         this.setFeedback(res.message || "Saved to the Invoices folder.", false);
-        if (res.markedInvoiced) this.refreshSnapshot({ quiet: true, announce: false });
+        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
       } else {
         this.showPdfError(res, "Could not save the PDF.");
       }
@@ -1210,7 +1265,7 @@ window.Alpine.data('appState', () => ({
         this.savePdfFile(res.fileName, res.pdfBase64);
         this.noteIssued(res);
         this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
-        if (res.markedInvoiced) this.refreshSnapshot({ quiet: true, announce: false });
+        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
       } else {
         this.setFeedback(this.failMessage(res, "Could not download the PDF."), true);
       }
@@ -1237,7 +1292,7 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         this.noteIssued(res);
         this.setFeedback(res.message || "Invoice emailed.", false);
-        if (res.markedInvoiced) this.refreshSnapshot({ quiet: true, announce: false });
+        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
       } else this.showPdfError(res, "Could not email the PDF.");
     } catch (err) {
       this.setFeedback("Could not email the PDF.", true);
@@ -1275,7 +1330,7 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         this.setDetailPhase("Invoiced");
         this.setFeedback(res.message || "Invoice marked invoiced.", false);
-        this.refreshSnapshot({ quiet: true, announce: false });
+        await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
       this.setFeedback(this.failMessage(res, this.unreachableMessage(true)), true);
@@ -1312,7 +1367,7 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         this.setDetailPhase(res.status || (status === "Undo" ? "Invoiced" : status));
         this.setFeedback(res.message || previewMessage, false);
-        this.refreshSnapshot({ quiet: true, announce: false });
+        await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
       this.setFeedback(this.failMessage(res, this.unreachableMessage(true)), true);
