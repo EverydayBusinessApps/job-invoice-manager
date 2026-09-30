@@ -498,6 +498,8 @@ window.Alpine.data('appState', () => ({
   detailService: "",
   detailJob: "",
   detailEmail: "",
+  detailCc: "",
+  ccNeedsDeploy: false,
   detailFrom: "",
   detailSubject: "",
   detailMessage: "",
@@ -731,6 +733,9 @@ window.Alpine.data('appState', () => ({
     if (stored) this.applySnapshot(stored, true);
     await this.refreshSnapshot({ quiet: !!stored, announce: !stored, resync: true });
   },
+  scrollPage() {
+    try { window.scrollTo(0, 0); } catch (err) {}
+  },
   syncTabClasses() {
     this.tabDashClass = this.currentTab === "dashboard" ? "nav-on" : "";
     this.tabClientsClass = this.currentTab === "clients" ? "nav-on" : "";
@@ -743,14 +748,21 @@ window.Alpine.data('appState', () => ({
     this.dashView = "home";
     this.syncTabClasses();
     this.clearFeedback();
+    this.scrollPage();
   },
   setClientsTab() {
     this.currentTab = "clients";
     this.clientView = "list";
     this.syncTabClasses();
     this.clearFeedback();
+    this.scrollPage();
   },
-  setTrackerTab() { this.currentTab = 'tracker'; this.syncTabClasses(); this.clearFeedback(); },
+  setTrackerTab() {
+    this.currentTab = "tracker";
+    this.syncTabClasses();
+    this.clearFeedback();
+    this.scrollPage();
+  },
   setSummaryTab() {
     this.currentTab = "summary";
     this.taxRatesOpen = false;
@@ -758,6 +770,7 @@ window.Alpine.data('appState', () => ({
     this.syncTabClasses();
     this.clearFeedback();
     this.syncSummary();
+    this.scrollPage();
   },
   toggleTaxRates() {
     this.taxRatesOpen = !this.taxRatesOpen;
@@ -767,6 +780,7 @@ window.Alpine.data('appState', () => ({
     this.currentTab = "settings";
     this.syncTabClasses();
     this.clearFeedback();
+    this.scrollPage();
     await this.loadSettings();
   },
   blankClientForm() {
@@ -1302,6 +1316,7 @@ window.Alpine.data('appState', () => ({
       this.invoices = this.mapInvoices(res.invoices);
       this.refreshClientInvoices();
     }
+    this.ccNeedsDeploy = !this.previewMode && res.emailCc !== true;
     if (!this.previewMode && res.invoicePdf !== "inv-template-plain") {
       this.dashboardNote = "The invoice still shows the sheet grid. Open the EverydayWork spreadsheet https://docs.google.com/spreadsheets/d/1YN1xWdA7OScbXZj72yB5EyjrYA2zsJqwTTJ7-VdTxhM/edit then Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit the web app, set Version to New version, and Deploy. Keep this web app URL.";
     }
@@ -1431,17 +1446,20 @@ window.Alpine.data('appState', () => ({
     this.driveUrl = "";
     this.clearFeedback();
     this.syncVisibleInvoices();
+    this.scrollPage();
   },
   showDashHome() {
     this.dashView = "home";
     this.driveUrl = "";
     this.clearFeedback();
+    this.scrollPage();
   },
   showDashList() {
     this.dashView = "list";
     this.driveUrl = "";
     this.clearFeedback();
     this.syncVisibleInvoices();
+    this.scrollPage();
   },
   prettyPeriod(text) {
     const raw = String(text || "").trim();
@@ -1450,6 +1468,24 @@ window.Alpine.data('appState', () => ({
       const pretty = this.prettyDate(part.trim());
       return pretty === "—" ? part.trim() : pretty;
     }).join(" – ");
+  },
+  ccList(to) {
+    const text = String(this.detailCc || "").trim();
+    if (!text) return { ok: true, value: "" };
+    const skip = String(to || "").trim().toLowerCase();
+    const parts = text.split(/[;,]/).map((part) => part.trim()).filter(Boolean);
+    const kept = [];
+    const seen = {};
+    for (let i = 0; i < parts.length; i++) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parts[i])) {
+        return { ok: false, error: "Enter a valid Cc address, or leave it blank." };
+      }
+      const key = parts[i].toLowerCase();
+      if (key === skip || seen[key]) continue;
+      seen[key] = true;
+      kept.push(parts[i]);
+    }
+    return { ok: true, value: kept.join(", ") };
   },
   invoiceEmailSubject(name, code) {
     const business = String(name || "").trim();
@@ -1482,7 +1518,10 @@ window.Alpine.data('appState', () => ({
     this.setFeedback(wasDraft
       ? "Preview cannot print the PDF. Invoice marked invoiced."
       : "Preview cannot print the PDF. Saving, downloading, or emailing it marks a draft invoiced.", false);
-    if (wasDraft) this.dashView = "list";
+    if (wasDraft) {
+      this.dashView = "list";
+      this.scrollPage();
+    }
   },
   restampInvoice(id, status) {
     const row = (this.invoiceRows || []).find((item) => item.id === id);
@@ -1543,6 +1582,7 @@ window.Alpine.data('appState', () => ({
     const letterRow = this.invoiceLetterRow(row);
     const drafted = this.invoiceEmailDraft(letterRow);
     this.detailEmail = this.invoiceAddress(row);
+    if (!sameInvoice) this.detailCc = "";
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.detailIsDraft = row.kind === "draft";
@@ -1563,6 +1603,7 @@ window.Alpine.data('appState', () => ({
     }));
     this.detailLinesEmpty = this.detailLines.length === 0;
     this.dashView = "detail";
+    if (!keepEmail) this.scrollPage();
   },
   async openInvoice(id) {
     const row = (this.invoiceRows || []).find((item) => item.id === id);
@@ -1611,6 +1652,7 @@ window.Alpine.data('appState', () => ({
           this.setFeedback(this.pdfSavedMessage(res), false);
           if (res.markedInvoiced) {
             this.dashView = "list";
+            this.scrollPage();
             await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
           }
         } else {
@@ -1638,6 +1680,7 @@ window.Alpine.data('appState', () => ({
           this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
           if (res.markedInvoiced) {
             this.dashView = "list";
+            this.scrollPage();
             await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
           }
         } else {
@@ -1655,6 +1698,11 @@ window.Alpine.data('appState', () => ({
       this.setFeedback("Enter an email address to send the PDF.", true);
       return;
     }
+    const cc = this.ccList(email);
+    if (!cc.ok) {
+      this.setFeedback(cc.error, true);
+      return;
+    }
     if (this.previewMode) {
       await this.withInvoiceWait("Sending the invoice…", () => this.wait(1500));
       this.previewIssue();
@@ -1667,6 +1715,7 @@ window.Alpine.data('appState', () => ({
           invoiceId: this.detailId,
           mode: "email",
           email: email,
+          cc: cc.value,
           message: this.detailMessage
         }, { quiet: true, timeoutMs: 60000, write: true });
         if (res && res.success) {
@@ -1674,6 +1723,7 @@ window.Alpine.data('appState', () => ({
           this.setFeedback(res.message || "Invoice emailed.", false);
           if (res.markedInvoiced) {
             this.dashView = "list";
+            this.scrollPage();
             await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
           }
         } else this.showPdfError(res, "Could not email the PDF.");
@@ -1704,6 +1754,7 @@ window.Alpine.data('appState', () => ({
     if (this.previewMode) {
       this.restampInvoice(this.detailId, "Invoiced");
       this.dashView = "list";
+      this.scrollPage();
       this.setFeedback("Invoice " + (this.detailCode || this.detailId) + " marked invoiced.", false);
       return;
     }
@@ -1715,6 +1766,7 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         this.setDetailPhase("Invoiced");
         this.dashView = "list";
+        this.scrollPage();
         this.setFeedback(res.message || "Invoice marked invoiced.", false);
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
