@@ -11,7 +11,7 @@ function invoicePdfEngine_() {
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({ 
     success: true, 
-    message: "EverydayWork API operational. Awaiting data vectors.",
+    message: "EverydayWork is ready.",
     invoicePdf: invoicePdfEngine_()
   })).setMimeType(ContentService.MimeType.JSON);
 }
@@ -292,14 +292,25 @@ function executeTimeLog(payload) {
   const mode = String(payload.invoiceMode || "new").toLowerCase();
   let invoiceId = "";
 
+  // A repeat tap must not skip the draft rule. Check that first, then
+  // treat an identical job from the last two minutes as the save that
+  // already landed, before opening another draft.
   if (mode === "existing") {
     invoiceId = String(payload.invoiceId || "").trim();
     if (!invoiceId) return { success: false, error: "Choose an existing invoice." };
     if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
     const draftGuard = guardDraftInvoice_(invoiceSheet, invoiceId);
     if (!draftGuard.ok) return { success: false, error: draftGuard.error };
-  } else {
-    if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
+  } else if (!invoiceSheet) {
+    return { success: false, error: "Missing InvoiceList tab." };
+  }
+
+  const replay = recentMatchingEntry_(timeSheet, payload);
+  if (replay) {
+    return jobSavedResult_(mode, replay.invoiceId, overnight, true);
+  }
+
+  if (mode !== "existing") {
     invoiceId = createDraftInvoice_(invoiceSheet);
   }
 
@@ -316,18 +327,67 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
-  const message = mode === "existing"
-    ? ("Shift added to invoice " + invoiceId + ".")
-    : (overnight
-      ? ("Overnight shift logged on new invoice " + invoiceId + ".")
-      : ("Shift logged on new invoice " + invoiceId + "."));
+  return jobSavedResult_(mode, invoiceId, overnight, false);
+}
 
-  return attachSnapshot_(ss, {
+function jobSavedResult_(mode, invoiceId, overnight, alreadySaved) {
+  const code = canonicalInvoiceCode_(invoiceId);
+  let message;
+  if (String(mode || "").toLowerCase() === "existing") {
+    message = "Job added to invoice " + code + ".";
+  } else if (overnight) {
+    message = "Overnight job logged on invoice " + code + ".";
+  } else {
+    message = "Job logged on invoice " + code + ".";
+  }
+  return {
     success: true,
     message: message,
-    invoiceId: invoiceId,
-    invoices: fetchInvoiceRecords()
-  });
+    invoiceId: String(invoiceId),
+    invoiceCode: code,
+    alreadySaved: !!alreadySaved
+  };
+}
+
+function sameClock_(cellValue, timeStr) {
+  const clock = clockParts_(timeStr);
+  if (!clock) return false;
+  const want = clock.hours * 60 + clock.minutes;
+  if (typeof cellValue === "number" && isFinite(cellValue)) {
+    return Math.round(cellValue * 1440) === want;
+  }
+  if (isDateValue_(cellValue)) {
+    return cellValue.getHours() * 60 + cellValue.getMinutes() === want;
+  }
+  const match = String(cellValue || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return false;
+  return Number(match[1]) * 60 + Number(match[2]) === want;
+}
+
+// A second tap of the same job, before the first answer got back to the van,
+// must not open another invoice.
+function recentMatchingEntry_(sheet, payload) {
+  const last = lastFilledRow_(sheet, 4);
+  if (last < 2) return null;
+  const count = last - 1;
+  const data = sheet.getRange(2, 3, count, 11).getValues();
+  const wantClient = clientText_(payload.clientName);
+  const wantJob = clientText_(payload.jobDetails);
+  const wantLunch = clientText_(payload.lunch || "na");
+  const wantDate = isoDate_(payload.date);
+  const now = Date.now();
+  for (let i = data.length - 1; i >= 0; i--) {
+    const client = clientText_(data[i][1]);
+    if (!client || client.toLowerCase() !== wantClient.toLowerCase()) continue;
+    const updated = data[i][10];
+    if (!isDateValue_(updated) || Math.abs(now - updated.getTime()) > 2 * 60 * 1000) return null;
+    if (clientText_(data[i][3]) !== wantJob) return null;
+    if (clientText_(data[i][5] || "na") !== wantLunch) return null;
+    if (isoDate_(data[i][2]) !== wantDate) return null;
+    if (!sameClock_(data[i][4], payload.start) || !sameClock_(data[i][6], payload.finish)) return null;
+    return { invoiceId: data[i][0] };
+  }
+  return null;
 }
 
 /**
@@ -471,13 +531,14 @@ function updateInvoiceStatus(payload) {
 
   invoiceSheet.getRange(row, 9).setValue(status); // Column I: Invoice Status
   lockBilledTimeRates_(ss, { invoiceIds: [invoiceId] });
-  return attachSnapshot_(ss, {
+  const code = canonicalInvoiceCode_(invoiceId);
+  return {
     success: true,
     invoiceId: invoiceId,
+    invoiceCode: code,
     status: status,
-    message: "Invoice " + invoiceId + " marked " + status + ".",
-    invoices: fetchInvoiceRecords()
-  });
+    message: "Invoice " + code + " marked " + status + "."
+  };
 }
 
 /**
@@ -504,13 +565,14 @@ function compileSingleInvoice(payload) {
   if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
   lockBilledTimeRates_(ss, { invoiceIds: [invoiceId] });
 
-  return attachSnapshot_(ss, {
+  const code = canonicalInvoiceCode_(invoiceId);
+  return {
     success: true,
     invoiceId: invoiceId,
+    invoiceCode: code,
     status: "Invoiced",
-    message: "Invoice " + invoiceId + " set to Invoiced. Save the PDF or download it to email.",
-    invoices: fetchInvoiceRecords()
-  });
+    message: "Invoice " + code + " marked invoiced."
+  };
 }
 
 function fetchDashboard() {

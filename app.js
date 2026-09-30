@@ -165,7 +165,7 @@ window.Alpine = {
 
       el.addEventListener('click', (event) => {
         const btn = event.target && event.target.closest ? event.target.closest('[data-action]') : null;
-        if (!btn || !el.contains(btn)) return;
+        if (!btn || !el.contains(btn) || btn.disabled) return;
         const name = btn.getAttribute('data-action');
         const id = btn.getAttribute('data-id') || '';
         if (typeof proxyState[name] === 'function') proxyState[name](id);
@@ -176,6 +176,7 @@ window.Alpine = {
         if (hasClick) {
           const clickExpr = btn.getAttribute('@click') || btn.getAttribute('x-on:click');
           btn.addEventListener('click', () => {
+            if (btn.disabled) return;
             const funcName = clickExpr.replace('()', '').trim();
             if (typeof proxyState[funcName] === 'function') proxyState[funcName]();
           });
@@ -221,6 +222,9 @@ window.Alpine = {
     });
     this.applyClassBindings(root, state);
     this.syncModels(root, state);
+    root.querySelectorAll('[data-disable-when]').forEach((item) => {
+      item.disabled = !!this.getPath(state, item.getAttribute('data-disable-when'));
+    });
     root.removeAttribute('x-cloak');
   },
   applyClassBindings(root, state) {
@@ -280,6 +284,9 @@ function sampleDashboard() {
 // ==========================================
 window.Alpine.data('appState', () => ({
   loading: false,
+  loadingLabel: "Updating…",
+  saving: false,
+  logButtonLabel: "Log a job",
   currentTab: 'dashboard',
   feedback: { text: '', isError: false },
   clients: [],
@@ -437,7 +444,7 @@ window.Alpine.data('appState', () => ({
     const existing = this.form.invoiceMode === 'existing';
     this.showExistingInvoices = existing;
     if (!existing) {
-      this.invoiceHint = 'This shift will open a new draft invoice.';
+      this.invoiceHint = 'This job will open a new draft invoice.';
       return;
     }
     if (!this.form.clientName) {
@@ -447,13 +454,13 @@ window.Alpine.data('appState', () => ({
     if (!this.clientInvoices.length) {
       const named = (this.invoices || []).filter((inv) => !inv.clientName || inv.clientName === this.form.clientName);
       this.invoiceHint = named.length
-        ? 'No draft invoices left for this client. Time cannot be added once an invoice leaves Draft.'
-        : 'No invoices yet for this client. Create a new one instead.';
+        ? "No draft invoices left for this client. Time can't be added once an invoice leaves Draft."
+        : 'No invoices yet for this client. Start a new one.';
       return;
     }
     this.invoiceHint = this.form.invoiceId
-      ? ('This shift will be added to draft invoice ' + this.form.invoiceId + '.')
-      : 'Choose a draft invoice. Time cannot be added once an invoice leaves Draft.';
+      ? ('This job will be added to invoice ' + this.form.invoiceId + '.')
+      : "Choose a draft invoice. Time can't be added once an invoice leaves Draft.";
   },
   onClientChange() {
     this.form.invoiceId = '';
@@ -462,6 +469,19 @@ window.Alpine.data('appState', () => ({
   onInvoiceModeChange() {
     if (this.form.invoiceMode !== 'existing') this.form.invoiceId = '';
     this.syncInvoiceHint();
+    this.syncLogButton();
+  },
+  syncLogButton() {
+    if (this.saving) {
+      this.logButtonLabel = "Saving…";
+      return;
+    }
+    this.logButtonLabel = this.form.invoiceMode === "existing" ? "Add to invoice" : "Log a job";
+  },
+  unreachableMessage(writing) {
+    return writing
+      ? "The workbook didn't confirm the save. Refresh and check it isn't already there before you try again."
+      : "Couldn't reach the workbook. Try Refresh.";
   },
   failMessage(res, fallback) {
     if (res && res.error) return String(res.error);
@@ -469,26 +489,38 @@ window.Alpine.data('appState', () => ({
   },
   async api(actionName, payloadData = {}, opts) {
     const quiet = opts && opts.quiet;
+    const writing = !!(opts && opts.write);
     if (!quiet) this.loading = true;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 40000) : null;
     try {
       const response = await fetch(this.apiUrl, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action: actionName, payload: payloadData })
+        body: JSON.stringify({ action: actionName, payload: payloadData }),
+        signal: controller ? controller.signal : undefined
       });
-      const result = await response.json();
+      const text = await response.text();
+      let result;
+      try {
+        result = JSON.parse(text);
+      } catch (err) {
+        result = { success: false, error: this.unreachableMessage(writing), unconfirmed: writing };
+      }
       if (!quiet) this.loading = false;
       return result;
     } catch (err) {
       if (!quiet) this.loading = false;
-      if (!quiet) this.setFeedback("Database transmission failure.", true);
-      throw err;
+      return { success: false, error: this.unreachableMessage(writing), unconfirmed: writing };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   },
   async init() {
     this.syncTabClasses();
     this.syncPeriodClasses();
     this.syncOvernight();
+    this.syncLogButton();
     if (this.previewMode) {
       await this.loadDashboard();
       return;
@@ -701,10 +733,25 @@ window.Alpine.data('appState', () => ({
     }
   },
 
+  rememberLoggedJob(code, rawId) {
+    const id = String(code || rawId || "").trim();
+    if (!id) return;
+    const raw = String(rawId || "").trim();
+    if (this.invoices.some((inv) => inv.id === id || (raw && inv.id === raw))) return;
+    this.invoices = this.invoices.concat([{
+      id: id,
+      clientName: this.form.clientName,
+      status: "Draft",
+      date: this.form.date,
+      label: "Invoice " + id + " · Draft"
+    }]);
+    this.refreshClientInvoices();
+  },
   async submitForm() {
+    if (this.saving) return;
     this.clearFeedback();
     if (!this.form.clientName) {
-      this.setFeedback("Choose a client account first.", true);
+      this.setFeedback("Choose a client.", true);
       return;
     }
     if (this.timeToMinutes(this.form.start) == null || this.timeToMinutes(this.form.finish) == null) {
@@ -712,18 +759,30 @@ window.Alpine.data('appState', () => ({
       return;
     }
     if (this.form.invoiceMode === 'existing' && !this.form.invoiceId) {
-      this.setFeedback("Choose a draft invoice, or create a new one.", true);
+      this.setFeedback("Choose a draft invoice, or start a new one.", true);
       return;
     }
     if (this.form.invoiceMode === 'existing') {
       const chosen = (this.invoices || []).find((inv) => inv.id === String(this.form.invoiceId));
       if (chosen && !this.isDraftStatus(chosen.status)) {
-        this.setFeedback("Time can only be added while an invoice is Draft. Invoice " + chosen.id + " is " + chosen.status + ".", true);
+        this.setFeedback("Time can't be added once an invoice leaves Draft. Invoice " + chosen.id + " is " + chosen.status + ".", true);
         return;
       }
     }
     this.syncOvernight();
+    this.saving = true;
+    this.loadingLabel = "Saving the job…";
+    this.syncLogButton();
+    const adding = this.form.invoiceMode === "existing";
+    const chosenId = this.form.invoiceId;
     try {
+      if (this.previewMode) {
+        const code = adding && chosenId ? chosenId : "INV-JR26-018";
+        this.form.jobDetails = "";
+        this.rememberLoggedJob(code);
+        this.setFeedback(adding ? ("Job added to invoice " + code + ".") : ("Job logged on invoice " + code + "."), false);
+        return;
+      }
       const result = await this.api('logTimeEntry', {
         clientName: this.form.clientName,
         date: this.form.date,
@@ -734,29 +793,19 @@ window.Alpine.data('appState', () => ({
         overnight: this.overnight,
         invoiceMode: this.form.invoiceMode,
         invoiceId: this.form.invoiceId
-      });
+      }, { write: true });
       if (result && result.success) {
-        this.setFeedback(result.message || "Shift records submitted to ledger!", false);
-        this.form.jobDetails = '';
-        if (!this.adoptWrite(result) && result.invoices) this.invoices = this.mapInvoices(result.invoices);
-        else if (result.invoiceId) {
-          const id = String(result.invoiceId);
-          if (!this.invoices.some((inv) => inv.id === id)) {
-            this.invoices = this.invoices.concat([{
-              id: id,
-              clientName: this.form.clientName,
-              status: 'Draft',
-              date: this.form.date,
-              label: 'Invoice ' + id + ' · Draft'
-            }]);
-          }
-        }
-        this.refreshClientInvoices();
-      } else {
-        this.setFeedback(this.failMessage(result, "API Connection dropped."), true);
+        this.form.jobDetails = "";
+        this.rememberLoggedJob(result.invoiceCode || result.invoiceId, result.invoiceId);
+        this.setFeedback(result.message || (adding ? "Job added to the invoice." : "Job logged."), false);
+        this.refreshSnapshot({ quiet: true, announce: false });
+        return;
       }
-    } catch (e) {
-      this.setFeedback("API Connection dropped.", true);
+      this.setFeedback(this.failMessage(result, this.unreachableMessage(true)), true);
+    } finally {
+      this.saving = false;
+      this.loadingLabel = "Updating…";
+      this.syncLogButton();
     }
   },
 
@@ -1161,52 +1210,59 @@ window.Alpine.data('appState', () => ({
     if (this.driveUrl) window.open(this.driveUrl, "_blank", "noopener");
   },
   async compileOpenInvoice() {
-    if (!this.detailId) return;
+    if (this.saving || !this.detailId) return;
     if (this.previewMode) {
-      this.setFeedback("Mark Invoiced saves this draft as Invoiced after the script is updated.", false);
+      this.detailStatus = "Invoiced";
+      this.detailIsDraft = false;
+      this.setFeedback("Invoice " + (this.detailCode || this.detailId) + " marked invoiced.", false);
       return;
     }
+    this.saving = true;
+    this.loadingLabel = "Saving the invoice…";
     this.clearFeedback();
     try {
-      const res = await this.api("compileInvoice", { invoiceId: this.detailId });
+      const res = await this.api("compileInvoice", { invoiceId: this.detailId }, { write: true });
       if (res && res.success) {
-        if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
-        this.refreshClientInvoices();
-        if (!res.snapshot) await this.loadDashboard({ quiet: true });
-        const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
-        if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], true);
-        this.setFeedback(res.message || "Invoice set to Invoiced.", false);
-      } else {
-        this.setFeedback(this.failMessage(res, "Could not mark that invoice Invoiced."), true);
+        this.detailStatus = "Invoiced";
+        this.detailIsDraft = false;
+        this.setFeedback(res.message || "Invoice marked invoiced.", false);
+        this.refreshSnapshot({ quiet: true, announce: false });
+        return;
       }
-    } catch (err) {
-      this.setFeedback("Could not mark that invoice Invoiced.", true);
+      this.setFeedback(this.failMessage(res, this.unreachableMessage(true)), true);
+    } finally {
+      this.saving = false;
+      this.loadingLabel = "Updating…";
     }
   },
   async markDetailPaid() { return this.markDetailStatus("Paid"); },
   async markDetailUnpaid() { return this.markDetailStatus("Unpaid"); },
   async markDetailBad() { return this.markDetailStatus("Bad debt"); },
   async markDetailStatus(status) {
-    if (!this.detailId) return;
+    if (this.saving || !this.detailId) return;
+    const label = status === "Bad debt" ? "bad debt" : status.toLowerCase();
     if (this.previewMode) {
-      this.setFeedback("Status is saved on InvoiceList after the script is updated.", false);
+      this.detailStatus = status;
+      this.detailIsDraft = false;
+      this.setFeedback("Invoice " + (this.detailCode || this.detailId) + " marked " + label + ".", false);
       return;
     }
+    this.saving = true;
+    this.loadingLabel = "Saving the invoice…";
     this.clearFeedback();
     try {
-      const res = await this.api("updateInvoiceStatus", { invoiceId: this.detailId, status: status });
+      const res = await this.api("updateInvoiceStatus", { invoiceId: this.detailId, status: status }, { write: true });
       if (res && res.success) {
-        if (!this.adoptWrite(res) && res.invoices) this.invoices = this.mapInvoices(res.invoices);
-        this.refreshClientInvoices();
-        if (!res.snapshot) await this.loadDashboard({ quiet: true });
-        const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
-        if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], true);
-        this.setFeedback(res.message || ("Invoice marked " + status + "."), false);
-      } else {
-        this.setFeedback(this.failMessage(res, "Could not update invoice status."), true);
+        this.detailStatus = status;
+        this.detailIsDraft = false;
+        this.setFeedback(res.message || ("Invoice marked " + label + "."), false);
+        this.refreshSnapshot({ quiet: true, announce: false });
+        return;
       }
-    } catch (err) {
-      this.setFeedback("Could not update invoice status.", true);
+      this.setFeedback(this.failMessage(res, this.unreachableMessage(true)), true);
+    } finally {
+      this.saving = false;
+      this.loadingLabel = "Updating…";
     }
   },
   setFeedback(msg, isErr) { this.feedback.text = msg; this.feedback.isError = isErr; },
