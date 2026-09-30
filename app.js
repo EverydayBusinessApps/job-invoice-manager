@@ -321,7 +321,7 @@ window.Alpine.data('appState', () => ({
   invoices: [],
   clientInvoices: [],
   showExistingInvoices: false,
-  invoiceHint: 'This job will open a new draft invoice.',
+  invoiceHint: 'This starts a new invoice. You can add more jobs to it before you send it.',
   overnight: false,
   overnightLabel: '',
   previewMode: /(?:\?|&)preview=1(?:&|$)/.test(typeof location !== "undefined" ? location.search : ""),
@@ -501,7 +501,7 @@ window.Alpine.data('appState', () => ({
     const existing = this.form.invoiceMode === 'existing';
     this.showExistingInvoices = existing;
     if (!existing) {
-      this.invoiceHint = 'This job will open a new draft invoice.';
+      this.invoiceHint = 'This starts a new invoice. You can add more jobs to it before you send it.';
       return;
     }
     if (!this.form.clientName) {
