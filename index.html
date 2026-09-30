@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=15">
-  <script defer src="app.js?v=22"></script>
+  <link rel="stylesheet" href="style.css?v=16">
+  <script defer src="app.js?v=23"></script>
 </head>
 <body>
 
@@ -69,85 +69,64 @@
           </div>
         </div>
 
-        <div x-show="dashView === 'list'">
-        <section>
-          <button type="button" class="btn-ghost" data-action="showDashHome">Back to dashboard</button>
-          <div class="card-title" x-text="listTitle"></div>
-          <p class="shift-note" x-show="listHint" x-text="listHint"></p>
-          <template x-for="inv in visibleInvoices">
-            <button type="button" class="inv-row" data-action="openInvoice" :data-id="inv.id">
-              <span class="inv-main">
-                <span class="inv-title" x-text="inv.title"></span>
-                <span class="inv-meta" x-text="inv.meta"></span>
-              </span>
-              <span class="inv-side">
-                <span class="pill" :class="inv.pillClass" x-text="inv.pill"></span>
-                <span class="inv-amt" x-text="inv.amount"></span>
-              </span>
-            </button>
-          </template>
-          <p class="shift-note" x-show="listEmpty" x-text="listEmptyLabel"></p>
-        </section>
+        <div x-show="dashView === 'list'" class="sheet-page">
+          <h2 class="page-title" x-text="listTitle"></h2>
+          <p class="page-lead" x-show="listHint" x-text="listHint"></p>
+          <div class="inv-stack">
+            <template x-for="inv in visibleInvoices">
+              <article class="inv-card">
+                <div class="inv-client" x-text="inv.client"></div>
+                <div class="inv-code" x-text="inv.line"></div>
+                <div class="inv-amount" x-text="inv.amount"></div>
+                <div class="inv-actions">
+                  <button type="button" x-show="listShowsSend" data-action="markListInvoiced" :data-id="inv.id" data-disable-when="saving">Mark invoiced</button>
+                  <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Open</button>
+                  <button type="button" x-show="listShowsCollect" data-action="markListPaid" :data-id="inv.id" data-disable-when="saving">Mark paid</button>
+                  <button type="button" class="btn-line" x-show="listShowsCollect" data-action="markListWrittenOff" :data-id="inv.id" data-disable-when="saving">Write off</button>
+                  <button type="button" class="btn-line btn-auto" x-show="listShowsDone" data-action="undoListStatus" :data-id="inv.id" data-disable-when="saving">Undo</button>
+                </div>
+              </article>
+            </template>
+          </div>
+          <p class="page-lead" x-show="listEmpty" x-text="listEmptyLabel"></p>
         </div>
 
-        <div x-show="dashView === 'detail'">
-        <section>
-          <button type="button" class="btn-ghost" data-action="showDashList">Back to list</button>
-          <div class="card-title" x-text="detailCode"></div>
-          <p class="shift-note" x-text="detailClient"></p>
+        <div x-show="dashView === 'detail'" class="sheet-page">
+          <h2 class="page-title" x-text="detailCode"></h2>
+          <div class="send-bar" x-text="detailClient"></div>
           <div class="grid-2">
             <div class="metric-box">
               <span class="metric-title">Status</span>
               <span class="metric-value metric-value-sm" x-text="detailStatus"></span>
             </div>
             <div class="metric-box alt">
-              <span class="metric-title">Total</span>
+              <span class="metric-title gold">Total</span>
               <span class="metric-value" x-text="detailTotal"></span>
-              <span class="metric-sub" x-text="detailHours"></span>
             </div>
             <div class="metric-box">
               <span class="metric-title">Invoice date</span>
               <span class="metric-value metric-value-sm" x-text="detailWhen"></span>
             </div>
             <div class="metric-box">
-              <span class="metric-title">Payment</span>
-              <span class="metric-value metric-value-sm" x-text="detailDue"></span>
+              <span class="metric-title">Due</span>
+              <span class="metric-value metric-value-sm" x-text="detailDueDate"></span>
             </div>
           </div>
-          <p class="shift-note" x-text="detailJob"></p>
-          <div class="card-title">Shifts</div>
-          <template x-for="line in detailLines">
-            <div class="line">
-              <span x-text="line.when"></span>
-              <span x-text="line.details"></span>
-              <span class="line-amt" x-text="line.amount"></span>
-              <span class="line-sub" x-text="line.span"></span>
-              <span class="line-sub" x-text="line.hours"></span>
-            </div>
-          </template>
-          <p class="shift-note" x-show="detailLinesEmpty">No shifts are linked to this invoice yet.</p>
-          <p class="shift-note">Saves a PDF to your Drive, with your logo and bank details. Download it from there, or email it. A copy stays in your invoices folder.</p>
-          <button type="button" class="btn-alt" x-show="detailCanSavePdf" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
-          <button type="button" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
+          <div class="send-bar" x-text="detailWork"></div>
+          <h3 class="send-heading">Send this invoice</h3>
           <div class="form-group">
-            <label>Email the PDF</label>
+            <label class="to-label">To</label>
             <input type="email" x-model="detailEmail" placeholder="client@company.com" data-disable-when="saving">
           </div>
-          <div class="form-group">
-            <label>Subject</label>
-            <input type="text" x-model="detailSubject" readonly>
+          <button type="button" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
+          <div class="inv-actions">
+            <button type="button" class="btn-line" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
+            <button type="button" class="btn-line" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
           </div>
-          <div class="form-group">
-            <label>Email message</label>
-            <textarea x-model="detailMessage" rows="9" data-disable-when="saving"></textarea>
-          </div>
-          <button type="button" class="btn-ghost" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
-          <button type="button" class="btn-alt" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
-          <button type="button" class="btn-paid" x-show="detailCanFinish" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
-          <button type="button" class="btn-bad" x-show="detailCanFinish" data-action="markDetailWrittenOff" data-disable-when="saving">Written off</button>
-          <button type="button" class="btn-ghost" x-show="detailCanUndo" data-action="undoDetailStatus" data-disable-when="saving">Undo</button>
-          <button type="button" class="btn-ghost" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
-        </section>
+          <h3 class="send-heading">When it has gone out</h3>
+          <button type="button" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
+          <p class="page-lead">That moves it to invoices to collect.</p>
+          <button type="button" class="btn-line btn-auto" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
         </div>
       </div>
 
