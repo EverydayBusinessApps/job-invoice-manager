@@ -366,8 +366,8 @@ window.Alpine.data('appState', () => ({
   loading: false,
   loadingLabel: "Updating…",
   saving: false,
-  savePdfLabel: "Save PDF to Drive",
-  downloadPdfLabel: "Download PDF",
+  savePdfLabel: "Save PDF",
+  downloadPdfLabel: "Download",
   emailPdfLabel: "Email PDF",
   logButtonLabel: "Log a job",
   clientButtonLabel: "Save client",
@@ -416,6 +416,9 @@ window.Alpine.data('appState', () => ({
   listScope: "open",
   listTitle: "Invoices",
   listHint: "",
+  listShowsSend: false,
+  listShowsCollect: false,
+  listShowsDone: false,
   listEmpty: false,
   listEmptyLabel: "Nothing in this list.",
   periodWeekClass: "",
@@ -488,6 +491,8 @@ window.Alpine.data('appState', () => ({
   detailStatus: "",
   detailWhen: "",
   detailDue: "",
+  detailDueDate: "—",
+  detailWork: "",
   detailHours: "",
   detailTotal: "",
   detailService: "",
@@ -682,8 +687,8 @@ window.Alpine.data('appState', () => ({
     return new Promise((resolve) => setTimeout(resolve, ms));
   },
   syncPdfLabels(active) {
-    this.savePdfLabel = active === "Saving the PDF…" ? "Saving…" : "Save PDF to Drive";
-    this.downloadPdfLabel = active === "Downloading the PDF…" ? "Downloading…" : "Download PDF";
+    this.savePdfLabel = active === "Saving the PDF…" ? "Saving…" : "Save PDF";
+    this.downloadPdfLabel = active === "Downloading the PDF…" ? "Downloading…" : "Download";
     this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : "Email PDF";
   },
   async withInvoiceWait(label, fn) {
@@ -735,6 +740,7 @@ window.Alpine.data('appState', () => ({
   },
   setDashTab() {
     this.currentTab = "dashboard";
+    this.dashView = "home";
     this.syncTabClasses();
     this.clearFeedback();
   },
@@ -1207,14 +1213,20 @@ window.Alpine.data('appState', () => ({
     if (filter === "due") rows = rows.filter((row) => row.kind === "due");
     else if (filter === "send" || filter === "draft") rows = rows.filter((row) => row.kind === "draft");
     else if (filter === "done") rows = rows.filter((row) => row.kind === "paid" || row.kind === "writtenoff");
-    this.visibleInvoices = rows.map((row) => ({
-      id: row.id,
-      title: row.code || row.id,
-      meta: this.invoiceMeta(row),
-      amount: this.money(row.total),
-      pill: row.status || "Draft",
-      pillClass: "pill-" + (row.kind || "due")
-    }));
+    const showStatus = filter === "send" || filter === "draft" || filter === "done";
+    this.listShowsSend = filter === "send" || filter === "draft";
+    this.listShowsCollect = filter === "due";
+    this.listShowsDone = filter === "done";
+    this.visibleInvoices = rows.map((row) => {
+      const code = row.code || row.id;
+      const status = row.status || "Draft";
+      return {
+        id: row.id,
+        client: row.clientName || "No client",
+        line: showStatus ? (code + " · " + status) : code,
+        amount: this.money(row.total)
+      };
+    });
     this.listEmpty = this.visibleInvoices.length === 0;
     this.listEmptyLabel = "Nothing in this list.";
   },
@@ -1409,10 +1421,10 @@ window.Alpine.data('appState', () => ({
     };
     this.listTitle = (titles[kind] || "Invoices") + (periodScoped && this.activeLabel ? " · " + this.activeLabel : "");
     const hints = {
-      due: "Sent, and not paid yet. Open one to mark it paid or written off.",
-      send: "Not sent yet. Open one and mark it invoiced, then create the PDF.",
-      draft: "Not sent yet. Open one and mark it invoiced, then create the PDF.",
-      done: "Paid or written off. Undo puts one back to invoiced."
+      due: "Payment in? Mark it paid.",
+      send: "Ready? Mark them invoiced.",
+      draft: "Ready? Mark them invoiced.",
+      done: "Wrong one? Undo puts it back to collect."
     };
     this.listHint = hints[kind] || "";
     this.dashView = "list";
@@ -1466,10 +1478,51 @@ window.Alpine.data('appState', () => ({
   },
   previewIssue() {
     const wasDraft = this.detailIsDraft;
-    if (wasDraft) this.setDetailPhase("Invoiced");
+    if (wasDraft) this.restampInvoice(this.detailId, "Invoiced");
     this.setFeedback(wasDraft
       ? "Preview cannot print the PDF. Invoice marked invoiced."
       : "Preview cannot print the PDF. Saving, downloading, or emailing it marks a draft invoiced.", false);
+    if (wasDraft) this.dashView = "list";
+  },
+  restampInvoice(id, status) {
+    const row = (this.invoiceRows || []).find((item) => item.id === id);
+    if (!row) return;
+    const label = status === "Undo" ? "Invoiced" : status;
+    row.status = label;
+    if (label === "Draft") row.kind = "draft";
+    else if (label === "Invoiced") row.kind = "due";
+    else if (label === "Paid") row.kind = "paid";
+    else if (label === "Written off") row.kind = "writtenoff";
+    this.recomputeOpenPiles();
+    this.syncVisibleInvoices();
+    if (this.detailId === row.id) this.setDetailPhase(label);
+  },
+  recomputeOpenPiles() {
+    const rows = this.invoiceRows || [];
+    const ofKind = (kind) => rows.filter((row) => row.kind === kind);
+    const sum = (kind) => ofKind(kind).reduce((total, row) => total + (Number(row.total) || 0), 0);
+    this.openSendAmount = this.money(sum("draft"));
+    this.openSendCount = this.countLabel(ofKind("draft").length, "invoice", "invoices");
+    const due = ofKind("due");
+    const overdue = due.filter((row) => row.overdue).length;
+    let collect = this.countLabel(due.length, "invoice", "invoices");
+    if (overdue) collect += " · " + this.countLabel(overdue, "overdue", "overdue");
+    this.openCollectAmount = this.money(sum("due"));
+    this.openCollectCount = collect;
+    const paid = ofKind("paid");
+    const written = ofKind("writtenoff");
+    const doneBits = [];
+    if (paid.length) doneBits.push(this.countLabel(paid.length, "paid", "paid"));
+    if (written.length) doneBits.push(this.countLabel(written.length, "written off", "written off"));
+    this.openDoneAmount = this.money(sum("paid"));
+    this.openDoneCount = doneBits.length ? doneBits.join(" · ") : "0 invoices";
+  },
+  focusInvoice(id) {
+    const row = (this.invoiceRows || []).find((item) => item.id === id);
+    if (!row) return null;
+    this.detailId = row.id;
+    this.detailCode = row.code || row.id;
+    return row;
   },
   fillDetail(row, lines, keepEmail) {
     const sameInvoice = !!keepEmail && this.detailId === row.id;
@@ -1477,9 +1530,13 @@ window.Alpine.data('appState', () => ({
     this.detailCode = row.code || row.id;
     this.detailClient = row.clientName || "No client";
     this.detailStatus = row.status || "Draft";
-    this.detailWhen = row.date ? this.prettyDate(row.date) : "No invoice date";
+    this.detailWhen = row.date ? this.prettyDate(row.date) : "—";
     this.detailDue = row.dueDate ? this.dueNote(row) : "No due date yet";
+    this.detailDueDate = row.dueDate ? this.prettyDate(row.dueDate) : "—";
     this.detailHours = this.hoursText(row.hours) + " h";
+    const fromLine = (lines || []).map((line) => line && line.details).filter(Boolean)[0] || "";
+    const job = row.jobDetails && row.jobDetails !== "—" ? row.jobDetails : fromLine;
+    this.detailWork = job ? (job + " · " + this.detailHours) : this.detailHours;
     this.detailTotal = this.money(row.total);
     this.detailService = row.servicePeriod || "—";
     this.detailJob = row.jobDetails || "—";
@@ -1537,7 +1594,7 @@ window.Alpine.data('appState', () => ({
     return msg;
   },
   async saveInvoicePdf() {
-    if (this.saving || !this.detailId || !this.detailCanSavePdf) return;
+    if (this.saving || !this.detailId) return;
     const code = this.detailCode || this.detailId;
     if (this.previewMode) {
       await this.withInvoiceWait("Saving the PDF…", () => this.wait(1500));
@@ -1552,7 +1609,10 @@ window.Alpine.data('appState', () => ({
           this.driveUrl = res.url || "";
           this.noteIssued(res);
           this.setFeedback(this.pdfSavedMessage(res), false);
-          if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+          if (res.markedInvoiced) {
+            this.dashView = "list";
+            await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+          }
         } else {
           this.showPdfError(res, "Could not save " + code + " to the Invoices folder.");
         }
@@ -1576,7 +1636,10 @@ window.Alpine.data('appState', () => ({
           this.savePdfFile(res.fileName, res.pdfBase64);
           this.noteIssued(res);
           this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
-          if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+          if (res.markedInvoiced) {
+            this.dashView = "list";
+            await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+          }
         } else {
           this.setFeedback(this.failMessage(res, "Could not download the PDF."), true);
         }
@@ -1609,7 +1672,10 @@ window.Alpine.data('appState', () => ({
         if (res && res.success) {
           this.noteIssued(res);
           this.setFeedback(res.message || "Invoice emailed.", false);
-          if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+          if (res.markedInvoiced) {
+            this.dashView = "list";
+            await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+          }
         } else this.showPdfError(res, "Could not email the PDF.");
       } catch (err) {
         this.setFeedback("Could not email the PDF.", true);
@@ -1636,7 +1702,8 @@ window.Alpine.data('appState', () => ({
   async compileOpenInvoice() {
     if (this.saving || !this.detailId) return;
     if (this.previewMode) {
-      this.setDetailPhase("Invoiced");
+      this.restampInvoice(this.detailId, "Invoiced");
+      this.dashView = "list";
       this.setFeedback("Invoice " + (this.detailCode || this.detailId) + " marked invoiced.", false);
       return;
     }
@@ -1647,6 +1714,7 @@ window.Alpine.data('appState', () => ({
       const res = await this.api("compileInvoice", { invoiceId: this.detailId }, { write: true });
       if (res && res.success) {
         this.setDetailPhase("Invoiced");
+        this.dashView = "list";
         this.setFeedback(res.message || "Invoice marked invoiced.", false);
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
@@ -1660,6 +1728,22 @@ window.Alpine.data('appState', () => ({
   async markDetailPaid() { return this.markDetailStatus("Paid"); },
   async markDetailWrittenOff() { return this.markDetailStatus("Written off"); },
   async undoDetailStatus() { return this.markDetailStatus("Undo"); },
+  async markListInvoiced(id) {
+    if (this.saving || !this.focusInvoice(id)) return;
+    return this.compileOpenInvoice();
+  },
+  async markListPaid(id) {
+    if (this.saving || !this.focusInvoice(id)) return;
+    return this.markDetailStatus("Paid");
+  },
+  async markListWrittenOff(id) {
+    if (this.saving || !this.focusInvoice(id)) return;
+    return this.markDetailStatus("Written off");
+  },
+  async undoListStatus(id) {
+    if (this.saving || !this.focusInvoice(id)) return;
+    return this.markDetailStatus("Undo");
+  },
   setDetailPhase(status) {
     this.detailStatus = status;
     this.detailIsDraft = status === "Draft";
@@ -1671,10 +1755,10 @@ window.Alpine.data('appState', () => ({
     if (this.saving || !this.detailId) return;
     const code = this.detailCode || this.detailId;
     const previewMessage = status === "Undo"
-      ? ("Invoice " + code + " back to invoiced.")
-      : ("Invoice " + code + " marked " + status + ".");
+      ? ("Invoice " + code + " is back in invoices to collect.")
+      : ("Invoice " + code + " marked " + status.toLowerCase() + ".");
     if (this.previewMode) {
-      this.setDetailPhase(status === "Undo" ? "Invoiced" : status);
+      this.restampInvoice(this.detailId, status);
       this.setFeedback(previewMessage, false);
       return;
     }
