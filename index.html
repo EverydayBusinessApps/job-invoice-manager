@@ -7,7 +7,7 @@
   
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=12">
-  <script defer src="app.js?v=17"></script>
+  <script defer src="app.js?v=18"></script>
 </head>
 <body>
 
@@ -35,7 +35,7 @@
         <div x-show="dashView === 'home'">
         <section>
           <div class="card-title">Needs attention</div>
-          <p class="shift-note">Still to send, still to collect, and done. These are the live books.</p>
+          <p class="shift-note">Not sent yet, waiting on payment, and finished.</p>
           <div class="grid-2">
             <button type="button" class="metric-box" data-action="openList" data-id="send">
               <span class="metric-title">Still to send</span>
@@ -83,7 +83,7 @@
               <span class="metric-value metric-value-sm" x-text="activeTop"></span>
             </div>
           </div>
-          <p class="shift-note">Hours are shifts worked in this period. The three piles above are the live books, across every month.</p>
+          <p class="shift-note">Hours and value are for this month only. The totals above are everything still open.</p>
         </section>
         </div>
 
@@ -144,7 +144,7 @@
             </div>
           </template>
           <p class="shift-note" x-show="detailLinesEmpty">No shifts are linked to this invoice yet.</p>
-          <p class="shift-note">Save a PDF of this invoice to Drive. It uses your logo and bank details. You can download it or email it from there, and a copy stays in your invoices folder.</p>
+          <p class="shift-note">Saves a PDF to your Drive, with your logo and bank details. Download it from there, or email it. A copy stays in your invoices folder.</p>
           <button type="button" class="btn-alt" x-show="detailCanSavePdf" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
           <button type="button" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
           <div class="form-group">
