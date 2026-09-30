@@ -233,24 +233,19 @@ function createDraftInvoice_(invoiceSheet) {
 }
 
 /**
- * Combine YYYY-MM-DD + HH:MM into a spreadsheet datetime.
- * addDays=1 is used when a shift finishes after midnight.
+ * Time of day for Time&Attendance columns G and I.
+ * The hours formula treats a value below 1 as a fraction of a day and
+ * multiplies by 24. A calendar date is 1 or more, so the shift length
+ * comes out as a fraction of a day. Overnight finish times stay below 1;
+ * the formula adds 24 hours when finish is earlier than start.
  */
-function sheetDateTime(dateStr, timeStr, addDays) {
-  const ds = String(dateStr || "").trim();
-  const ts = String(timeStr || "").trim();
-  if (!ds || !ts) return ts;
-  const dp = ds.split("-");
-  const tp = ts.split(":");
-  if (dp.length < 3 || tp.length < 2) return ts;
-  return new Date(
-    Number(dp[0]),
-    Number(dp[1]) - 1,
-    Number(dp[2]) + (addDays ? 1 : 0),
-    Number(tp[0]),
-    Number(tp[1] || 0),
-    0
-  );
+function sheetTimeOfDay_(timeStr) {
+  const match = String(timeStr || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return ((hours * 60) + minutes) / 1440;
 }
 
 function isOvernightTime(start, finish) {
@@ -280,6 +275,12 @@ function executeTimeLog(payload) {
     nextRow++;
   }
 
+  const startTime = sheetTimeOfDay_(payload.start);
+  const finishTime = sheetTimeOfDay_(payload.finish);
+  if (startTime == null || finishTime == null) {
+    return { success: false, error: "Choose a start and finish time." };
+  }
+
   const overnight = payload.overnight === true || isOvernightTime(payload.start, payload.finish);
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   const mode = String(payload.invoiceMode || "new").toLowerCase();
@@ -301,9 +302,13 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 4).setValue(payload.clientName); // Col D: ClientID
   timeSheet.getRange(nextRow, 5).setValue(payload.date);       // Col E: Date (shift start date)
   timeSheet.getRange(nextRow, 6).setValue(payload.jobDetails); // Col F: Job Details
-  timeSheet.getRange(nextRow, 7).setValue(sheetDateTime(payload.date, payload.start, false)); // Col G: Start
+  const startCell = timeSheet.getRange(nextRow, 7);
+  startCell.setNumberFormat("hh:mm");
+  startCell.setValue(startTime); // Col G: Start, time of day
   timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
-  timeSheet.getRange(nextRow, 9).setValue(sheetDateTime(payload.date, payload.finish, overnight)); // Col I: Finish (next calendar day when overnight)
+  const finishCell = timeSheet.getRange(nextRow, 9);
+  finishCell.setNumberFormat("hh:mm");
+  finishCell.setValue(finishTime); // Col I: Finish, time of day
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
   const message = mode === "existing"
