@@ -794,6 +794,104 @@ test("email without mail permission explains how to allow it", function (api, wo
   assert(template.getRange("B1").getValue() === "", "B1 was left on the selected invoice");
 });
 
+test("client records read the ten ClientRecords columns and skip blank names", function (api, workbook) {
+  const clients = workbook.sheets.ClientRecords;
+  clients.getRange(2, 1).setValue("Acme");
+  clients.getRange(2, 2).setValue("1 Dock Road");
+  clients.getRange(2, 3).setValue("Dublin");
+  clients.getRange(2, 4).setValue("Floor 2");
+  clients.getRange(2, 5).setValue("Ireland");
+  clients.getRange(2, 6).setValue(50);
+  clients.getRange(2, 7).setValue("Ann Acme");
+  clients.getRange(2, 8).setValue("acme@example.com");
+  clients.getRange(2, 9).setValue("0871234567");
+  clients.getRange(2, 10).setValue(14);
+  clients.getRange(2, 11).setValue("06:00");
+  clients.getRange(3, 1).setValue("");
+  clients.getRange(3, 11).setValue("keep");
+  clients.getRange(4, 1).setValue("Other Co");
+  clients.getRange(4, 6).setValue(40);
+  const listed = api.listClientRecords();
+  assert(listed.success, listed.error);
+  assert(listed.clientRecords.length === 2, "blank name was included");
+  assert(listed.clientRecords[0].name === "Acme", listed.clientRecords[0].name);
+  assert(listed.clientRecords[0].address1 === "1 Dock Road" && listed.clientRecords[0].address4 === "Ireland", JSON.stringify(listed.clientRecords[0]));
+  assert(listed.clientRecords[0].rate === 50 && listed.clientRecords[0].terms === 14, JSON.stringify(listed.clientRecords[0]));
+  assert(listed.clientRecords[0].phone === "0871234567", listed.clientRecords[0].phone);
+  assert(listed.clientRecords[0].email === "acme@example.com" && listed.clientRecords[0].contact === "Ann Acme", "contact");
+  const report = api.buildDashboardReport_(workbook, new Date("2026-09-22T12:00:00Z"));
+  assert(report.clientRecords.length === 2, "snapshot dropped client records");
+  assert(report.clients.map(function (client) { return client.name; }).join(",") === "Acme,Other Co", JSON.stringify(report.clients));
+});
+
+test("saving a client writes columns A to J and leaves later columns", function (api, workbook) {
+  const clients = workbook.sheets.ClientRecords;
+  clients.getRange(2, 1).setValue("Acme");
+  clients.getRange(2, 6).setValue(50);
+  clients.getRange(2, 11).setValue("06:00");
+  clients.getRange(3, 11).setValue("keep");
+  clients.getRange(4, 1).setValue("Other Co");
+  const time = workbook.sheets["Time&Attendance"];
+  time.getRange(2, 4).setValue("acme");
+  time.getRange(3, 4).setValue("Other Co");
+
+  const added = api.saveClientRecord_({
+    name: "BrightBite",
+    address1: "Unit 4",
+    address2: "Galway",
+    rate: "65",
+    contact: "Bea",
+    email: "bea@bright.test",
+    phone: "0871234567",
+    terms: "14"
+  });
+  assert(added.success, added.error);
+  assert(added.message === "Added BrightBite.", added.message);
+  assert(clients.getRange(5, 1).getValue() === "BrightBite", "new client filled a gap");
+  assert(clients.getRange(3, 1).getValue() === "", "a blank name row was reused");
+  assert(clients.getRange(3, 11).getValue() === "keep", "a gap row was overwritten");
+  assert(clients.getRange(5, 6).getValue() === 65, "rate " + clients.getRange(5, 6).getValue());
+  assert(clients.getRange(5, 9).getValue() === "0871234567", "phone " + clients.getRange(5, 9).getValue());
+  assert(clients.getRange(5, 10).getValue() === 14, "terms " + clients.getRange(5, 10).getValue());
+  assert(added.clientRecords.some(function (row) { return row.name === "BrightBite" && row.address2 === "Galway"; }), "response records");
+  assert(added.snapshot && added.snapshot.clientRecords.some(function (row) { return row.name === "BrightBite"; }), "snapshot records");
+
+  const edited = api.saveClientRecord_({
+    originalName: "Acme",
+    name: "Acme Ltd",
+    address1: "1 Dock Road",
+    rate: 80,
+    email: "accounts@acme.test",
+    phone: "01 555 0100",
+    terms: 30
+  });
+  assert(edited.success, edited.error);
+  assert(edited.message === "Updated Acme Ltd. Time entries now use that name.", edited.message);
+  assert(clients.getRange(2, 1).getValue() === "Acme Ltd", clients.getRange(2, 1).getValue());
+  assert(clients.getRange(2, 2).getValue() === "1 Dock Road", "address");
+  assert(clients.getRange(2, 6).getValue() === 80, "rate was not a number");
+  assert(clients.getRange(2, 8).getValue() === "accounts@acme.test", "email");
+  assert(clients.getRange(2, 10).getValue() === 30, "terms");
+  assert(clients.getRange(2, 11).getValue() === "06:00", "shift window was cleared");
+  assert(time.getRange(2, 4).getValue() === "Acme Ltd", time.getRange(2, 4).getValue());
+  assert(time.getRange(3, 4).getValue() === "Other Co", "another client was renamed");
+
+  const duplicate = api.saveClientRecord_({ name: "other co", rate: 10, terms: 0 });
+  assert(!duplicate.success && /already on ClientRecords/.test(duplicate.error), duplicate.error);
+  const blank = api.saveClientRecord_({ name: "  ", rate: 10 });
+  assert(!blank.success && /Enter a client name/.test(blank.error), blank.error);
+  const missing = api.saveClientRecord_({ originalName: "Nope", name: "Nope" });
+  assert(!missing.success && /no longer on ClientRecords/.test(missing.error), missing.error);
+  const badRate = api.saveClientRecord_({ name: "New Co", rate: "fast", terms: 7 });
+  assert(!badRate.success && /Rate must be a number/.test(badRate.error), badRate.error);
+  const badTerms = api.saveClientRecord_({ name: "New Co", rate: 10, terms: -1 });
+  assert(!badTerms.success && /Payment terms cannot be negative/.test(badTerms.error), badTerms.error);
+  const zero = api.saveClientRecord_({ originalName: "Other Co", name: "Other Co", rate: 0, terms: "" });
+  assert(zero.success, zero.error);
+  assert(clients.getRange(4, 6).getValue() === 0, "zero rate");
+  assert(clients.getRange(4, 10).getValue() === "", "blank terms");
+});
+
 if (failures.length) {
   console.error("\n" + failures.length + " failed");
   process.exit(1);

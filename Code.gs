@@ -46,6 +46,10 @@ function doPost(e) {
       responseData = compileSingleInvoice(requestData.payload);
     } else if (action === "exportInvoicePdf") {
       responseData = exportInvoicePdf(requestData.payload);
+    } else if (action === "listClients") {
+      responseData = listClientRecords();
+    } else if (action === "saveClient") {
+      responseData = saveClientRecord_(requestData.payload);
     } else {
       throw new Error("Invalid API action parameter mapping.");
     }
@@ -67,14 +71,9 @@ function fetchInitialAppData() {
   const clientSheet = ss.getSheetByName("ClientRecords");
   if (!clientSheet) return { success: false, error: "Missing ClientRecords tab." };
 
-  const lastRow = clientSheet.getLastRow();
-  let clients = [];
-  if (lastRow >= 2) {
-    const data = clientSheet.getRange(2, 1, lastRow - 1, 1).getValues(); // Only need column A (Name) since Rate is sheet-automated
-    clients = data.map(row => ({ name: String(row[0]).trim() })).filter(c => c.name !== "");
-  }
-
-  return { success: true, clients: clients, invoices: fetchInvoiceRecords() };
+  const clientRecords = readClientRows_(ss);
+  const clients = clientRecords.map(function (row) { return { name: row.name }; });
+  return { success: true, clients: clients, clientRecords: clientRecords, invoices: fetchInvoiceRecords() };
 }
 
 function fetchClientRecords() {
@@ -682,21 +681,181 @@ function blankPeriod_(window) {
   };
 }
 
-function readClientDirectory_(ss) {
-  const map = {};
+function clientText_(value) {
+  return String(value == null ? "" : value).trim();
+}
+
+function clientPhone_(value) {
+  if (value == null || value === "") return "";
+  if (typeof value === "number" && isFinite(value)) {
+    if (Math.abs(value - Math.round(value)) < 1e-6) return String(Math.round(value));
+    return String(value);
+  }
+  return String(value).trim();
+}
+
+function clientNumberOrBlank_(value) {
+  if (value === "" || value == null) return "";
+  if (typeof value === "number") return isFinite(value) ? value : "";
+  const text = String(value).trim();
+  if (!text) return "";
+  const n = numberOrNull_(value);
+  return n == null ? "" : n;
+}
+
+function parseClientNumber_(value, label) {
+  if (value === "" || value == null) return { ok: true, value: "" };
+  if (typeof value === "number") {
+    if (!isFinite(value)) return { ok: false, error: label + " must be a number." };
+    if (value < 0) return { ok: false, error: label + " cannot be negative." };
+    return { ok: true, value: value };
+  }
+  const text = String(value).trim().replace(/[€£$]/g, "").replace(/,/g, "").replace(/\s/g, "");
+  if (!text) return { ok: true, value: "" };
+  if (!/^-?\d+(\.\d+)?$/.test(text)) return { ok: false, error: label + " must be a number." };
+  const n = Number(text);
+  if (!isFinite(n)) return { ok: false, error: label + " must be a number." };
+  if (n < 0) return { ok: false, error: label + " cannot be negative." };
+  return { ok: true, value: n };
+}
+
+function readClientRows_(ss) {
   const sheet = ss.getSheetByName("ClientRecords");
-  if (!sheet || sheet.getLastRow() < 2) return map;
+  if (!sheet || sheet.getLastRow() < 2) return [];
   const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getValues();
+  const rows = [];
   for (let i = 0; i < data.length; i++) {
-    const name = String(data[i][0] || "").trim();
+    const name = clientText_(data[i][0]);
     if (!name) continue;
-    const terms = Number(data[i][9]);
-    map[name] = {
-      email: String(data[i][7] || "").trim(),
+    rows.push({
+      name: name,
+      address1: clientText_(data[i][1]),
+      address2: clientText_(data[i][2]),
+      address3: clientText_(data[i][3]),
+      address4: clientText_(data[i][4]),
+      rate: clientNumberOrBlank_(data[i][5]),
+      contact: clientText_(data[i][6]),
+      email: clientText_(data[i][7]),
+      phone: clientPhone_(data[i][8]),
+      terms: clientNumberOrBlank_(data[i][9])
+    });
+  }
+  rows.sort(function (a, b) { return a.name.localeCompare(b.name); });
+  return rows;
+}
+
+function clientDirectoryFromRows_(rows) {
+  const map = {};
+  (rows || []).forEach(function (row) {
+    const terms = Number(row.terms);
+    map[row.name] = {
+      email: row.email,
       terms: terms > 0 ? terms : 0
     };
-  }
+  });
   return map;
+}
+
+function readClientDirectory_(ss) {
+  return clientDirectoryFromRows_(readClientRows_(ss));
+}
+
+function listClientRecords() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss.getSheetByName("ClientRecords")) return { success: false, error: "Missing ClientRecords tab." };
+  return { success: true, clientRecords: readClientRows_(ss) };
+}
+
+function matchClientIndexes_(names, wanted) {
+  const target = clientText_(wanted).toLowerCase();
+  const hits = [];
+  if (!target) return hits;
+  for (let i = 0; i < names.length; i++) {
+    const name = clientText_(names[i][0]);
+    if (name && name.toLowerCase() === target) hits.push(i);
+  }
+  return hits;
+}
+
+function renameClientOnTimeSheet_(ss, fromName, toName) {
+  const sheet = ss.getSheetByName("Time&Attendance");
+  if (!sheet || sheet.getLastRow() < 2) return false;
+  const range = sheet.getRange(2, 4, sheet.getLastRow() - 1, 1);
+  const values = range.getValues();
+  const from = clientText_(fromName).toLowerCase();
+  let changed = false;
+  for (let i = 0; i < values.length; i++) {
+    const current = clientText_(values[i][0]);
+    if (current && current.toLowerCase() === from) {
+      values[i][0] = toName;
+      changed = true;
+    }
+  }
+  if (changed) range.setValues(values);
+  return changed;
+}
+
+function saveClientRecord_(payload) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("ClientRecords");
+  if (!sheet) return { success: false, error: "Missing ClientRecords tab." };
+
+  const source = payload || {};
+  const originalName = clientText_(source.originalName);
+  const name = clientText_(source.name);
+  if (!name) return { success: false, error: "Enter a client name." };
+
+  const rate = parseClientNumber_(source.rate, "Rate");
+  if (!rate.ok) return { success: false, error: rate.error };
+  const terms = parseClientNumber_(source.terms, "Payment terms");
+  if (!terms.ok) return { success: false, error: terms.error };
+
+  const last = sheet.getLastRow();
+  const names = last >= 2 ? sheet.getRange(2, 1, last - 1, 1).getValues() : [];
+  const originalHits = originalName ? matchClientIndexes_(names, originalName) : [];
+  if (originalName && !originalHits.length) {
+    return { success: false, error: "That client is no longer on ClientRecords." };
+  }
+  const rowIndex = originalName ? originalHits[0] : -1;
+  const conflict = matchClientIndexes_(names, name).some(function (idx) { return idx !== rowIndex; });
+  if (conflict) return { success: false, error: "A client named " + name + " is already on ClientRecords." };
+
+  let targetRow;
+  if (rowIndex >= 0) {
+    targetRow = rowIndex + 2;
+  } else {
+    let lastUsed = 1;
+    for (let i = 0; i < names.length; i++) {
+      if (clientText_(names[i][0])) lastUsed = i + 2;
+    }
+    targetRow = lastUsed + 1;
+  }
+
+  const phone = clientPhone_(source.phone);
+  sheet.getRange(targetRow, 9).setNumberFormat("@");
+  sheet.getRange(targetRow, 1, 1, 10).setValues([[
+    name,
+    clientText_(source.address1),
+    clientText_(source.address2),
+    clientText_(source.address3),
+    clientText_(source.address4),
+    rate.value,
+    clientText_(source.contact),
+    clientText_(source.email),
+    phone,
+    terms.value
+  ]]);
+
+  let message = (originalName ? "Updated " : "Added ") + name + ".";
+  if (originalName && originalName !== name && renameClientOnTimeSheet_(ss, originalName, name)) {
+    message += " Time entries now use that name.";
+  }
+
+  return attachSnapshot_(ss, {
+    success: true,
+    message: message,
+    clientRecords: readClientRows_(ss)
+  });
 }
 
 function readTimeRows_(ss, timezone) {
@@ -743,7 +902,8 @@ function buildDashboardReport_(ss, asOfDate) {
   const timeSheet = ss.getSheetByName("Time&Attendance");
   if (!timeSheet) return { success: false, error: "Missing Time&Attendance tab." };
 
-  const clients = readClientDirectory_(ss);
+  const clientRows = readClientRows_(ss);
+  const clients = clientDirectoryFromRows_(clientRows);
   const shifts = readTimeRows_(ss, timezone);
   const timeCodeByInt = {};
   shifts.forEach(function (shift) {
@@ -949,9 +1109,7 @@ function buildDashboardReport_(ss, asOfDate) {
     }
   });
 
-  const clientList = Object.keys(clients).sort(function (a, b) { return a.localeCompare(b); }).map(function (name) {
-    return { name: name };
-  });
+  const clientList = clientRows.map(function (row) { return { name: row.name }; });
 
   return {
     success: true,
@@ -961,6 +1119,7 @@ function buildDashboardReport_(ss, asOfDate) {
     periods: periods,
     invoices: invoices,
     clients: clientList,
+    clientRecords: clientRows,
     unbilled: unbilled,
     invoicePdf: invoicePdfEngine_()
   };

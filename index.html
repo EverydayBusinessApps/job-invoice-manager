@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=4">
-  <script defer src="app.js?v=7"></script>
+  <link rel="stylesheet" href="style.css?v=5">
+  <script defer src="app.js?v=8"></script>
 </head>
 <body>
 
@@ -267,10 +267,84 @@
           <button @click="submitForm">Commit Event to Spreadsheet</button>
         </section>
       </div>
+
+      <!-- VIEW: CLIENT RECORDS -->
+      <div x-show="currentTab === 'clients'">
+        <div x-show="clientView === 'list'">
+          <section>
+            <div class="card-title">Clients</div>
+            <p class="shift-note">Name, address, rate, contact, and payment terms from the ClientRecords sheet.</p>
+            <button type="button" class="btn-alt" data-action="newClient">New client</button>
+            <template x-for="client in clientRecords">
+              <button type="button" class="inv-row" data-action="editClient" :data-id="client.name">
+                <span class="inv-main">
+                  <span class="inv-title" x-text="client.name"></span>
+                  <span class="inv-meta" x-text="client.meta"></span>
+                </span>
+                <span class="inv-side">
+                  <span class="inv-amt" x-text="client.rateLabel"></span>
+                </span>
+              </button>
+            </template>
+            <p class="shift-note" x-show="clientRecordsEmpty">No clients on ClientRecords yet.</p>
+          </section>
+        </div>
+        <div x-show="clientView === 'form'">
+          <section>
+            <div class="card-title" x-text="clientFormTitle"></div>
+            <button type="button" class="btn-ghost" data-action="showClientList">Back to clients</button>
+            <div class="form-group">
+              <label>Name</label>
+              <input type="text" x-model="clientForm.name" placeholder="Client name">
+            </div>
+            <div class="form-group">
+              <label>Address 1</label>
+              <input type="text" x-model="clientForm.address1">
+            </div>
+            <div class="form-group">
+              <label>Address 2</label>
+              <input type="text" x-model="clientForm.address2">
+            </div>
+            <div class="form-group">
+              <label>Address 3</label>
+              <input type="text" x-model="clientForm.address3">
+            </div>
+            <div class="form-group">
+              <label>Address 4</label>
+              <input type="text" x-model="clientForm.address4">
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>Rate</label>
+                <input type="text" inputmode="decimal" x-model="clientForm.rate" placeholder="0.00">
+              </div>
+              <div class="form-group">
+                <label>Payment Terms</label>
+                <input type="text" inputmode="numeric" x-model="clientForm.terms" placeholder="Days">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Contact person</label>
+              <input type="text" x-model="clientForm.contact">
+            </div>
+            <div class="form-group">
+              <label>Email address</label>
+              <input type="email" x-model="clientForm.email" placeholder="name@company.com">
+            </div>
+            <div class="form-group">
+              <label>Phone number</label>
+              <input type="tel" x-model="clientForm.phone">
+            </div>
+            <p class="shift-note">Rate is the hourly rate. Saving it updates the rate on this client's time rows. Changing the name updates that name on those rows too.</p>
+            <button type="button" data-action="saveClient">Save client</button>
+          </section>
+        </div>
+      </div>
     </main>
 
     <nav>
       <button :class="tabDashClass ? 'nav-on' : ''" @click="setDashTab">📊 Dashboard</button>
+      <button :class="tabClientsClass ? 'nav-on' : ''" @click="setClientsTab">👤 Clients</button>
       <button :class="tabTrackerClass ? 'nav-on' : ''" @click="setTrackerTab">🕒 Log</button>
     </nav>
   </div>
