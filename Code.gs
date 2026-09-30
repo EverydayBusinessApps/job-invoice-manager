@@ -753,10 +753,113 @@ function lastDayOfMonth_(year, month) {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
+function periodKeys_() {
+  return ["week", "month", "quarter", "year"];
+}
+
+function monthNames_() {
+  return ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+}
+
+function shortMonthNames_() {
+  return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+}
+
+function shortDay_(iso) {
+  const parts = String(iso || "").split("-");
+  const names = shortMonthNames_();
+  return Number(parts[2]) + " " + (names[Number(parts[1]) - 1] || parts[1]);
+}
+
+function rangeLabel_(start, end) {
+  if (String(start).slice(0, 4) === String(end).slice(0, 4)) {
+    return shortDay_(start) + " – " + shortDay_(end) + " " + end.slice(0, 4);
+  }
+  return shortDay_(start) + " " + start.slice(0, 4) + " – " + shortDay_(end) + " " + end.slice(0, 4);
+}
+
+function weekWindowFromIso_(iso) {
+  const parts = String(iso || "").split("-").map(Number);
+  const weekday = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
+  const mondayOffset = weekday === 0 ? -6 : 1 - weekday;
+  const start = addDaysIso_(iso, mondayOffset);
+  const end = addDaysIso_(start, 6);
+  return { key: "week", label: rangeLabel_(start, end), start: start, end: end };
+}
+
+function parseFinancialYearEnd_(value, timezone) {
+  if (value == null || value === "") return null;
+  if (isDateValue_(value)) {
+    const iso = isoDate_(value, timezone || "UTC");
+    if (!iso) return null;
+    return checkedYearEnd_(Number(iso.slice(5, 7)), Number(iso.slice(8, 10)));
+  }
+  const text = String(value).trim().replace(/(\d+)(st|nd|rd|th)\b/gi, "$1");
+  const months = {
+    january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3,
+    april: 4, apr: 4, may: 5, june: 6, jun: 6, july: 7, jul: 7,
+    august: 8, aug: 8, september: 9, sept: 9, sep: 9, october: 10, oct: 10,
+    november: 11, nov: 11, december: 12, dec: 12
+  };
+  const named = text.match(/^(\d{1,2})\s+([A-Za-z]+)(?:\s+\d{4})?$/);
+  const namedRev = text.match(/^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+\d{4})?$/i);
+  const slash = text.match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.]\d{2,4})?$/);
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (named && months[named[2].toLowerCase()]) return checkedYearEnd_(months[named[2].toLowerCase()], Number(named[1]));
+  if (namedRev && months[namedRev[1].toLowerCase()]) return checkedYearEnd_(months[namedRev[1].toLowerCase()], Number(namedRev[2]));
+  if (slash) return checkedYearEnd_(Number(slash[2]), Number(slash[1]));
+  if (iso) return checkedYearEnd_(Number(iso[2]), Number(iso[3]));
+  return null;
+}
+
+function checkedYearEnd_(month, day) {
+  const lengths = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > lengths[month]) return null;
+  return { month: month, day: day };
+}
+
+function yearEndIso_(year, month, day) {
+  let used = day;
+  if (month === 2 && day === 29) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    if (!leap) used = 28;
+  }
+  return year + "-" + String(month).padStart(2, "0") + "-" + String(used).padStart(2, "0");
+}
+
+function financialYearWindow_(iso, month, day) {
+  const year = Number(String(iso).slice(0, 4));
+  const endYear = iso <= yearEndIso_(year, month, day) ? year : year + 1;
+  const end = yearEndIso_(endYear, month, day);
+  const start = addDaysIso_(yearEndIso_(endYear - 1, month, day), 1);
+  return { key: "year", label: rangeLabel_(start, end), start: start, end: end };
+}
+
+function financialYearEndParts_(ss) {
+  if (!ss || typeof ss.getSheetByName !== "function") return null;
+  const config = ss.getSheetByName("Config");
+  if (!config || !config.getLastRow || config.getLastRow() < 1) return null;
+  const timezone = (ss.getSpreadsheetTimeZone && ss.getSpreadsheetTimeZone()) || "UTC";
+  const rows = config.getRange(1, 1, config.getLastRow(), 2).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    if (!/financial year/i.test(clientText_(rows[i][0]))) continue;
+    return parseFinancialYearEnd_(rows[i][1], timezone);
+  }
+  return parseFinancialYearEnd_(config.getRange(3, 2).getValue(), timezone);
+}
+
+function financialYearEndText_(value, parts) {
+  const names = monthNames_();
+  if (isDateValue_(value)) return parts.day + " " + names[parts.month - 1];
+  const text = clientText_(value);
+  return text || (parts.day + " " + names[parts.month - 1]);
+}
+
 function periodWindowFromIso_(iso, key) {
   const year = Number(iso.slice(0, 4));
   const month = Number(iso.slice(5, 7));
-  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const names = monthNames_();
+  if (key === "week") return weekWindowFromIso_(iso);
   if (key === "month") {
     const last = lastDayOfMonth_(year, month);
     return {
@@ -1196,21 +1299,23 @@ function buildDashboardReport_(ss, asOfDate) {
     }
   }
 
+  const yearEnd = financialYearEndParts_(ss);
   const windows = {
+    week: weekWindowFromIso_(today),
     month: periodWindowFromIso_(today, "month"),
     quarter: periodWindowFromIso_(today, "quarter"),
-    year: periodWindowFromIso_(today, "year")
+    year: yearEnd ? financialYearWindow_(today, yearEnd.month, yearEnd.day) : periodWindowFromIso_(today, "year")
   };
-  const periods = {
-    month: blankPeriod_(windows.month),
-    quarter: blankPeriod_(windows.quarter),
-    year: blankPeriod_(windows.year)
-  };
-  const clientHours = { month: {}, quarter: {}, year: {} };
+  const periods = {};
+  const clientHours = {};
+  periodKeys_().forEach(function (key) {
+    periods[key] = blankPeriod_(windows[key]);
+    clientHours[key] = {};
+  });
 
   shifts.forEach(function (shift) {
     if (!shift.date) return;
-    ["month", "quarter", "year"].forEach(function (key) {
+    periodKeys_().forEach(function (key) {
       if (!inIsoRange_(shift.date, windows[key].start, windows[key].end)) return;
       const bucket = periods[key];
       bucket.hours = roundMoney_(bucket.hours + shift.hours);
@@ -1222,7 +1327,7 @@ function buildDashboardReport_(ss, asOfDate) {
     });
   });
 
-  ["month", "quarter", "year"].forEach(function (key) {
+  periodKeys_().forEach(function (key) {
     const names = Object.keys(clientHours[key]);
     periods[key].clients = names.length;
     periods[key].avgRate = periods[key].hours ? roundMoney_(periods[key].billable / periods[key].hours) : 0;
@@ -1287,6 +1392,7 @@ function buildDashboardReport_(ss, asOfDate) {
       email: profile.email,
       contact: profile.contact || "",
       terms: profile.terms,
+      inWeek: inIsoRange_(anchor, windows.week.start, windows.week.end),
       inMonth: inIsoRange_(anchor, windows.month.start, windows.month.end),
       inQuarter: inIsoRange_(anchor, windows.quarter.start, windows.quarter.end),
       inYear: inIsoRange_(anchor, windows.year.start, windows.year.end),
@@ -1312,8 +1418,8 @@ function buildDashboardReport_(ss, asOfDate) {
       open.writtenOffCount += 1;
     }
 
-    ["month", "quarter", "year"].forEach(function (key) {
-      const flag = key === "month" ? invoice.inMonth : key === "quarter" ? invoice.inQuarter : invoice.inYear;
+    periodKeys_().forEach(function (key) {
+      const flag = key === "week" ? invoice.inWeek : key === "month" ? invoice.inMonth : key === "quarter" ? invoice.inQuarter : invoice.inYear;
       if (!flag) return;
       const bucket = periods[key];
       if (kind !== "draft") {
@@ -1590,7 +1696,12 @@ function readConfigSheet_(ss) {
       continue;
     }
     if (/^(invoice status|draft|invoiced|paid|written off)$/i.test(label)) break;
-    const item = { row: i + 1, label: label, value: configText_(rows[i][1], mode === "breaks") };
+    let shown = configText_(rows[i][1], mode === "breaks");
+    if (mode !== "breaks" && /financial year/i.test(label)) {
+      const parts = parseFinancialYearEnd_(rows[i][1], (ss.getSpreadsheetTimeZone && ss.getSpreadsheetTimeZone()) || "UTC");
+      shown = parts ? financialYearEndText_(rows[i][1], parts) : clientText_(rows[i][1]);
+    }
+    const item = { row: i + 1, label: label, value: shown };
     if (mode === "breaks") breaks.push(item);
     else settings.push(item);
   }
@@ -1630,6 +1741,12 @@ function checkedConfigValue_(label, raw, isBreak) {
   }
   if (/email/i.test(label) && text && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
     return { ok: false, error: "Business email needs to look like an email address." };
+  }
+  if (/financial year/i.test(label)) {
+    if (text && !parseFinancialYearEnd_(text)) {
+      return { ok: false, error: "Financial year end needs a day and month, for example 31 October." };
+    }
+    return { ok: true, write: function (cell) { cell.setValue(text); } };
   }
   if (isBreak) {
     if (!clockParts_(text)) return { ok: false, error: "Enter " + label + " as hours and minutes, for example 00:30." };

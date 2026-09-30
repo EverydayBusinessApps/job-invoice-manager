@@ -609,7 +609,13 @@ test("dashboard splits hours and invoices across month, quarter, and year", func
   assert(quarter.paid === 100 && quarter.sent === 420, "quarter money " + quarter.paid + " " + quarter.sent);
   assert(quarter.due === 240 && quarter.draft === 50 && quarter.writtenOff === 80, "quarter split");
   assert(quarter.overdue === 200, "quarter overdue");
+  assert(report.periods.year.label === "2026", report.periods.year.label);
   assert(report.periods.year.sent === quarter.sent && report.periods.year.hours === quarter.hours, "year should match this sample");
+  const week = report.periods.week;
+  assert(week.label === "21 Sep – 27 Sep 2026", week.label);
+  assert(week.start === "2026-09-21" && week.end === "2026-09-27", week.start + " " + week.end);
+  assert(week.hours === 2 && week.billable === 40 && week.shifts === 1, JSON.stringify({ hours: week.hours, billable: week.billable, shifts: week.shifts }));
+  assert(week.topClient === "Other Co" && week.clients === 1, week.topClient);
 
   assert(report.open.dueAmount === 240 && report.open.dueCount === 2, "open due");
   assert(report.open.overdueAmount === 200 && report.open.overdueCount === 1, "open overdue");
@@ -1108,6 +1114,7 @@ function seedConfig(workbook) {
   const pairs = [
     [1, "Settings", "Value"],
     [2, "Default Hourly Rate", 65],
+    [3, "Financial Year End", "31st October"],
     [4, "Default Currency", "EUR"],
     [5, "Business Name", "Everyday Business"],
     [6, "Business Address", "Ireland"],
@@ -1140,10 +1147,11 @@ test("settings read the Config sheet and leave status rows alone", function (api
   const config = seedConfig(workbook);
   const read = api.fetchSettings();
   assert(read.success, read.error);
-  assert(read.settings.length === 9, JSON.stringify(read.settings));
+  assert(read.settings.length === 10, JSON.stringify(read.settings));
   assert(read.settings[0].label === "Default Hourly Rate" && read.settings[0].value === "65", read.settings[0].value);
-  assert(read.settings[2].label === "Business Name" && read.settings[2].row === 5, JSON.stringify(read.settings[2]));
-  assert(read.settings[4].value === "Jane@EverydayBusiness.ie", read.settings[4].value);
+  assert(read.settings[1].label === "Financial Year End" && read.settings[1].value === "31st October" && read.settings[1].row === 3, JSON.stringify(read.settings[1]));
+  assert(read.settings[3].label === "Business Name" && read.settings[3].row === 5, JSON.stringify(read.settings[3]));
+  assert(read.settings[5].value === "Jane@EverydayBusiness.ie", read.settings[5].value);
   assert(read.breaks.length === 5, JSON.stringify(read.breaks));
   assert(read.breaks[0].value === "00:00", read.breaks[0].value);
   assert(read.breaks[1].value === "00:30", read.breaks[1].value);
@@ -1188,6 +1196,57 @@ test("settings read the Config sheet and leave status rows alone", function (api
   assert(!badRate.success && /number/.test(badRate.error), badRate.error);
   const badEmail = api.saveSettings_({ settings: [{ row: 7, label: "Business Email", value: "not-an-email" }] });
   assert(!badEmail.success && /email/.test(badEmail.error), badEmail.error);
+  const badYear = api.saveSettings_({ settings: [{ row: 3, label: "Financial Year End", value: "Halloween" }, { row: 2, label: "Default Hourly Rate", value: "80" }] });
+  assert(!badYear.success && /day and month/.test(badYear.error), badYear.error);
+  assert(config.getRange(2, 2).getValue() === 70, "a bad year end still wrote the rate");
+  const yearEnd = api.saveSettings_({ settings: [{ row: 3, label: "Financial Year End", value: "31st October" }] });
+  assert(yearEnd.success, yearEnd.error);
+  assert(config.getRange(3, 2).getValue() === "31st October", config.getRange(3, 2).getValue());
+});
+
+test("week and financial year windows follow the day and the Config year end", function (api, workbook) {
+  assert(api.parseFinancialYearEnd_("31st October").month === 10 && api.parseFinancialYearEnd_("31st October").day === 31, "31st October");
+  assert(api.parseFinancialYearEnd_("5 April").month === 4 && api.parseFinancialYearEnd_("5 April").day === 5, "5 April");
+  assert(api.parseFinancialYearEnd_("31/10/2026").day === 31, "slash date");
+  assert(!api.parseFinancialYearEnd_("31 November"), "31 November was accepted");
+  const october = api.financialYearWindow_("2026-09-30", 10, 31);
+  assert(october.start === "2025-11-01" && october.end === "2026-10-31", october.start + " " + october.end);
+  const onEnd = api.financialYearWindow_("2026-10-31", 10, 31);
+  assert(onEnd.start === "2025-11-01" && onEnd.end === "2026-10-31", "year end day");
+  const next = api.financialYearWindow_("2026-11-01", 10, 31);
+  assert(next.start === "2026-11-01" && next.end === "2027-10-31", next.start + " " + next.end);
+  const april = api.financialYearWindow_("2026-04-05", 4, 5);
+  assert(april.start === "2025-04-06" && april.end === "2026-04-05", april.start + " " + april.end);
+  const calendar = api.financialYearWindow_("2026-09-30", 12, 31);
+  assert(calendar.start === "2026-01-01" && calendar.end === "2026-12-31", calendar.start + " " + calendar.end);
+  const week = api.weekWindowFromIso_("2026-09-30");
+  assert(week.start === "2026-09-28" && week.end === "2026-10-04", week.start + " " + week.end);
+  assert(api.weekWindowFromIso_("2026-09-22").start === "2026-09-21", "tuesday week");
+
+  seedBooks(workbook);
+  seedConfig(workbook);
+  const time = workbook.sheets["Time&Attendance"];
+  time.getRange(7, 2).setValue("INV-FY-IN");
+  time.getRange(7, 4).setValue("Acme");
+  time.getRange(7, 5).setValue(atNoon(2025, 12, 1));
+  time.getRange(7, 10).setValue(5);
+  time.getRange(7, 12).setValue(90);
+  time.getRange(8, 2).setValue("INV-FY-OUT");
+  time.getRange(8, 4).setValue("Acme");
+  time.getRange(8, 5).setValue(atNoon(2026, 11, 15));
+  time.getRange(8, 10).setValue(8);
+  time.getRange(8, 12).setValue(120);
+  const report = api.buildDashboardReport_(workbook, atNoon(2026, 9, 22));
+  assert(report.success, report.error);
+  const year = report.periods.year;
+  assert(year.start === "2025-11-01" && year.end === "2026-10-31", year.start + " " + year.end);
+  assert(year.label === "1 Nov 2025 – 31 Oct 2026", year.label);
+  assert(year.hours === 17 && year.billable === 560, JSON.stringify({ hours: year.hours, billable: year.billable }));
+  const inside = findInvoice(report, "INV-FY-IN");
+  const outside = findInvoice(report, "INV-FY-OUT");
+  assert(inside && inside.inYear && !inside.inMonth, JSON.stringify(inside && { inYear: inside.inYear, inMonth: inside.inMonth }));
+  assert(outside && !outside.inYear, "November 2026 stayed in the financial year");
+  assert(report.periods.week.hours === 2, "week hours " + report.periods.week.hours);
 });
 
 test("the settings logo is the image on INV-Template", function (api) {

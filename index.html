@@ -7,7 +7,7 @@
   
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=12">
-  <script defer src="app.js?v=18"></script>
+  <script defer src="app.js?v=19"></script>
 </head>
 <body>
 
@@ -57,10 +57,11 @@
 
         <section>
           <div class="card-title" x-text="activeLabel"></div>
-          <div class="grid-3">
+          <div class="grid-2">
+            <button type="button" class="seg" :class="periodWeekClass ? 'seg-on' : ''" data-action="setPeriod" data-id="week">Week</button>
             <button type="button" class="seg" :class="periodMonthClass ? 'seg-on' : ''" data-action="setPeriod" data-id="month">Month</button>
             <button type="button" class="seg" :class="periodQuarterClass ? 'seg-on' : ''" data-action="setPeriod" data-id="quarter">Quarter</button>
-            <button type="button" class="seg" :class="periodYearClass ? 'seg-on' : ''" data-action="setPeriod" data-id="year">Year</button>
+            <button type="button" class="seg" :class="periodYearClass ? 'seg-on' : ''" data-action="setPeriod" data-id="year">Financial year</button>
           </div>
           <div class="grid-2">
             <div class="metric-box">
@@ -83,7 +84,7 @@
               <span class="metric-value metric-value-sm" x-text="activeTop"></span>
             </div>
           </div>
-          <p class="shift-note">Hours and value are for this month only. The totals above are everything still open.</p>
+          <p class="shift-note" x-text="periodNote"></p>
         </section>
         </div>
 
@@ -316,7 +317,7 @@
       <div x-show="currentTab === 'settings'">
         <section>
           <div class="card-title">Settings</div>
-          <p class="shift-note">Logo, rate, and bank details from the Config sheet. Column A is the setting and column B is the value. The invoice uses these.</p>
+          <p class="shift-note">Logo, rate, year end, and bank details from the Config sheet. Column A is the setting and column B is the value. The invoice uses these.</p>
           <div class="form-group">
             <label>Logo</label>
             <div id="logo-wrap" class="logo-frame">
@@ -328,6 +329,10 @@
           <div class="form-group" x-show="settingsShow.rate">
             <label>Default Hourly Rate</label>
             <input type="text" inputmode="decimal" x-model="settingsForm.rate" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.yearEnd">
+            <label>Financial Year End</label>
+            <input type="text" x-model="settingsForm.yearEnd" placeholder="31 October" data-disable-when="saving">
           </div>
           <div class="form-group" x-show="settingsShow.currency">
             <label>Default Currency</label>
@@ -362,28 +367,6 @@
             <input type="text" x-model="settingsForm.iban" data-disable-when="saving">
           </div>
           <div id="settings-extra"></div>
-          <div class="card-title">Breaks</div>
-          <p class="shift-note">These lengths come off a shift. The names are the ones used when you log a job.</p>
-          <div class="form-group" x-show="settingsShow.na">
-            <label>na</label>
-            <input type="text" x-model="breakForm.na" placeholder="00:00" data-disable-when="saving">
-          </div>
-          <div class="form-group" x-show="settingsShow.half">
-            <label>half hour</label>
-            <input type="text" x-model="breakForm.half" placeholder="00:30" data-disable-when="saving">
-          </div>
-          <div class="form-group" x-show="settingsShow.hour">
-            <label>hour</label>
-            <input type="text" x-model="breakForm.hour" placeholder="01:00" data-disable-when="saving">
-          </div>
-          <div class="form-group" x-show="settingsShow.hourHalf">
-            <label>hour and half</label>
-            <input type="text" x-model="breakForm.hourHalf" placeholder="01:30" data-disable-when="saving">
-          </div>
-          <div class="form-group" x-show="settingsShow.two">
-            <label>two hours</label>
-            <input type="text" x-model="breakForm.two" placeholder="02:00" data-disable-when="saving">
-          </div>
           <button type="button" data-action="saveSettings" data-disable-when="saving" x-text="settingsButtonLabel"></button>
         </section>
       </div>
