@@ -428,6 +428,8 @@ window.Alpine.data('appState', () => ({
   tabTrackerClass: "",
   tabSummaryClass: "",
   tabSettingsClass: "",
+  taxRatesOpen: false,
+  taxRatesLabel: "See more",
   taxExpenses: "",
   summaryPeriod: "Financial year",
   summaryWork: "€0.00",
@@ -745,9 +747,15 @@ window.Alpine.data('appState', () => ({
   setTrackerTab() { this.currentTab = 'tracker'; this.syncTabClasses(); this.clearFeedback(); },
   setSummaryTab() {
     this.currentTab = "summary";
+    this.taxRatesOpen = false;
+    this.taxRatesLabel = "See more";
     this.syncTabClasses();
     this.clearFeedback();
     this.syncSummary();
+  },
+  toggleTaxRates() {
+    this.taxRatesOpen = !this.taxRatesOpen;
+    this.taxRatesLabel = this.taxRatesOpen ? "See less" : "See more";
   },
   async setSettingsTab() {
     this.currentTab = "settings";
