@@ -1468,11 +1468,11 @@ function exportInvoicePdf(payload) {
     const today = Utilities.formatDate(new Date(), timezone, "yyyy-MM-dd");
     const fileName = invoicePdfName_(code, today);
     const blob = renderInvoicePdf_(ss, sheet).setName(fileName);
-    const letter = invoiceEmailText_(ss, invoiceId, payload && payload.message);
+    const prepared = invoiceEmailText_(ss, invoiceId, payload && payload.message);
 
     if (mode === "email") {
       const copyTo = recordsEmail_(ss, email);
-      sendInvoiceEmail_(ss, email, code, blob, copyTo, letter);
+      sendInvoiceEmail_(ss, email, code, blob, copyTo, prepared.text, prepared.contact);
     }
 
     let stored = fileName;
@@ -1549,11 +1549,11 @@ function businessProfile_(ss) {
   const profile = { name: "", email: "" };
   const config = ss.getSheetByName("Config");
   if (!config) return profile;
+  profile.name = clientText_(config.getRange("B5").getValue());
   const rows = config.getRange("A1:B60").getDisplayValues();
   for (let i = 0; i < rows.length; i++) {
     const key = String(rows[i][0] || "");
     const value = String(rows[i][1] || "").trim();
-    if (/business name/i.test(key) && value) profile.name = value;
     if (/business email/i.test(key) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) profile.email = value;
   }
   return profile;
@@ -1563,9 +1563,9 @@ function businessProfile_(ss) {
  * Send through Gmail so the message is signed for the account that runs
  * EverydayWork. MailApp leaves the sender unverified, and Gmail files that as spam.
  */
-function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain) {
+function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain, contact) {
   const profile = businessProfile_(ss);
-  const sender = profile.name || "EverydayWork";
+  const sender = clientText_(profile.name) || "EverydayWork";
   const text = String(plain || "").trim() || invoiceEmailDraft_({ tradename: sender });
   const html = invoiceEmailHtml_(text);
   const options = {
@@ -1575,23 +1575,40 @@ function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain) {
   };
   if (copyTo) options.bcc = copyTo;
   if (profile.email && profile.email.toLowerCase() !== String(email || "").toLowerCase()) options.replyTo = profile.email;
-  GmailApp.sendEmail(email, "Invoice " + code, text, options);
+  GmailApp.sendEmail(invoiceRecipient_(email, contact), invoiceEmailSubject_(sender, code), text, options);
+}
+
+function invoiceRecipient_(email, contact) {
+  const address = String(email || "").trim();
+  const name = clientText_(contact).replace(/[\r\n<>"]/g, "").trim();
+  if (!name) return address;
+  return name + " <" + address + ">";
+}
+
+function invoiceEmailSubject_(name, code) {
+  const business = clientText_(name);
+  const invoice = clientText_(code);
+  if (business && invoice) return business + " " + invoice;
+  return business || invoice || "Invoice";
 }
 
 function invoiceEmailText_(ss, invoiceId, custom) {
+  const parts = invoiceLetterParts_(ss, invoiceId);
   const written = String(custom || "").trim();
-  if (written) return written;
-  return invoiceEmailDraft_(invoiceLetterParts_(ss, invoiceId));
+  return {
+    text: written || invoiceEmailDraft_(parts),
+    contact: parts.contact
+  };
 }
 
 function invoiceEmailDraft_(parts) {
   const source = parts || {};
-  const contact = clientText_(source.contact) || clientText_(source.clientName) || "there";
+  const contact = clientText_(source.contact);
   const period = prettyPeriod_(source.period) || "this period";
   const amount = clientText_(source.amount) || "the amount on the invoice";
   const works = clientText_(source.works) || "the works listed";
   const name = clientText_(source.tradename) || "EverydayWork";
-  return "To " + contact + "\n"
+  return "To" + (contact ? " " + contact : "") + "\n"
     + "Please find attached invoice for " + period + "\n"
     + "Total owed " + amount + "\n"
     + "For works " + works + "\n"
@@ -1649,15 +1666,6 @@ function invoiceLetterParts_(ss, invoiceId) {
     parts.period = clientText_(values[3]) || isoDate_(values[7]);
     if (values[6] !== "" && values[6] != null) parts.amount = euroText_(values[6]);
   }
-  if (parts.clientName) {
-    const clients = readClientRows_(ss);
-    for (let i = 0; i < clients.length; i++) {
-      if (clients[i].name.toLowerCase() === parts.clientName.toLowerCase()) {
-        parts.contact = clients[i].contact;
-        break;
-      }
-    }
-  }
   if (!parts.works) {
     const timeSheet = ss.getSheetByName("Time&Attendance");
     const last = timeSheet ? lastFilledRow_(timeSheet, 4) : 0;
@@ -1677,7 +1685,18 @@ function invoiceLetterParts_(ss, invoiceId) {
       }
     }
   }
+  parts.contact = contactForClient_(ss, parts.clientName);
   return parts;
+}
+
+function contactForClient_(ss, clientName) {
+  const wanted = clientText_(clientName).toLowerCase();
+  if (!wanted) return "";
+  const clients = readClientRows_(ss);
+  for (let i = 0; i < clients.length; i++) {
+    if (clients[i].name.toLowerCase() === wanted) return clientText_(clients[i].contact);
+  }
+  return "";
 }
 
 function markDraftInvoiced_(ss, invoiceId) {

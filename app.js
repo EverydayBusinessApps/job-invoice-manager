@@ -378,6 +378,9 @@ window.Alpine.data('appState', () => ({
   detailService: "",
   detailJob: "",
   detailEmail: "",
+  detailTo: "",
+  detailFrom: "",
+  detailSubject: "",
   detailMessage: "",
   businessName: "EverydayWork",
   detailIsDraft: false,
@@ -1091,14 +1094,20 @@ window.Alpine.data('appState', () => ({
       return pretty === "—" ? part.trim() : pretty;
     }).join(" – ");
   },
+  invoiceEmailSubject(name, code) {
+    const business = String(name || "").trim();
+    const invoice = String(code || "").trim();
+    if (business && invoice) return business + " " + invoice;
+    return business || invoice || "Invoice";
+  },
   invoiceEmailDraft(row) {
     const lines = row.lines || [];
     const works = row.jobDetails || (lines[0] && lines[0].details) || "";
     const period = this.prettyPeriod(row.servicePeriod) || (row.date ? this.prettyDate(row.date) : "");
-    const contact = row.contact || row.clientName || "";
+    const contact = String(row.contact || "").trim();
     const name = this.businessName || "EverydayWork";
     return [
-      "To " + (contact || "there"),
+      "To" + (contact ? " " + contact : ""),
       "Please find attached invoice for " + (period || "this period"),
       "Total owed " + this.money(row.total),
       "For works " + (works || "the works listed"),
@@ -1131,6 +1140,9 @@ window.Alpine.data('appState', () => ({
     this.detailTotal = this.money(row.total);
     this.detailService = row.servicePeriod || "—";
     this.detailJob = row.jobDetails || "—";
+    this.detailTo = String(row.contact || "").trim();
+    this.detailFrom = this.businessName || "EverydayWork";
+    this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.detailIsDraft = row.kind === "draft";
     this.detailCanFinish = row.kind === "due";
     this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
