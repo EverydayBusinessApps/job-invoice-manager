@@ -897,6 +897,35 @@ test("email without mail permission explains how to allow it", function (api, wo
   assert(template.getRange("B1").getValue() === "", "B1 was left on the selected invoice");
 });
 
+test("refresh reads client records from a freshly opened workbook", function (api, workbook) {
+  workbook.sheets.ClientRecords.getRange(2, 1).setValue("Acme");
+  workbook.sheets.ClientRecords.getRange(2, 8).setValue("old@client.test");
+  const fresh = createWorkbook();
+  fresh.sheets.ClientRecords.getRange(2, 1).setValue("Acme");
+  fresh.sheets.ClientRecords.getRange(2, 7).setValue("Ann Acme");
+  fresh.sheets.ClientRecords.getRange(2, 8).setValue("new@client.test");
+  fresh.sheets.InvoiceList.getRange(2, 1).setValue("INV-JR26-001");
+  fresh.sheets.InvoiceList.getRange(2, 2).setValue("Acme");
+  fresh.sheets.InvoiceList.getRange(2, 9).setValue("Draft");
+  api.SpreadsheetApp.openById = function (id) {
+    assert(id === "workbook", id);
+    return fresh;
+  };
+  const report = api.fetchDashboard();
+  assert(report.success, report.error);
+  assert(report.clientRecords.length === 1 && report.clientRecords[0].email === "new@client.test", JSON.stringify(report.clientRecords));
+  assert(report.clientRecords[0].contact === "Ann Acme", report.clientRecords[0].contact);
+  const invoice = (report.invoices || []).filter(function (item) { return item.code === "INV-JR26-001"; })[0];
+  assert(invoice && invoice.email === "new@client.test", JSON.stringify(invoice));
+  assert(invoice.contact === "Ann Acme", invoice.contact);
+  const listed = api.listClientRecords();
+  assert(listed.success && listed.clientRecords[0].email === "new@client.test", JSON.stringify(listed.clientRecords));
+  const saved = api.saveClientRecord_({ originalName: "Acme", name: "Acme", email: "saved@client.test", rate: 50, terms: 14 });
+  assert(saved.success, saved.error);
+  assert(fresh.sheets.ClientRecords.getRange(2, 8).getValue() === "saved@client.test", fresh.sheets.ClientRecords.getRange(2, 8).getValue());
+  assert(workbook.sheets.ClientRecords.getRange(2, 8).getValue() === "old@client.test", "save wrote the cached workbook");
+});
+
 test("client records read the ten ClientRecords columns and skip blank names", function (api, workbook) {
   const clients = workbook.sheets.ClientRecords;
   clients.getRange(2, 1).setValue("Acme");

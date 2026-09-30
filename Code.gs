@@ -8,6 +8,19 @@ function invoicePdfEngine_() {
   return "inv-template-plain";
 }
 
+// Open the workbook again so a web request sees edits made in the sheet.
+function workbook_() {
+  const active = SpreadsheetApp.getActiveSpreadsheet();
+  if (!active || typeof SpreadsheetApp.openById !== "function" || typeof active.getId !== "function") return active;
+  try {
+    if (typeof SpreadsheetApp.flush === "function") SpreadsheetApp.flush();
+    const opened = SpreadsheetApp.openById(active.getId());
+    return opened || active;
+  } catch (err) {
+    return active;
+  }
+}
+
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({ 
     success: true, 
@@ -67,7 +80,7 @@ function doPost(e) {
  * 1. Fetch Client Profiles and Invoice Headers for Web App Dropdowns
  */
 function fetchInitialAppData() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const clientSheet = ss.getSheetByName("ClientRecords");
   if (!clientSheet) return { success: false, error: "Missing ClientRecords tab." };
 
@@ -178,7 +191,7 @@ function guardDraftInvoice_(invoiceSheet, invoiceId) {
 }
 
 function fetchInvoiceRecords() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const timezone = ss.getSpreadsheetTimeZone();
   const byId = {};
 
@@ -300,7 +313,7 @@ function isOvernightTime(start, finish) {
  * 2. Commit Service Inputs (Inserts only to inputs, letting ARRAYFORMULAs compute the rest)
  */
 function executeTimeLog(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const timeSheet = ss.getSheetByName("Time&Attendance");
   if (!timeSheet) return { success: false, error: "Missing Time&Attendance tab." };
 
@@ -422,7 +435,7 @@ function recentMatchingEntry_(sheet, payload) {
  * 3. Calculate Open Accrued Items (Checks for blank cells in Column C: InvoiceInt)
  */
 function fetchUnbilledSummary(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const timeSheet = ss.getSheetByName("Time&Attendance");
   if (!timeSheet) return { success: false, error: "Time&Attendance tab missing." };
 
@@ -477,7 +490,7 @@ function attachSnapshot_(ss, result) {
  * 4. Process Account Invoice (Pushes the next sequence number down to Column C: InvoiceInt)
  */
 function processAccountInvoice(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const timeSheet = ss.getSheetByName("Time&Attendance");
   const invoiceSheet = ss.getSheetByName("InvoiceList");
 
@@ -545,7 +558,7 @@ function processAccountInvoice(payload) {
  * Undo is only for Paid and Written off, and it returns the invoice to Invoiced.
  */
 function updateInvoiceStatus(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
 
@@ -592,7 +605,7 @@ function updateInvoiceStatus(payload) {
  * A blank invoice date is stamped today so the period stats can place it.
  */
 function compileSingleInvoice(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
 
@@ -622,7 +635,7 @@ function compileSingleInvoice(payload) {
 }
 
 function fetchDashboard() {
-  return buildDashboardReport_(SpreadsheetApp.getActiveSpreadsheet(), new Date());
+  return buildDashboardReport_(workbook_(), new Date());
 }
 
 function fetchAppSnapshot() {
@@ -630,7 +643,7 @@ function fetchAppSnapshot() {
 }
 
 function fetchInvoiceDetail(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const report = buildDashboardReport_(ss, new Date());
   if (!report.success) return report;
   const invoiceId = String((payload && payload.invoiceId) || "").trim();
@@ -874,7 +887,7 @@ function readClientDirectory_(ss) {
 }
 
 function listClientRecords() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   if (!ss.getSheetByName("ClientRecords")) return { success: false, error: "Missing ClientRecords tab." };
   return { success: true, clientRecords: readClientRows_(ss) };
 }
@@ -1021,7 +1034,7 @@ function renameClientOnTimeSheet_(ss, fromName, toName) {
 }
 
 function saveClientRecord_(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const sheet = ss.getSheetByName("ClientRecords");
   if (!sheet) return { success: false, error: "Missing ClientRecords tab." };
 
@@ -1417,7 +1430,7 @@ function readInvoiceLines_(ss, invoice) {
  * web app, set Version to New version, and Deploy. Keep that web app URL.
  */
 function authorizeEverydayWork() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const fileName = DriveApp.getFileById(ss.getId()).getName();
   const remaining = MailApp.getRemainingDailyQuota();
   const sheet = ss.getSheetByName("INV-Template");
@@ -1435,7 +1448,7 @@ function authorizeEverydayWork() {
  * the INV-Template page with the sheet grid left off, including the logo and bank block.
  */
 function exportInvoicePdf(payload) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = workbook_();
   const invoiceId = String((payload && payload.invoiceId) || "").trim();
   const mode = String((payload && payload.mode) || "download").toLowerCase();
   if (!invoiceId) return { success: false, error: "Choose an invoice." };
