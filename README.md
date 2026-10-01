@@ -51,6 +51,21 @@ Checklist:
 4. Open the web app URL with no token. The JSON says the client token is missing (`status` 401). A wrong token is not accepted (`status` 403).
 5. With the matching token, log a job, list invoices, mark invoiced, mark paid, and email the PDF.
 
+## Pay link (Stripe test mode)
+
+EverydayWork keeps the jobs and the Paid status. Email PDF adds a Stripe test-mode pay link for the invoice total (EUR) when Script property `STRIPE_SECRET_KEY` is set (`sk_test_…`). The link goes in the email. Bank transfer details stay on the PDF. When Stripe reports the payment, that invoice is marked Paid in the Sheet.
+
+Paste it in Apps Script: Project Settings → Script properties. Never in the frontend, GitHub, or chat.
+
+* `STRIPE_SECRET_KEY` — test mode secret only (`sk_test_…`).
+* `STRIPE_WEBHOOK_TOKEN` — a long random string you choose.
+
+Webhook URL: the web app exec URL plus `?stripeWebhook=TOKEN` (the same token). Event: `checkout.session.completed` (and `checkout.session.async_payment_succeeded` if you want bank debits later).
+
+After pasting `Code.gs`, open Deploy → Manage deployments → edit this web app → Version = New version → Deploy. Keep the same URL.
+
+The pay link is added when Email PDF runs and a test key is set. When `STRIPE_SECRET_KEY` is empty, Email PDF still sends and the letter has no pay link.
+
 ## 📊 Database Schema Requirement
 To interface with the API layout, the underlying data core must be structured across exactly three sheets matching this structural matrix:
 * **`ClientRecords`**: `Name`, `Address 1`, `Address 2`, `Address 3`, `Address 4`, `Rate`, `Contact person`, `email address`, `phone number`, `Payment Terms`

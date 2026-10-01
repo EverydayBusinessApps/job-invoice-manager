@@ -28,13 +28,16 @@ function jsonOut_(payload) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function expectedClientToken_() {
+function scriptProperty_(name) {
   var props = (typeof PropertiesService !== "undefined" && PropertiesService.getScriptProperties)
     ? PropertiesService.getScriptProperties()
     : null;
   if (!props || typeof props.getProperty !== "function") return "";
-  var value = props.getProperty(CLIENT_TOKEN_KEY_);
-  return String(value || "").trim();
+  return String(props.getProperty(name) || "").trim();
+}
+
+function expectedClientToken_() {
+  return scriptProperty_(CLIENT_TOKEN_KEY_);
 }
 
 function tokenMatches_(given, expected) {
@@ -114,6 +117,9 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  if (e && e.parameter && String(e.parameter.stripeWebhook || "").trim()) {
+    return jsonOut_(handleStripeWebhook_(e));
+  }
   var gate = clientTokenGate_(e);
   if (!gate.ok) return rejectClientToken_(gate);
   try {
@@ -1712,7 +1718,15 @@ function exportInvoicePdf(payload) {
     const today = Utilities.formatDate(new Date(), timezone, "yyyy-MM-dd");
     const fileName = invoicePdfName_(code, today);
     const blob = renderInvoicePdf_(ss, sheet).setName(fileName);
-    const prepared = invoiceEmailText_(ss, invoiceId, payload && payload.message);
+    let prepared = invoiceEmailText_(ss, invoiceId, payload && payload.message);
+    let payUrl = "";
+    let payLinkNote = "";
+    if (mode === "email") {
+      const linked = createInvoicePaymentLink_(ss, invoiceId);
+      payUrl = linked.url || "";
+      if (payUrl) prepared = { text: appendInvoicePayLink_(prepared.text, payUrl), contact: prepared.contact };
+      else if (linked.error) payLinkNote = " The pay link was not added.";
+    }
 
     let copyTo = "";
     if (mode === "email") {
@@ -1764,6 +1778,8 @@ function exportInvoicePdf(payload) {
       let message = "Emailed " + fileName + " to " + email + ".";
       if (cc) message += " Cc " + cc + ".";
       if (copyTo) message += " A copy went to " + copyTo + " for your records.";
+      if (payUrl) message += " Pay online: " + payUrl;
+      if (payLinkNote) message += payLinkNote;
       return {
         success: true,
         mode: mode,
@@ -2129,6 +2145,159 @@ function invoiceCopyList_(raw, skip) {
     list.push(parts[i]);
   }
   return { ok: true, list: list };
+}
+
+// Stripe only collects the payment. EverydayWork keeps the job and the invoice status.
+// The secret key stays in Script Properties. A test key (sk_test_) is the one this build calls.
+var STRIPE_SECRET_KEY_ = "STRIPE_SECRET_KEY";
+var STRIPE_WEBHOOK_TOKEN_ = "STRIPE_WEBHOOK_TOKEN";
+
+function stripeSecret_() {
+  var key = scriptProperty_(STRIPE_SECRET_KEY_);
+  if (key.indexOf("sk_test_") !== 0) return "";
+  return key;
+}
+
+function euroCents_(value) {
+  var n = Number(value);
+  if (!isFinite(n)) return 0;
+  return Math.round((n + Number.EPSILON) * 100);
+}
+
+function stripeForm_(pairs) {
+  return pairs.map(function (pair) {
+    return encodeURIComponent(pair[0]) + "=" + encodeURIComponent(pair[1]);
+  }).join("&");
+}
+
+function stripeRequest_(method, path, pairs) {
+  var key = stripeSecret_();
+  if (!key) return { ok: false, error: "Stripe test mode is not set." };
+  var options = {
+    method: method,
+    headers: { Authorization: "Bearer " + key },
+    muteHttpExceptions: true
+  };
+  if (pairs) {
+    options.contentType = "application/x-www-form-urlencoded";
+    options.payload = stripeForm_(pairs);
+  }
+  var response = UrlFetchApp.fetch("https://api.stripe.com" + path, options);
+  var code = response.getResponseCode();
+  var body = {};
+  try { body = JSON.parse(response.getContentText() || "{}"); } catch (err) { body = {}; }
+  if (code < 200 || code >= 300) {
+    var message = body && body.error && body.error.message ? String(body.error.message) : "Stripe did not create the pay link.";
+    if (message.indexOf("sk_") !== -1) message = "Stripe did not create the pay link.";
+    return { ok: false, error: message };
+  }
+  return { ok: true, body: body };
+}
+
+function invoicePayAmount_(ss, invoiceId) {
+  var invoiceSheet = ss.getSheetByName("InvoiceList");
+  var code = invoicePrintCode_(ss, invoiceId);
+  var row = invoiceSheet ? findInvoiceListRow_(invoiceSheet, invoiceId) : 0;
+  if (!row && invoiceSheet && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+  if (!row) return { cents: 0, code: code, clientName: "" };
+  var values = invoiceSheet.getRange(row, 1, 1, 9).getValues()[0];
+  return {
+    cents: euroCents_(values[6]),
+    code: code,
+    clientName: clientText_(values[1])
+  };
+}
+
+function createInvoicePaymentLink_(ss, invoiceId) {
+  if (!stripeSecret_()) return { url: "" };
+  var amount = invoicePayAmount_(ss, invoiceId);
+  if (amount.cents < 50) return { url: "" };
+  var name = ("Invoice " + (amount.code || invoiceId)).slice(0, 200);
+  var clientName = String(amount.clientName || "").slice(0, 500);
+  var created = stripeRequest_("post", "/v1/payment_links", [
+    ["line_items[0][price_data][currency]", "eur"],
+    ["line_items[0][price_data][unit_amount]", String(amount.cents)],
+    ["line_items[0][price_data][product_data][name]", name],
+    ["line_items[0][quantity]", "1"],
+    ["metadata[invoiceId]", String(invoiceId || "")],
+    ["metadata[clientName]", clientName],
+    ["metadata[sheetId]", String(ss.getId() || "")],
+    ["restrictions[completed_sessions][limit]", "1"],
+    ["invoice_creation[enabled]", "false"],
+    ["automatic_tax[enabled]", "false"],
+    ["after_completion[type]", "hosted_confirmation"],
+    ["after_completion[hosted_confirmation][custom_message]", "Thank you. Everyday Business will record this payment."]
+  ]);
+  if (!created.ok) return { url: "", error: created.error };
+  var url = created.body && created.body.url ? String(created.body.url) : "";
+  if (url.indexOf("https://buy.stripe.com/") !== 0 && url.indexOf("https://book.stripe.com/") !== 0) {
+    return { url: "", error: "Stripe did not return a pay link." };
+  }
+  return { url: url };
+}
+
+function appendInvoicePayLink_(text, url) {
+  var link = String(url || "").trim();
+  if (!link) return String(text || "");
+  var letter = String(text || "");
+  if (letter.indexOf(link) !== -1) return letter;
+  var block = "Pay this invoice online:\n" + link + "\nBank transfer details are on the invoice.";
+  if (letter.indexOf("\nKind Regards\n") !== -1) {
+    return letter.replace("\nKind Regards\n", "\n" + block + "\n\nKind Regards\n");
+  }
+  return letter.replace(/\s+$/, "") + "\n\n" + block + "\n";
+}
+
+function handleStripeWebhook_(e) {
+  var expected = scriptProperty_(STRIPE_WEBHOOK_TOKEN_);
+  var given = String((e && e.parameter && e.parameter.stripeWebhook) || "").trim();
+  if (!expected || !tokenMatches_(given, expected)) {
+    return { success: false, status: 403, error: "Stripe webhook was not accepted." };
+  }
+  var payload = {};
+  try {
+    payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+  } catch (err) {
+    return { success: false, error: "Stripe webhook was not readable." };
+  }
+  var type = String(payload.type || "");
+  if (type !== "checkout.session.completed" && type !== "checkout.session.async_payment_succeeded") {
+    return { success: true, ignored: true };
+  }
+  var sessionId = payload.data && payload.data.object && payload.data.object.id;
+  if (!sessionId) return { success: false, error: "Stripe webhook had no checkout session." };
+  var session = stripeRequest_("get", "/v1/checkout/sessions/" + encodeURIComponent(sessionId));
+  if (!session.ok) return { success: false, error: "Stripe did not confirm the payment." };
+  var paid = session.body || {};
+  if (String(paid.payment_status || "") !== "paid") {
+    return { success: true, ignored: true, paymentStatus: paid.payment_status || "" };
+  }
+  var meta = paid.metadata || {};
+  var ss = workbook_();
+  if (String(meta.sheetId || "") !== String(ss.getId() || "")) {
+    return { success: false, error: "Payment was for a different workbook." };
+  }
+  var marked = markInvoicePaidFromPayment_(ss, meta.invoiceId);
+  return marked;
+}
+
+function markInvoicePaidFromPayment_(ss, invoiceId) {
+  var invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
+  var code = invoicePrintCode_(ss, invoiceId);
+  var row = findInvoiceListRow_(invoiceSheet, invoiceId);
+  if (!row && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+  if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
+  var current = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
+  if (current === "Paid") return { success: true, status: "Paid", already: true, invoiceId: String(invoiceId || ""), invoiceCode: code };
+  if (current === "Draft") {
+    invoiceSheet.getRange(row, 9).setValue("Invoiced");
+    if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
+    lockBilledTimeRates_(ss, { invoiceIds: [invoiceId, code] });
+  }
+  invoiceSheet.getRange(row, 9).setValue("Paid");
+  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId, code] });
+  return { success: true, status: "Paid", invoiceId: String(invoiceId || ""), invoiceCode: code, message: "Invoice " + code + " marked Paid." };
 }
 
 function sendInvoiceEmail_(ss, email, code, blob, copyTo, plain, contact, cc) {
