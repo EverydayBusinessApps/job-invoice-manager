@@ -442,12 +442,12 @@ function test(name, fn) {
 test("first time entry sets InvoiceList column I to Draft", function (api, workbook) {
   const created = api.executeTimeLog(shift());
   assert(created.success, created.error);
-  assert(created.message === "Job logged on invoice INV-JR26-001.", created.message);
+  assert(created.message === "Job logged on invoice INV-EB-001.", created.message);
   assert(statusCell(workbook, 2) === "Draft", "column I was " + statusCell(workbook, 2));
   assert(String(created.invoiceId) === "1", "invoice id " + created.invoiceId);
   const again = api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: created.invoiceId, jobDetails: "Follow-up" }));
   assert(again.success, again.error);
-  assert(again.message === "Job added to invoice INV-JR26-001.", again.message);
+  assert(again.message === "Job added to invoice INV-EB-001.", again.message);
   assert(!again.alreadySaved, "a different job was treated as a repeat");
   assert(statusCell(workbook, 2) === "Draft", "second entry changed status");
   assert(timeRows(workbook).length === 2, "second job was not stored");
@@ -461,7 +461,7 @@ test("a second tap of the same job confirms the save and does not duplicate it",
   const again = api.executeTimeLog(shift());
   assert(again.success, again.error);
   assert(again.alreadySaved === true, "repeat was stored as a new job");
-  assert(again.message === "Job logged on invoice INV-JR26-001.", again.message);
+  assert(again.message === "Job logged on invoice INV-EB-001.", again.message);
   assert(timeRows(workbook).length === rowsBefore, "a second time row was added");
   assert(workbook.sheets["InvoiceList"].getLastRow() === invoicesBefore, "a second draft was opened");
 
@@ -502,7 +502,7 @@ test("finish is the end of the shift, so hours are not a fraction of a day", fun
 
   const night = api.executeTimeLog(shift({ start: "18:00", finish: "06:00", overnight: true }));
   assert(night.success, night.error);
-  assert(night.message === "Overnight job logged on invoice INV-JR26-002.", night.message);
+  assert(night.message === "Overnight job logged on invoice INV-EB-002.", night.message);
   const row2 = time.getLastRow();
   const nightStart = time.getRange(row2, 7).getValue();
   const nightFinish = time.getRange(row2, 9).getValue();
@@ -576,14 +576,14 @@ test("an invoice moves Draft, Invoiced, Paid, and Written off", function (api, w
   const paid = api.updateInvoiceStatus({ invoiceId: id, status: "Paid" });
   assert(paid.success, paid.error);
   assert(paid.status === "Paid" && statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
-  assert(paid.message === "Invoice INV-JR26-001 marked Paid.", paid.message);
+  assert(paid.message === "Invoice INV-EB-001 marked Paid.", paid.message);
   assert(!api.updateInvoiceStatus({ invoiceId: id, status: "Written off" }).success, "written off from paid");
   const undo = api.updateInvoiceStatus({ invoiceId: id, status: "Undo" });
   assert(undo.success, undo.error);
   assert(undo.status === "Invoiced" && statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
-  assert(undo.message === "Invoice INV-JR26-001 back to invoiced.", undo.message);
+  assert(undo.message === "Invoice INV-EB-001 back to invoiced.", undo.message);
   const off = api.updateInvoiceStatus({ invoiceId: id, status: "Written off" });
-  assert(off.success && off.message === "Invoice INV-JR26-001 marked Written off.", off.message || off.error);
+  assert(off.success && off.message === "Invoice INV-EB-001 marked Written off.", off.message || off.error);
   assert(statusCell(workbook, 2) === "Written off", statusCell(workbook, 2));
   assert(!api.updateInvoiceStatus({ invoiceId: id, status: "Unpaid" }).success, "unpaid was accepted");
   const back = api.updateInvoiceStatus({ invoiceId: id, status: "Undo" });
@@ -734,9 +734,10 @@ test("invoice print code follows the INV-Template dropdown values", function (ap
   const time = workbook.sheets["Time&Attendance"];
   time.getRange(2, 2).setValue("INV-JR26-007");
   time.getRange(2, 3).setValue(7);
+  time.getRange(2, 4).setValue("Acme");
   assert(api.invoicePrintCode_(workbook, "INV-JR26-013") === "INV-JR26-013", "formatted id");
   assert(api.invoicePrintCode_(workbook, "7") === "INV-JR26-007", api.invoicePrintCode_(workbook, "7"));
-  assert(api.invoicePrintCode_(workbook, "8") === "INV-JR26-008", api.invoicePrintCode_(workbook, "8"));
+  assert(api.invoicePrintCode_(workbook, "8") === "INV-EB-008", api.invoicePrintCode_(workbook, "8"));
   assert(api.invoicePdfName_("INV-JR26-013", "2026-09-22") === "INV-JR26-013_2026-09-22.pdf", "pdf name");
 });
 
@@ -755,6 +756,31 @@ test("compile invoice marks one draft as Invoiced and stamps a blank date", func
   const again = api.compileSingleInvoice({ invoiceId: "INV-JR26-014" });
   assert(!again.success, "compiled twice");
   assert(/Draft/.test(again.error), again.error);
+});
+
+test("mark invoiced finds a new draft by its number", function (api, workbook) {
+  const invoices = workbook.sheets.InvoiceList;
+  const time = workbook.sheets["Time&Attendance"];
+  invoices.getRange(2, 1).setValue("INV-EB-014");
+  invoices.getRange(2, 2).setValue("Michael Jennings");
+  invoices.getRange(2, 8).setValue(new Date(2026, 9, 1));
+  invoices.getRange(2, 9).setValue("Draft");
+  time.getRange(2, 2).setValue("INV-EB-014");
+  time.getRange(2, 3).setValue(14);
+  time.getRange(2, 4).setValue("Michael Jennings");
+  time.getRange(2, 11).setValue(150);
+
+  const byNumber = api.compileSingleInvoice({ invoiceId: "14" });
+  assert(byNumber.success, byNumber.error);
+  assert(byNumber.invoiceCode === "INV-EB-014", byNumber.invoiceCode || byNumber.error);
+  assert(byNumber.message === "Invoice INV-EB-014 marked invoiced.", byNumber.message);
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  invoices.getRange(2, 9).setValue("Draft");
+  const byOldCode = api.compileSingleInvoice({ invoiceId: "INV-JR26-014" });
+  assert(byOldCode.success, byOldCode.error);
+  assert(byOldCode.invoiceCode === "INV-EB-014", byOldCode.invoiceCode || byOldCode.error);
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
 });
 
 test("invoice pdf prints INV-Template from row 2 and restores the workbook", function (api, workbook) {
@@ -1538,7 +1564,7 @@ test("a web request without the client token does not open the sheet", function 
 
   const logged = webPost(api, { action: "logTimeEntry", payload: shift(), clientToken: "beta-token" });
   assert(logged.success, logged.error);
-  assert(logged.message === "Job logged on invoice INV-JR26-001.", logged.message);
+  assert(logged.message === "Job logged on invoice INV-EB-001.", logged.message);
   assert(statusCell(workbook, 2) === "Draft", statusCell(workbook, 2));
 
   const listed = webPost(api, { action: "getInitialAppData", clientToken: "beta-token" });

@@ -266,8 +266,55 @@ function findInvoiceListRow_(invoiceSheet, invoiceId) {
   return 0;
 }
 
-function guardDraftInvoice_(invoiceSheet, invoiceId) {
-  const row = findInvoiceListRow_(invoiceSheet, invoiceId);
+function invoiceKeyNumber_(raw) {
+  const text = String(raw || "").trim();
+  if (/^\d+(?:\.0+)?$/.test(text)) {
+    const n = parseInt(text, 10);
+    return n > 0 ? String(n) : "";
+  }
+  const tail = text.match(/^INV-[A-Za-z0-9]+-0*(\d+)$/i);
+  if (!tail) return "";
+  const n = parseInt(tail[1], 10);
+  return n > 0 ? String(n) : "";
+}
+
+function resolveInvoiceListRow_(ss, invoiceId) {
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  const wanted = String(invoiceId || "").trim();
+  if (!invoiceSheet || !wanted) return { row: 0, id: "", code: "" };
+  const candidates = [];
+  function add(value) {
+    const text = String(value || "").trim();
+    if (!text || candidates.indexOf(text) !== -1) return;
+    candidates.push(text);
+  }
+  add(wanted);
+  add(invoicePrintCode_(ss, wanted));
+  const number = invoiceKeyNumber_(wanted);
+  if (number) {
+    add(number);
+    add(invoicePrintCode_(ss, number));
+  }
+  for (let i = 0; i < candidates.length; i++) {
+    const row = findInvoiceListRow_(invoiceSheet, candidates[i]);
+    if (!row) continue;
+    const id = String(invoiceSheet.getRange(row, 1).getValue() || "").trim();
+    const code = invoicePrintCode_(ss, id || number || wanted);
+    return { row: row, id: id, code: code || id };
+  }
+  return { row: 0, id: "", code: "" };
+}
+
+function invoiceShownCode_(invoiceId, located) {
+  if (located && /^INV-/i.test(located.id)) return located.id;
+  if (located && /^INV-/i.test(located.code)) return located.code;
+  return canonicalInvoiceCode_(invoiceId);
+}
+
+function guardDraftInvoice_(ss, invoiceId) {
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  const row = located.row;
   if (!row) {
     return { ok: false, error: "That invoice is not on InvoiceList." };
   }
@@ -438,7 +485,7 @@ function executeTimeLog(payload) {
     invoiceId = String(payload.invoiceId || "").trim();
     if (!invoiceId) return { success: false, error: "Choose an existing invoice." };
     if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
-    const draftGuard = guardDraftInvoice_(invoiceSheet, invoiceId);
+    const draftGuard = guardDraftInvoice_(ss, invoiceId);
     if (!draftGuard.ok) return { success: false, error: draftGuard.error };
   } else if (!invoiceSheet) {
     return { success: false, error: "Missing InvoiceList tab." };
@@ -446,7 +493,7 @@ function executeTimeLog(payload) {
 
   const replay = recentMatchingEntry_(timeSheet, payload);
   if (replay) {
-    return jobSavedResult_(mode, replay.invoiceId, overnight, true, null);
+    return jobSavedResult_(ss, mode, replay.invoiceId, overnight, true, null);
   }
 
   if (mode !== "existing") {
@@ -466,7 +513,7 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
-  return jobSavedResult_(mode, invoiceId, overnight, false, loggedShiftAmount_(timeSheet, nextRow));
+  return jobSavedResult_(ss, mode, invoiceId, overnight, false, loggedShiftAmount_(timeSheet, nextRow));
 }
 
 function loggedShiftAmount_(sheet, row) {
@@ -479,8 +526,8 @@ function loggedShiftAmount_(sheet, row) {
   return Math.round(hours * rate * 100) / 100;
 }
 
-function jobSavedResult_(mode, invoiceId, overnight, alreadySaved, amount) {
-  const code = canonicalInvoiceCode_(invoiceId);
+function jobSavedResult_(ss, mode, invoiceId, overnight, alreadySaved, amount) {
+  const code = invoicePrintCode_(ss, invoiceId);
   let message;
   if (String(mode || "").toLowerCase() === "existing") {
     message = "Job added to invoice " + code + ".";
@@ -676,7 +723,8 @@ function updateInvoiceStatus(payload) {
   const requested = String((payload && payload.status) || "").trim();
   if (!invoiceId) return { success: false, error: "Choose an invoice." };
 
-  const row = findInvoiceListRow_(invoiceSheet, invoiceId);
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  const row = located.row;
   if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
 
   const current = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
@@ -696,8 +744,8 @@ function updateInvoiceStatus(payload) {
   }
 
   invoiceSheet.getRange(row, 9).setValue(next);
-  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId] });
-  const code = canonicalInvoiceCode_(invoiceId);
+  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId, located.id, located.code] });
+  const code = invoiceShownCode_(invoiceId, located);
   const message = requested === "Undo"
     ? ("Invoice " + code + " back to invoiced.")
     : ("Invoice " + code + " marked " + next + ".");
@@ -722,7 +770,8 @@ function compileSingleInvoice(payload) {
   const invoiceId = String((payload && payload.invoiceId) || "").trim();
   if (!invoiceId) return { success: false, error: "Choose an invoice." };
 
-  const row = findInvoiceListRow_(invoiceSheet, invoiceId);
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  const row = located.row;
   if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
 
   const status = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
@@ -732,9 +781,9 @@ function compileSingleInvoice(payload) {
 
   invoiceSheet.getRange(row, 9).setValue("Invoiced");
   if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
-  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId] });
+  lockBilledTimeRates_(ss, { invoiceIds: [invoiceId, located.id, located.code] });
 
-  const code = canonicalInvoiceCode_(invoiceId);
+  const code = invoiceShownCode_(invoiceId, located);
   return {
     success: true,
     invoiceId: invoiceId,
@@ -834,7 +883,7 @@ function canonicalInvoiceCode_(rawId, timeCodeByInt) {
   if (text && String(n) === text && n > 0) {
     const whole = Math.trunc(n);
     const padded = whole < 1000 ? String(whole).padStart(3, "0") : String(whole);
-    return "INV-JR26-" + padded;
+    return "INV-EB-" + padded;
   }
   return text;
 }
@@ -2210,9 +2259,9 @@ function stripeRequest_(method, path, pairs) {
 
 function invoicePayAmount_(ss, invoiceId) {
   var invoiceSheet = ss.getSheetByName("InvoiceList");
-  var code = invoicePrintCode_(ss, invoiceId);
-  var row = invoiceSheet ? findInvoiceListRow_(invoiceSheet, invoiceId) : 0;
-  if (!row && invoiceSheet && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+  var located = resolveInvoiceListRow_(ss, invoiceId);
+  var code = located.code || invoicePrintCode_(ss, invoiceId);
+  var row = located.row;
   if (!row) return { cents: 0, code: code, clientName: "" };
   var values = invoiceSheet.getRange(row, 1, 1, 9).getValues()[0];
   return {
@@ -2464,9 +2513,9 @@ function handleStripeWebhook_(e) {
 function markInvoicePaidFromPayment_(ss, invoiceId) {
   var invoiceSheet = ss.getSheetByName("InvoiceList");
   if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
-  var code = invoicePrintCode_(ss, invoiceId);
-  var row = findInvoiceListRow_(invoiceSheet, invoiceId);
-  if (!row && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+  var located = resolveInvoiceListRow_(ss, invoiceId);
+  var code = located.code || invoicePrintCode_(ss, invoiceId);
+  var row = located.row;
   if (!row) return { success: false, error: "That invoice is not on InvoiceList." };
   var current = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
   if (current === "Paid") return { success: true, status: "Paid", already: true, invoiceId: String(invoiceId || ""), invoiceCode: code };
@@ -2620,9 +2669,9 @@ function contactForClient_(ss, clientName) {
 function markDraftInvoiced_(ss, invoiceId) {
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   if (!invoiceSheet) return { changed: false, status: "" };
-  const code = invoicePrintCode_(ss, invoiceId);
-  let row = findInvoiceListRow_(invoiceSheet, invoiceId);
-  if (!row && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  const code = located.code || invoicePrintCode_(ss, invoiceId);
+  const row = located.row;
   if (!row) return { changed: false, status: "" };
   const status = displayStatus_(invoiceSheet.getRange(row, 9).getValue());
   if (status !== "Draft") return { changed: false, status: status };
