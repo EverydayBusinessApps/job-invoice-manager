@@ -41,7 +41,7 @@ Everyday Business owns the Google Sheet and the Apps Script project. The client 
 
 The public GitHub Pages site keeps `config.js`, which points at the demo sheet and the public demo token. A real client gets a private copy of the static files with their own `apiUrl` and `clientToken` (`config.example.js` is the shape). That private token is not committed, and that copy does not use the demo sheet. One codebase; hosting is not split per client branch.
 
-Apps Script cannot read a custom header such as `X-Client-Token`, and the browser would send a preflight that Apps Script does not answer. The page sends `clientToken` in the POST body. A health check uses the `clientToken` query parameter. The JSON body carries `status` 401 when the token is missing and 403 when it is wrong or the Script Property is unset. Apps Script still returns HTTP 200; callers use the JSON `status`. A rejected request does not open the sheet.
+Apps Script cannot read a custom header such as `X-Client-Token`, and the browser would send a preflight that Apps Script does not answer. The page sends `clientToken` in the POST body and on the web app URL. The URL copy is what lets the browser read the reply after Apps Script redirects. A health check uses the `clientToken` query parameter. The JSON body carries `status` 401 when the token is missing and 403 when it is wrong or the Script Property is unset. Apps Script still returns HTTP 200; callers use the JSON `status`. A rejected request does not open the sheet.
 
 Checklist:
 

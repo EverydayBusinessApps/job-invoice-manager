@@ -1547,6 +1547,7 @@ test("a web request without the client token does not open the sheet", function 
 
   const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert(/clientToken: this\.clientToken/.test(appSource), "the page does not send clientToken");
+  assert(/clientToken=/.test(appSource) && /clientRequestUrl/.test(appSource), "the page does not send the token on the URL");
   assert(!/X-Client-Token/.test(appSource), "the page sends a custom header");
   const demo = fs.readFileSync(path.join(__dirname, "..", "config.js"), "utf8");
   assert(/apiUrl/.test(demo) && /clientToken/.test(demo), "demo config is missing apiUrl or clientToken");
