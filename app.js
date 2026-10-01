@@ -595,6 +595,7 @@ window.Alpine.data('appState', () => ({
   detailLinesRaw: [],
   detailLinesEmpty: true,
   driveUrl: "",
+  jobLogged: { text: "", id: "", code: "" },
   form: { clientName: '', date: (() => {
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, '0');
@@ -1172,18 +1173,110 @@ window.Alpine.data('appState', () => ({
     }]);
     this.refreshClientInvoices();
   },
-  savedJobMessage(result, adding) {
+  todayLabel() {
+    const now = new Date();
+    return String(now.getDate()).padStart(2, "0") + "/" + String(now.getMonth() + 1).padStart(2, "0") + "/" + now.getFullYear();
+  },
+  jobHours() {
+    const start = this.timeToMinutes(this.form.start);
+    const finish = this.timeToMinutes(this.form.finish);
+    if (start == null || finish == null) return 0;
+    let minutes = finish - start;
+    if (minutes <= 0) minutes += 24 * 60;
+    const breaks = { na: 0, "half hour": 30, hour: 60, "hour and half": 90, "two hours": 120 };
+    const lunch = breaks[this.form.lunch] || 0;
+    return Math.max(0, Math.round((minutes - lunch) / 6) / 10);
+  },
+  jobCharge() {
+    const record = this.clientRecordFor(this.form.clientName);
+    const rate = record && record.rate !== "" && record.rate != null ? Number(record.rate) : 0;
+    if (!isFinite(rate)) return 0;
+    return Math.round(this.jobHours() * rate * 100) / 100;
+  },
+  loggedJobSnapshot(amount) {
     const parts = this.jobDateParts(this.form.date);
-    const when = parts ? parts.label : String(this.form.date || "").trim();
-    const who = this.form.clientName || "the client";
-    const code = (result && (result.invoiceCode || result.invoiceId)) || (adding ? this.form.invoiceId : "");
-    const invoice = code ? ("invoice " + code) : "the invoice";
-    if (result && result.alreadySaved) {
-      return "Already saved. The job for " + who + " on " + when + " is on " + invoice + ".";
+    const record = this.clientRecordFor(this.form.clientName);
+    return {
+      client: this.form.clientName,
+      iso: parts ? parts.iso : "",
+      jobDetails: this.form.jobDetails,
+      start: this.form.start,
+      finish: this.form.finish,
+      hours: this.jobHours(),
+      amount: amount,
+      email: record && record.email ? record.email : ""
+    };
+  },
+  showLoggedJob(code, rawId, amount) {
+    const label = String(code || rawId || "").trim();
+    this.jobLogged = {
+      text: "Job logged · " + label + " · " + this.money(amount),
+      id: String(rawId || code || "").trim(),
+      code: label
+    };
+  },
+  placeLoggedDraft(code, rawId, snapshot) {
+    const label = String(code || rawId || "").trim();
+    const id = String(rawId || code || "").trim();
+    if (!label) return;
+    const rows = (this.invoiceRows || []).slice();
+    let row = rows.find((item) => item.id === id || item.code === label || item.id === label);
+    const line = {
+      date: snapshot.iso,
+      details: snapshot.jobDetails,
+      start: snapshot.start,
+      finish: snapshot.finish,
+      hours: snapshot.hours,
+      amount: snapshot.amount
+    };
+    if (!row) {
+      rows.push({
+        id: id,
+        code: label,
+        clientName: snapshot.client,
+        status: "Draft",
+        kind: "draft",
+        date: snapshot.iso,
+        dueDate: "",
+        hours: snapshot.hours,
+        total: snapshot.amount,
+        jobDetails: snapshot.jobDetails || "",
+        servicePeriod: snapshot.iso,
+        email: snapshot.email || "",
+        lines: [line]
+      });
+    } else if (this.previewMode && Array.isArray(row.lines)) {
+      row.lines = row.lines.concat([line]);
+      row.hours = row.lines.reduce((sum, item) => sum + (Number(item.hours) || 0), 0);
+      row.total = row.lines.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
     }
-    if (adding) return "Saved. Job added to " + invoice + " for " + who + " on " + when + ".";
-    if (this.overnight) return "Saved. Overnight job logged on " + invoice + " for " + who + " on " + when + ".";
-    return "Saved. Job logged on " + invoice + " for " + who + " on " + when + ".";
+    this.invoiceRows = rows;
+    this.recomputeOpenPiles();
+  },
+  resetJobForm() {
+    const client = this.form.clientName;
+    this.form.clientName = client;
+    this.form.date = this.todayLabel();
+    this.form.jobDetails = "";
+    this.form.start = "08:00";
+    this.form.lunch = "na";
+    this.form.finish = "16:30";
+    this.form.invoiceMode = "new";
+    this.form.invoiceId = "";
+    this.syncOvernight();
+    this.refreshClientInvoices();
+    this.syncLogButton();
+  },
+  viewLoggedInvoice() {
+    const logged = this.jobLogged || {};
+    const wanted = [logged.id, logged.code].filter(Boolean);
+    const row = (this.invoiceRows || []).find((item) => wanted.indexOf(item.id) !== -1 || wanted.indexOf(item.code) !== -1);
+    const id = row ? row.id : (logged.id || logged.code);
+    if (!id) return;
+    this.currentTab = "dashboard";
+    this.syncTabClasses();
+    this.jobLogged = { text: "", id: "", code: "" };
+    this.openInvoice(id);
   },
   async submitForm() {
     if (this.saving) return;
@@ -1221,12 +1314,15 @@ window.Alpine.data('appState', () => ({
     const adding = this.form.invoiceMode === "existing";
     const chosenId = this.form.invoiceId;
     try {
+      const estimate = this.jobCharge();
+      const snapshot = this.loggedJobSnapshot(estimate);
       if (this.previewMode) {
         await this.wait(800);
         const code = adding && chosenId ? chosenId : "INV-JR26-018";
-        this.form.jobDetails = "";
         this.rememberLoggedJob(code);
-        this.setFeedback(this.savedJobMessage({ invoiceCode: code }, adding), false);
+        this.showLoggedJob(code, code, estimate);
+        this.placeLoggedDraft(code, code, snapshot);
+        this.resetJobForm();
         return;
       }
       const result = await this.api('logTimeEntry', {
@@ -1241,10 +1337,16 @@ window.Alpine.data('appState', () => ({
         invoiceId: this.form.invoiceId
       }, { write: true });
       if (result && result.success) {
-        this.form.jobDetails = "";
-        this.rememberLoggedJob(result.invoiceCode || result.invoiceId, result.invoiceId);
-        this.setFeedback(this.savedJobMessage(result, adding), false);
+        const amount = result.amount != null && isFinite(Number(result.amount)) ? Number(result.amount) : estimate;
+        const code = result.invoiceCode || result.invoiceId;
+        const rawId = result.invoiceId || code;
+        snapshot.amount = amount;
+        this.rememberLoggedJob(code, rawId);
+        this.showLoggedJob(code, rawId, amount);
+        this.resetJobForm();
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
+        const found = (this.invoiceRows || []).some((item) => item.id === rawId || item.id === code || item.code === code);
+        if (!found) this.placeLoggedDraft(code, rawId, snapshot);
         return;
       }
       this.setFeedback(this.failMessage(result, "Could not log the job for " + this.form.clientName + " on " + jobDate.label + ". " + this.unreachableMessage(true)), true);
@@ -2046,7 +2148,12 @@ window.Alpine.data('appState', () => ({
   openMailAuth() {
     if (this.mailAuthUrl) window.open(this.mailAuthUrl, "_blank", "noopener");
   },
-  clearFeedback() { this.feedback.text = ''; this.feedback.isError = false; this.mailAuthUrl = ""; },
+  clearFeedback() {
+    this.feedback.text = '';
+    this.feedback.isError = false;
+    this.mailAuthUrl = "";
+    if (this.jobLogged && this.jobLogged.text) this.jobLogged = { text: "", id: "", code: "" };
+  },
   sampleSettings() {
     const row = (n, label, value) => ({ row: n, label: label, value: value });
     return {

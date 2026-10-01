@@ -446,7 +446,7 @@ function executeTimeLog(payload) {
 
   const replay = recentMatchingEntry_(timeSheet, payload);
   if (replay) {
-    return jobSavedResult_(mode, replay.invoiceId, overnight, true);
+    return jobSavedResult_(mode, replay.invoiceId, overnight, true, null);
   }
 
   if (mode !== "existing") {
@@ -466,10 +466,20 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
-  return jobSavedResult_(mode, invoiceId, overnight, false);
+  return jobSavedResult_(mode, invoiceId, overnight, false, loggedShiftAmount_(timeSheet, nextRow));
 }
 
-function jobSavedResult_(mode, invoiceId, overnight, alreadySaved) {
+function loggedShiftAmount_(sheet, row) {
+  if (typeof SpreadsheetApp !== "undefined" && SpreadsheetApp.flush) SpreadsheetApp.flush();
+  const charge = numberOrNull_(sheet.getRange(row, 12).getValue());
+  if (charge != null) return charge;
+  const hours = numberOrNull_(sheet.getRange(row, 10).getValue());
+  const rate = numberOrNull_(sheet.getRange(row, 11).getValue());
+  if (hours == null || rate == null) return null;
+  return Math.round(hours * rate * 100) / 100;
+}
+
+function jobSavedResult_(mode, invoiceId, overnight, alreadySaved, amount) {
   const code = canonicalInvoiceCode_(invoiceId);
   let message;
   if (String(mode || "").toLowerCase() === "existing") {
@@ -479,13 +489,15 @@ function jobSavedResult_(mode, invoiceId, overnight, alreadySaved) {
   } else {
     message = "Job logged on invoice " + code + ".";
   }
-  return {
+  const result = {
     success: true,
     message: message,
     invoiceId: String(invoiceId),
     invoiceCode: code,
     alreadySaved: !!alreadySaved
   };
+  if (amount != null && isFinite(amount)) result.amount = amount;
+  return result;
 }
 
 function sameClock_(cellValue, timeStr) {
