@@ -53,7 +53,7 @@ Checklist:
 
 ## Pay link (Stripe test mode)
 
-EverydayWork keeps the jobs and the Paid status. Email PDF asks for a Stripe test-mode pay link for the invoice total (EUR) when Script property `STRIPE_SECRET_KEY` is set (`sk_test_…`), shows that link, then sends the email. The link goes in the email. Bank transfer details stay on the PDF. When Stripe reports the payment, that invoice is marked Paid in the Sheet.
+EverydayWork keeps the jobs and the Paid status. Email invoice asks for a Stripe test-mode pay link for the invoice total (EUR) when Script property `STRIPE_SECRET_KEY` is set (`sk_test_…`), shows that link on the send page, then sends the email. The same link is in the email and, once it is on the page, in the PDF footer. Bank transfer details stay on the PDF. When Stripe reports the payment, that invoice is marked Paid in the Sheet.
 
 Paste it in Apps Script: Project Settings → Script properties. Never in the frontend, GitHub, or chat.
 
@@ -64,7 +64,7 @@ Webhook URL: the web app exec URL plus `?stripeWebhook=TOKEN` (the same token). 
 
 After pasting `Code.gs`, open Deploy → Manage deployments → edit this web app → Version = New version → Deploy. Keep the same URL.
 
-The pay link is created and returned before the email is sent, so the page can show it while the email goes out. When `STRIPE_SECRET_KEY` is empty, Email PDF still sends and the letter has no pay link.
+The pay link is created and returned before the email is sent, so the page can show it while the email goes out. The green note only says who the invoice was emailed to. When `STRIPE_SECRET_KEY` is empty, Email invoice still sends and the letter has no pay link.
 
 ## 📊 Database Schema Requirement
 To interface with the API layout, the underlying data core must be structured across exactly three sheets matching this structural matrix:

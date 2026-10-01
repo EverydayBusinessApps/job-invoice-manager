@@ -225,6 +225,11 @@ window.Alpine = {
     root.querySelectorAll('[data-disable-when]').forEach((item) => {
       item.disabled = !!this.getPath(state, item.getAttribute('data-disable-when'));
     });
+    root.querySelectorAll('[data-pay-link]').forEach((el) => {
+      const url = this.getPath(state, 'detailPayUrl') || '';
+      if (url) el.setAttribute('href', url);
+      else el.removeAttribute('href');
+    });
     root.removeAttribute('x-cloak');
   },
   applyClassBindings(root, state) {
@@ -441,7 +446,7 @@ window.Alpine.data('appState', () => ({
   saving: false,
   savePdfLabel: "Save PDF",
   downloadPdfLabel: "Download",
-  emailPdfLabel: "Email PDF",
+  emailPdfLabel: "Email invoice",
   logButtonLabel: "Log a job",
   clientButtonLabel: "Save client",
   settingsButtonLabel: "Save settings",
@@ -586,6 +591,7 @@ window.Alpine.data('appState', () => ({
   detailMessage: "",
   detailMessageAuto: "",
   detailPayUrl: "",
+  payCopied: false,
   businessName: "EverydayWork",
   detailIsDraft: false,
   detailCanSavePdf: false,
@@ -795,7 +801,7 @@ window.Alpine.data('appState', () => ({
   syncPdfLabels(active) {
     this.savePdfLabel = active === "Saving the PDF…" ? "Saving…" : "Save PDF";
     this.downloadPdfLabel = active === "Downloading the PDF…" ? "Downloading…" : "Download";
-    this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : active === "Creating the pay link…" ? "Creating…" : "Email PDF";
+    this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : active === "Creating the pay link…" ? "Creating…" : "Email invoice";
   },
   async withInvoiceWait(label, fn) {
     if (this.saving) return;
@@ -1857,6 +1863,7 @@ window.Alpine.data('appState', () => ({
     if (!sameInvoice) {
       this.detailCc = "";
       this.detailPayUrl = "";
+      this.payCopied = false;
     }
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
@@ -1920,7 +1927,7 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     await this.withInvoiceWait("Saving the PDF…", async () => {
       try {
-        const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "drive" }, { quiet: true, timeoutMs: 60000, write: true });
+        const res = await this.api("exportInvoicePdf", this.pdfExportPayload("drive"), { quiet: true, timeoutMs: 60000, write: true });
         if (res && res.success) {
           this.driveUrl = res.url || "";
           this.noteIssued(res);
@@ -1948,7 +1955,7 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     await this.withInvoiceWait("Downloading the PDF…", async () => {
       try {
-        const res = await this.api("exportInvoicePdf", { invoiceId: this.detailId, mode: "download" }, { quiet: true, timeoutMs: 60000, write: true });
+        const res = await this.api("exportInvoicePdf", this.pdfExportPayload("download"), { quiet: true, timeoutMs: 60000, write: true });
         if (res && res.success && res.pdfBase64) {
           this.savePdfFile(res.fileName, res.pdfBase64);
           this.noteIssued(res);
@@ -1970,7 +1977,7 @@ window.Alpine.data('appState', () => ({
     if (this.saving || !this.detailId) return;
     const email = String(this.detailEmail || "").trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      this.setFeedback("Enter an email address to send the PDF.", true);
+      this.setFeedback("Enter an email address to send the invoice.", true);
       return;
     }
     const cc = this.ccList(email);
@@ -1980,7 +1987,7 @@ window.Alpine.data('appState', () => ({
     }
     if (this.previewMode) {
       await this.withInvoiceWait("Sending the invoice…", () => this.wait(1500));
-      this.setFeedback("Invoice emailed. Mark it invoiced when it has gone out.", false);
+      this.setFeedback(this.emailedBanner(email), false);
       this.revealMarkInvoiced();
       return;
     }
@@ -2024,20 +2031,62 @@ window.Alpine.data('appState', () => ({
       }
       const res = await this.api("exportInvoicePdf", payload, { quiet: true, timeoutMs: 60000, write: true });
       if (res && res.success) {
-        this.setFeedback(res.message || "Invoice emailed. Mark it invoiced when it has gone out.", false);
+        if (res.payUrl) this.detailPayUrl = String(res.payUrl);
+        this.setFeedback(this.emailedBanner(email), false);
         this.revealMarkInvoiced();
-      } else if (res && res.timedOut && payUrl) {
-        this.setFeedback("Pay online: " + payUrl + " The email took too long to confirm. Check whether it arrived before you send it again.", true);
+      } else if (res && res.timedOut) {
+        this.setFeedback("The email took too long to confirm. Check whether it arrived before you send it again.", true);
       } else {
-        this.showPdfError(res, "Could not email the PDF.");
+        this.showPdfError(res, "Could not email the invoice.");
       }
     } catch (err) {
-      this.setFeedback(payUrl ? ("Pay online: " + payUrl) : "Could not email the PDF.", true);
+      this.setFeedback("Could not email the invoice.", true);
     } finally {
       this.saving = false;
       this.loading = false;
       this.loadingLabel = "Updating…";
       this.syncPdfLabels("");
+    }
+  },
+  pdfExportPayload(mode) {
+    const payload = { invoiceId: this.detailId, mode: mode };
+    if (this.detailPayUrl) payload.payUrl = this.detailPayUrl;
+    return payload;
+  },
+  emailedBanner(email) {
+    const code = this.detailCode || this.detailId || "the invoice";
+    return "Emailed " + code + " to " + String(email || "").trim() + ".";
+  },
+  async copyPayLink() {
+    const url = String(this.detailPayUrl || "").trim();
+    if (!url) return;
+    const copied = await this.writeClipboard(url);
+    if (!copied) {
+      this.setFeedback("Could not copy the pay link.", true);
+      return;
+    }
+    this.payCopied = true;
+    const self = this;
+    setTimeout(function () { self.payCopied = false; }, 1600);
+  },
+  async writeClipboard(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (err) {}
+    try {
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.setAttribute("readonly", "readonly");
+      document.body.appendChild(input);
+      input.select();
+      const ok = document.execCommand("copy");
+      input.remove();
+      return !!ok;
+    } catch (err) {
+      return false;
     }
   },
   savePdfFile(fileName, b64) {
