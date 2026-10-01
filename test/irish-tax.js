@@ -50,7 +50,7 @@ assert(context.expenseAmount("") === 0, "blank expenses");
 assert(context.expenseAmount("abc") === null, "bad expenses");
 
 const sample = context.sampleDashboard();
-const draft = sample.invoices.filter((row) => row.id === "INV-JR26-003")[0];
+const draft = sample.invoices.filter((row) => row.id === "INV-EB-003")[0];
 const draftFacts = context.invoiceCardFacts(draft);
 assert(draftFacts.period === "12/09/2026", "draft period " + draftFacts.period);
 assert(draftFacts.when === "10/09/2026", "draft date " + draftFacts.when);
