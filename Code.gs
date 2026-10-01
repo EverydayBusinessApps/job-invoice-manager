@@ -149,8 +149,8 @@ function doPost(e) {
       responseData = fetchInvoiceDetail(requestData.payload);
     } else if (action === "compileInvoice") {
       responseData = compileSingleInvoice(requestData.payload);
-    } else if (action === "createPaymentLink") {
-      responseData = createPaymentLink(requestData.payload);
+    } else if (action === "createPaymentLink" || action === "ensurePaymentLink") {
+      responseData = ensurePaymentLink(requestData.payload);
     } else if (action === "exportInvoicePdf") {
       responseData = exportInvoicePdf(requestData.payload);
     } else if (action === "listClients") {
@@ -1729,7 +1729,7 @@ function exportInvoicePdf(payload) {
 
     let payUrl = acceptedPayUrl_(payload && payload.payUrl);
     if (mode === "email" && !payUrl && !(payload && payload.skipPayLink)) {
-      const linked = createInvoicePaymentLink_(ss, invoiceId);
+      const linked = ensureInvoicePaymentLink_(ss, invoiceId);
       payUrl = linked.url || "";
     }
     payStamp = stampInvoicePayFooter_(sheet, payUrl);
@@ -2257,12 +2257,134 @@ function restoreInvoicePayFooter_(sheet, stamp) {
   sheet.getRange(stamp.row, 1).setValue(stamp.previous);
 }
 
-function createPaymentLink(payload) {
+var PAY_LINKS_KEY_ = "PAY_LINKS";
+
+function payLinksStore_() {
+  return (typeof PropertiesService !== "undefined" && PropertiesService.getScriptProperties)
+    ? PropertiesService.getScriptProperties()
+    : null;
+}
+
+function readPayLinks_() {
+  var raw = scriptProperty_(PAY_LINKS_KEY_);
+  if (!raw) return {};
+  try {
+    var parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch (err) {
+    return {};
+  }
+}
+
+function writePayLinks_(links) {
+  var props = payLinksStore_();
+  if (!props || typeof props.setProperty !== "function") return;
+  try {
+    props.setProperty(PAY_LINKS_KEY_, JSON.stringify(links || {}));
+  } catch (err) {}
+}
+
+function payLinkKeys_(invoiceId, code) {
+  var keys = [];
+  var id = String(invoiceId || "").trim();
+  var printed = String(code || "").trim();
+  if (id) keys.push(id);
+  if (printed && printed !== id) keys.push(printed);
+  return keys;
+}
+
+function storedPayLink_(links, invoiceId, code) {
+  var keys = payLinkKeys_(invoiceId, code);
+  var found = null;
+  var i;
+  for (i = 0; i < keys.length; i++) {
+    var item = links[keys[i]];
+    if (!item || typeof item !== "object") continue;
+    found = item;
+    if (acceptedPayUrl_(item.url)) return item;
+  }
+  return found;
+}
+
+function rememberPayLink_(links, invoiceId, code, record) {
+  var keys = payLinkKeys_(invoiceId, code);
+  var i;
+  for (i = 0; i < keys.length; i++) links[keys[i]] = record;
+}
+
+function forgetPayLink_(links, invoiceId, code) {
+  var keys = payLinkKeys_(invoiceId, code);
+  var i;
+  for (i = 0; i < keys.length; i++) delete links[keys[i]];
+}
+
+function deactivatePaymentLink_(id) {
+  var linkId = String(id || "").trim();
+  if (!linkId || !stripeSecret_()) return;
+  try {
+    stripeRequest_("post", "/v1/payment_links/" + encodeURIComponent(linkId), [["active", "false"]]);
+  } catch (err) {}
+}
+
+function withPayLinkLock_(fn) {
+  var lock = null;
+  if (typeof LockService !== "undefined" && LockService.getScriptLock) {
+    try { lock = LockService.getScriptLock(); } catch (err) { lock = null; }
+  }
+  var held = false;
+  if (lock && lock.tryLock) {
+    try { held = !!lock.tryLock(10000); } catch (err) { held = false; }
+    if (!held) return { url: "", error: "The pay link is busy. Try again in a moment." };
+  }
+  try {
+    return fn();
+  } finally {
+    if (held && lock && lock.releaseLock) {
+      try { lock.releaseLock(); } catch (err) {}
+    }
+  }
+}
+
+function ensurePaymentLink(payload) {
   var invoiceId = String((payload && payload.invoiceId) || "").trim();
   if (!invoiceId) return { success: false, error: "Choose an invoice." };
-  var linked = createInvoicePaymentLink_(workbook_(), invoiceId);
+  var linked = ensureInvoicePaymentLink_(workbook_(), invoiceId);
   if (linked.error) return { success: false, error: linked.error, payUrl: "" };
-  return { success: true, payUrl: linked.url || "" };
+  return { success: true, payUrl: linked.url || "", reused: !!linked.reused };
+}
+
+function createPaymentLink(payload) {
+  return ensurePaymentLink(payload);
+}
+
+function ensureInvoicePaymentLink_(ss, invoiceId) {
+  return withPayLinkLock_(function () {
+    var amount = invoicePayAmount_(ss, invoiceId);
+    var links = readPayLinks_();
+    var stored = storedPayLink_(links, invoiceId, amount.code);
+    var sameTotal = !!(stored && Number(stored.cents) === amount.cents);
+    if (!stripeSecret_()) return { url: "" };
+    if (amount.cents < 50) {
+      if (stored && !sameTotal) {
+        if (stored.id) deactivatePaymentLink_(stored.id);
+        forgetPayLink_(links, invoiceId, amount.code);
+        writePayLinks_(links);
+      }
+      return { url: "" };
+    }
+    if (sameTotal && acceptedPayUrl_(stored.url)) {
+      return { url: acceptedPayUrl_(stored.url), id: String(stored.id || ""), reused: true };
+    }
+    if (stored && stored.id) deactivatePaymentLink_(stored.id);
+    var created = createInvoicePaymentLink_(ss, invoiceId);
+    if (created.error) return { url: "", error: created.error };
+    if (!created.url) return { url: "" };
+    var record = { url: created.url, id: String(created.id || ""), cents: amount.cents };
+    rememberPayLink_(links, invoiceId, amount.code, record);
+    writePayLinks_(links);
+    return { url: created.url, id: record.id };
+  });
 }
 
 function createInvoicePaymentLink_(ss, invoiceId) {
@@ -2290,7 +2412,8 @@ function createInvoicePaymentLink_(ss, invoiceId) {
   if (url.indexOf("https://buy.stripe.com/") !== 0 && url.indexOf("https://book.stripe.com/") !== 0) {
     return { url: "", error: "Stripe did not return a pay link." };
   }
-  return { url: url };
+  var id = created.body && created.body.id ? String(created.body.id) : "";
+  return { url: url, id: id };
 }
 
 function appendInvoicePayLink_(text, url) {

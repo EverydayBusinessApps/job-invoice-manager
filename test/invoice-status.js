@@ -250,6 +250,12 @@ function loadApi(workbook) {
           tryLock: function () { return true; },
           releaseLock: function () {}
         };
+      },
+      getScriptLock: function () {
+        return {
+          tryLock: function () { return true; },
+          releaseLock: function () {}
+        };
       }
     },
     DriveApp: {
@@ -335,6 +341,10 @@ function loadApi(workbook) {
             const store = context.scriptProperties || {};
             if (!Object.prototype.hasOwnProperty.call(store, name) || store[name] == null) return null;
             return store[name];
+          },
+          setProperty: function (name, value) {
+            if (!context.scriptProperties) context.scriptProperties = {};
+            context.scriptProperties[name] = value == null ? null : String(value);
           }
         };
       }
@@ -2010,10 +2020,14 @@ test("createPaymentLink returns the pay link before the email is sent", function
 
   const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   const start = appSource.indexOf("async emailInvoicePdf()");
-  const emailFn = appSource.slice(start, start + 2800);
-  const createAt = emailFn.indexOf('api("createPaymentLink"');
+  const end = appSource.indexOf("pdfExportPayload(mode)", start);
+  const emailFn = appSource.slice(start, end);
+  const payAskAt = emailFn.indexOf("requestPayLink");
   const exportAt = emailFn.indexOf('api("exportInvoicePdf"');
-  assert(createAt !== -1 && exportAt !== -1 && createAt < exportAt, "Email invoice creates the pay link after the email");
+  assert(payAskAt !== -1 && exportAt !== -1 && payAskAt < exportAt, "Email invoice asks for the pay link after the email");
+  const ensureAt = appSource.indexOf('api("ensurePaymentLink"');
+  const createAt = appSource.indexOf('api("createPaymentLink"');
+  assert(ensureAt !== -1 && createAt !== -1 && ensureAt < createAt, "the old create call runs before ensure");
 });
 
 test("email without a Stripe key sends and leaves http out of the letter", function (api, workbook) {
@@ -2092,6 +2106,115 @@ test("a webhook whose Stripe read is not paid leaves the invoice status alone", 
   assert(result.success === true && result.ignored === true, JSON.stringify(result));
   assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
   assert(stripeFetches(api).length === 1, "the webhook skipped the Stripe read");
+});
+
+test("ensurePaymentLink reuses the stored pay link until the total changes", function (api, workbook) {
+  readyInvoiceEmail(workbook);
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-011");
+  invoices.getRange(2, 2).setValue("Bakewell Foods Ltd");
+  invoices.getRange(2, 7).setValue(1080);
+  invoices.getRange(2, 9).setValue("Invoiced");
+  const letter = "To Kevin McNeil\nPlease find attached invoice for 10 Sep 2026\nTotal owed €1,080.00\n\nKind Regards\nEveryday Business";
+
+  const touches = api.sheetTouches;
+  api.doPost({
+    postData: { contents: JSON.stringify({ action: "ensurePaymentLink", payload: { invoiceId: "INV-JR26-011" } }) },
+    parameter: {}
+  });
+  assert(api.lastJson.status === 401 && api.lastJson.error === "Client token is missing.", JSON.stringify(api.lastJson));
+  assert(api.sheetTouches === touches, "a missing token opened the sheet");
+
+  const empty = webPost(api, {
+    action: "ensurePaymentLink",
+    payload: { invoiceId: "INV-JR26-011" },
+    clientToken: "beta-token"
+  });
+  assert(empty.success === true && empty.payUrl === "", JSON.stringify(empty));
+  assert(stripeFetches(api).length === 0, "a missing Stripe key created a pay link");
+
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const first = webPost(api, {
+    action: "ensurePaymentLink",
+    payload: { invoiceId: "INV-JR26-011" },
+    clientToken: "beta-token"
+  });
+  assert(first.success === true && first.payUrl === "https://buy.stripe.com/test_example", JSON.stringify(first));
+  assert(first.reused !== true, "the first link was treated as reused");
+  const stored = JSON.parse(api.scriptProperties.PAY_LINKS);
+  assert(stored["INV-JR26-011"].url === first.payUrl, JSON.stringify(stored));
+  assert(stored["INV-JR26-011"].id === "plink_test", JSON.stringify(stored));
+  assert(stored["INV-JR26-011"].cents === 108000, JSON.stringify(stored));
+  assert(JSON.stringify(stored).indexOf("sk_") === -1, JSON.stringify(stored));
+
+  const beforeReuse = stripeFetches(api).length;
+  const again = webPost(api, {
+    action: "ensurePaymentLink",
+    payload: { invoiceId: "INV-JR26-011" },
+    clientToken: "beta-token"
+  });
+  assert(again.success === true && again.reused === true && again.payUrl === first.payUrl, JSON.stringify(again));
+  assert(stripeFetches(api).length === beforeReuse, "the same total created another pay link");
+
+  const beforeEmail = stripeFetches(api).length;
+  const sent = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter
+  });
+  assert(sent.success, sent.error);
+  assert(stripeFetches(api).length === beforeEmail, "email created a second pay link");
+  assert(api.lastEmail.body.indexOf(first.payUrl) !== -1, api.lastEmail.body);
+
+  let sawDeactivate = false;
+  api.stripeHandler = function (url, options) {
+    if (String(url).indexOf("/v1/payment_links/") !== -1) {
+      sawDeactivate = String(options && options.payload || "").indexOf("active=false") !== -1;
+      return { code: 400, body: { error: { message: "already inactive" } } };
+    }
+    return { code: 200, body: { id: "plink_new", url: "https://buy.stripe.com/test_new" } };
+  };
+  invoices.getRange(2, 7).setValue(500);
+  const changed = webPost(api, {
+    action: "ensurePaymentLink",
+    payload: { invoiceId: "INV-JR26-011" },
+    clientToken: "beta-token"
+  });
+  assert(changed.success === true && changed.payUrl === "https://buy.stripe.com/test_new", JSON.stringify(changed));
+  assert(sawDeactivate, "the old pay link was left active");
+  const next = JSON.parse(api.scriptProperties.PAY_LINKS);
+  assert(next["INV-JR26-011"].cents === 50000 && next["INV-JR26-011"].id === "plink_new", JSON.stringify(next));
+
+  api.stripeHandler = function (url) {
+    if (String(url).indexOf("/v1/payment_links/") !== -1) {
+      return { code: 200, body: { id: "plink_new", active: false } };
+    }
+    return { code: 200, body: { id: "plink_small", url: "https://buy.stripe.com/test_small" } };
+  };
+  const beforeSmall = stripeFetches(api).length;
+  invoices.getRange(2, 7).setValue(0.4);
+  const small = webPost(api, {
+    action: "ensurePaymentLink",
+    payload: { invoiceId: "INV-JR26-011" },
+    clientToken: "beta-token"
+  });
+  assert(small.success === true && small.payUrl === "", JSON.stringify(small));
+  assert(stripeFetches(api).length === beforeSmall + 1, "a smaller total created a new pay link");
+  assert(stripeFetches(api)[beforeSmall].url.indexOf("/v1/payment_links/plink_new") !== -1, stripeFetches(api)[beforeSmall].url);
+  assert(!api.scriptProperties.PAY_LINKS || api.scriptProperties.PAY_LINKS.indexOf("INV-JR26-011") === -1, api.scriptProperties.PAY_LINKS);
+
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert(appSource.indexOf("visibilitychange") !== -1, "the page does not check when the tab returns");
+  assert(/addEventListener\("focus"/.test(appSource), "the page does not check when the window is focused");
+  assert(/payPollMs:\s*6000/.test(appSource), "the pay check is not every 6 seconds");
+  assert(/payWatchMs:\s*120000/.test(appSource), "the pay check does not run for about two minutes");
+  const copyStart = appSource.indexOf("async copyPayLink()");
+  assert(appSource.slice(copyStart, copyStart + 700).indexOf("startPayWatch") !== -1, "copying the pay link does not start the pay check");
+  const emailStart = appSource.indexOf("async emailInvoicePdf()");
+  const emailEnd = appSource.indexOf("pdfExportPayload(mode)", emailStart);
+  assert(appSource.slice(emailStart, emailEnd).indexOf("startPayWatch") !== -1, "emailing the invoice does not start the pay check");
+  assert(appSource.indexOf('+ " paid"') !== -1, "a paid invoice has no banner");
 });
 
 if (failures.length) {
