@@ -43,6 +43,7 @@ button.pile .metric-value { font-size: 1.55rem; margin-top: 0.3rem; }
 .sheet-page > .inv-stack { margin-top: 1rem; }
 .page-title { margin: 0; font-size: 1.7rem; font-weight: 700; color: #00263B; letter-spacing: -0.02em; }
 .page-lead { margin: 0; color: #64748b; font-size: 0.95rem; font-weight: 500; }
+.pay-link { margin: 0.7rem 0; overflow-wrap: anywhere; }
 .inv-stack { display: flex; flex-direction: column; gap: 0.85rem; }
 .inv-card { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.95rem; padding: 1rem 1.05rem 1.05rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
 .inv-client { font-size: 1.15rem; font-weight: 700; color: #00263B; }

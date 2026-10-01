@@ -149,6 +149,8 @@ function doPost(e) {
       responseData = fetchInvoiceDetail(requestData.payload);
     } else if (action === "compileInvoice") {
       responseData = compileSingleInvoice(requestData.payload);
+    } else if (action === "createPaymentLink") {
+      responseData = createPaymentLink(requestData.payload);
     } else if (action === "exportInvoicePdf") {
       responseData = exportInvoicePdf(requestData.payload);
     } else if (action === "listClients") {
@@ -1722,10 +1724,17 @@ function exportInvoicePdf(payload) {
     let payUrl = "";
     let payLinkNote = "";
     if (mode === "email") {
-      const linked = createInvoicePaymentLink_(ss, invoiceId);
-      payUrl = linked.url || "";
-      if (payUrl) prepared = { text: appendInvoicePayLink_(prepared.text, payUrl), contact: prepared.contact };
-      else if (linked.error) payLinkNote = " The pay link was not added.";
+      payUrl = acceptedPayUrl_(payload && payload.payUrl);
+      if (payUrl) {
+        prepared = { text: appendInvoicePayLink_(prepared.text, payUrl), contact: prepared.contact };
+      } else if (payload && payload.skipPayLink) {
+        if (payload.payLinkFailed) payLinkNote = " The pay link was not added.";
+      } else {
+        const linked = createInvoicePaymentLink_(ss, invoiceId);
+        payUrl = linked.url || "";
+        if (payUrl) prepared = { text: appendInvoicePayLink_(prepared.text, payUrl), contact: prepared.contact };
+        else if (linked.error) payLinkNote = " The pay link was not added.";
+      }
     }
 
     let copyTo = "";
@@ -2206,6 +2215,20 @@ function invoicePayAmount_(ss, invoiceId) {
     code: code,
     clientName: clientText_(values[1])
   };
+}
+
+function acceptedPayUrl_(value) {
+  var link = String(value || "").trim();
+  if (link.indexOf("https://buy.stripe.com/") === 0 || link.indexOf("https://book.stripe.com/") === 0) return link;
+  return "";
+}
+
+function createPaymentLink(payload) {
+  var invoiceId = String((payload && payload.invoiceId) || "").trim();
+  if (!invoiceId) return { success: false, error: "Choose an invoice." };
+  var linked = createInvoicePaymentLink_(workbook_(), invoiceId);
+  if (linked.error) return { success: false, error: linked.error, payUrl: "" };
+  return { success: true, payUrl: linked.url || "" };
 }
 
 function createInvoicePaymentLink_(ss, invoiceId) {
