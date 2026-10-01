@@ -467,7 +467,8 @@ window.Alpine.data('appState', () => ({
     terms: ""
   },
   
-  apiUrl: "https://script.google.com/macros/s/AKfycbzVJ3wV-heWwuT0xD5uKQum8xMp9NJ165pTWESf170vNvsgpI6ApGIX2BjoyuW5Z3tS/exec",
+  apiUrl: "",
+  clientToken: "",
 
   invoices: [],
   clientInvoices: [],
@@ -725,10 +726,23 @@ window.Alpine.data('appState', () => ({
     if (res && res.error) return String(res.error);
     return fallback;
   },
+  readClientConfig() {
+    const cfg = (typeof window !== "undefined" && window.EVERYDAYWORK_CONFIG) || {};
+    this.apiUrl = String(cfg.apiUrl || "").trim();
+    this.clientToken = String(cfg.clientToken || "").trim();
+  },
   async api(actionName, payloadData = {}, opts) {
     const quiet = opts && opts.quiet;
     const writing = !!(opts && opts.write);
     const timeoutMs = (opts && opts.timeoutMs) || 40000;
+    this.readClientConfig();
+    if (!this.apiUrl || !this.clientToken) {
+      return {
+        success: false,
+        status: 401,
+        error: "This EverydayWork copy has no client token. Add it to the client config before using the live books."
+      };
+    }
     if (!quiet) this.loading = true;
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     let timedOut = false;
@@ -740,7 +754,7 @@ window.Alpine.data('appState', () => ({
       const response = await fetch(this.apiUrl, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action: actionName, payload: payloadData }),
+        body: JSON.stringify({ action: actionName, payload: payloadData, clientToken: this.clientToken }),
         signal: controller ? controller.signal : undefined
       });
       const text = await response.text();
@@ -1452,6 +1466,10 @@ window.Alpine.data('appState', () => ({
     }
     try {
       let res = await this.api("getAppSnapshot", {}, { quiet: quiet });
+      if (res && (res.status === 401 || res.status === 403)) {
+        this.noteResyncFailed(res);
+        return;
+      }
       if (res && /Invalid API action/.test(String(res.error || ""))) {
         if (!this.clients.length) {
           const initial = await this.api("getInitialAppData", {}, { quiet: quiet });

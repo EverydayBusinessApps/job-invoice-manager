@@ -8,6 +8,87 @@ function invoicePdfEngine_() {
   return "inv-template-plain";
 }
 
+// Closed beta access. Everyday Business owns this Sheet and this Apps Script
+// project. The client is not the Apps Script owner. The web app runs as
+// Everyday Business, so the client can use the app while the sheet is shared
+// as Viewer. Share the sheet as Editor only when the client should change
+// cells by hand.
+//
+// Apps Script web apps do not receive custom headers such as X-Client-Token,
+// and sending one makes the browser issue a CORS preflight that Apps Script
+// does not answer. POST requests carry clientToken in the JSON body. A GET
+// health check carries clientToken as a query parameter.
+// ContentService cannot set the HTTP status line, so a rejection is HTTP 200
+// with JSON status 401 (missing) or 403 (wrong or unset). Callers must read
+// that field. A missing or wrong token never opens the sheet.
+var CLIENT_TOKEN_KEY_ = "CLIENT_TOKEN";
+
+function jsonOut_(payload) {
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function expectedClientToken_() {
+  var props = (typeof PropertiesService !== "undefined" && PropertiesService.getScriptProperties)
+    ? PropertiesService.getScriptProperties()
+    : null;
+  if (!props || typeof props.getProperty !== "function") return "";
+  var value = props.getProperty(CLIENT_TOKEN_KEY_);
+  return String(value || "").trim();
+}
+
+function tokenMatches_(given, expected) {
+  var a = String(given);
+  var b = String(expected);
+  var length = Math.max(a.length, b.length);
+  var diff = a.length === b.length ? 0 : 1;
+  var i;
+  for (i = 0; i < length; i++) {
+    var ca = i < a.length ? a.charCodeAt(i) : 0;
+    var cb = i < b.length ? b.charCodeAt(i) : 0;
+    diff |= (ca ^ cb);
+  }
+  return diff === 0;
+}
+
+function presentedClientTokens_(e) {
+  var found = [];
+  if (e && e.parameter && e.parameter.clientToken != null && String(e.parameter.clientToken).trim() !== "") {
+    found.push(String(e.parameter.clientToken).trim());
+  }
+  if (e && e.postData && e.postData.contents) {
+    try {
+      var data = JSON.parse(e.postData.contents);
+      if (data && data.clientToken != null && String(data.clientToken).trim() !== "") {
+        found.push(String(data.clientToken).trim());
+      }
+    } catch (err) {}
+  }
+  return found;
+}
+
+function clientTokenGate_(e) {
+  var expected = expectedClientToken_();
+  var found = presentedClientTokens_(e);
+  if (!expected) {
+    return { ok: false, status: 403, error: "Client token is not set on this web app." };
+  }
+  if (!found.length) {
+    return { ok: false, status: 401, error: "Client token is missing." };
+  }
+  var i;
+  for (i = 0; i < found.length; i++) {
+    if (!tokenMatches_(found[i], expected)) {
+      return { ok: false, status: 403, error: "Client token was not accepted." };
+    }
+  }
+  return { ok: true };
+}
+
+function rejectClientToken_(gate) {
+  return jsonOut_({ success: false, status: gate.status, error: gate.error });
+}
+
 // Open the workbook again so a web request sees edits made in the sheet.
 function workbook_() {
   const active = SpreadsheetApp.getActiveSpreadsheet();
@@ -22,15 +103,19 @@ function workbook_() {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput(JSON.stringify({ 
-    success: true, 
+  var gate = clientTokenGate_(e);
+  if (!gate.ok) return rejectClientToken_(gate);
+  return jsonOut_({
+    success: true,
     message: "EverydayWork is ready.",
     invoicePdf: invoicePdfEngine_(),
     emailCc: true
-  })).setMimeType(ContentService.MimeType.JSON);
+  });
 }
 
 function doPost(e) {
+  var gate = clientTokenGate_(e);
+  if (!gate.ok) return rejectClientToken_(gate);
   try {
     if (!e || !e.postData || !e.postData.contents) {
       throw new Error("Empty execution payload context received.");
@@ -72,12 +157,10 @@ function doPost(e) {
       throw new Error("Invalid API action parameter mapping.");
     }
 
-    return ContentService.createTextOutput(JSON.stringify(responseData))
-      .setMimeType(ContentService.MimeType.JSON);
+    return jsonOut_(responseData);
 
   } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return jsonOut_({ success: false, error: err.toString() });
   }
 }
 
