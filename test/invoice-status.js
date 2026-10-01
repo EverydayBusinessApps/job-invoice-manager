@@ -343,7 +343,28 @@ function loadApi(workbook) {
       fetch: function (url, options) {
         context.fetchTouches += 1;
         context.lastFetch = { url: url, options: options };
+        context.fetches.push(context.lastFetch);
         if (context.fetchError) throw new Error(context.fetchError);
+        if (String(url).indexOf("api.stripe.com") !== -1) {
+          let handled = null;
+          if (typeof context.stripeHandler === "function") handled = context.stripeHandler(url, options);
+          if (!handled) {
+            if (String(url).indexOf("/v1/payment_links") !== -1) {
+              handled = { code: 200, body: { id: "plink_test", url: "https://buy.stripe.com/test_example", active: true } };
+            } else if (String(url).indexOf("/v1/checkout/sessions/") !== -1) {
+              handled = { code: 200, body: { id: "cs_test", payment_status: "unpaid", metadata: {} } };
+            } else {
+              handled = { code: 200, body: {} };
+            }
+          }
+          const code = handled.code == null ? 200 : handled.code;
+          const body = handled.body !== undefined ? handled.body : handled;
+          const text = typeof body === "string" ? body : JSON.stringify(body);
+          return {
+            getResponseCode: function () { return code; },
+            getContentText: function () { return text; }
+          };
+        }
         const bytes = context.fetchBytes || [37, 80, 68, 70, 45, 49, 46, 52, 10, 37, 37, 69, 79, 70];
         return {
           getResponseCode: function () { return context.fetchCode || 200; },
@@ -361,6 +382,7 @@ function loadApi(workbook) {
     driveTouches: 0,
     mailTouches: 0,
     fetchTouches: 0,
+    fetches: [],
     sheetTouches: 0,
     lastBody: "",
     lastJson: null
@@ -1551,6 +1573,390 @@ test("a web request without the client token does not open the sheet", function 
   assert(!/X-Client-Token/.test(appSource), "the page sends a custom header");
   const demo = fs.readFileSync(path.join(__dirname, "..", "config.js"), "utf8");
   assert(/apiUrl/.test(demo) && /clientToken/.test(demo), "demo config is missing apiUrl or clientToken");
+});
+
+function stripeFetches(api) {
+  return api.fetches.filter(function (item) {
+    return String(item.url).indexOf("api.stripe.com") !== -1;
+  });
+}
+
+function postWebhook(api, token, body) {
+  api.doPost({
+    parameter: { stripeWebhook: token },
+    postData: { contents: JSON.stringify(body) }
+  });
+  return api.lastJson;
+}
+
+function sessionEvent(type, invoiceId, sessionId) {
+  return {
+    type: type,
+    data: {
+      object: {
+        id: sessionId || "cs_test_123",
+        payment_status: "paid",
+        metadata: { sheetId: "workbook", invoiceId: invoiceId }
+      }
+    }
+  };
+}
+
+function paidSession(invoiceId, sheetId) {
+  return {
+    code: 200,
+    body: {
+      id: "cs_test_123",
+      payment_status: "paid",
+      metadata: { sheetId: sheetId || "workbook", invoiceId: invoiceId, clientName: "Acme" }
+    }
+  };
+}
+
+function watchStatus(sheet) {
+  const writes = [];
+  const original = sheet.getRange;
+  sheet.getRange = function (rowOrA1, col) {
+    const range = original.apply(this, arguments);
+    if (col === 9) {
+      const setValue = range.setValue;
+      range.setValue = function (value) {
+        writes.push(value);
+        return setValue.apply(this, arguments);
+      };
+    }
+    return range;
+  };
+  return writes;
+}
+
+function readyInvoiceEmail(workbook) {
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  template.getRange("A4").setValue("INVOICE");
+  const config = createSheet("Config");
+  workbook.sheets.Config = config;
+  config.getRange("A5").setValue("Trading name");
+  config.getRange("B5").setValue("Everyday Business");
+  config.getRange("A6").setValue("Business Email");
+  config.getRange("B6").setValue("records@everydaybusiness.ie");
+  const clients = workbook.sheets.ClientRecords;
+  clients.getRange(2, 1).setValue("Bakewell Foods Ltd");
+  clients.getRange(2, 7).setValue("Kevin McNeil");
+  return template;
+}
+
+test("a request without stripeWebhook still needs the client token", function (api) {
+  api.doPost({
+    parameter: {},
+    postData: { contents: JSON.stringify({ action: "getInitialAppData" }) }
+  });
+  assert(api.lastJson.status === 401 && api.lastJson.success === false, JSON.stringify(api.lastJson));
+  assert(api.sheetTouches === 0, "a request without a token opened the sheet");
+
+  api.doPost({
+    parameter: { stripeWebhook: "" },
+    postData: { contents: JSON.stringify({ action: "getInitialAppData" }) }
+  });
+  assert(api.lastJson.status === 401, JSON.stringify(api.lastJson));
+  assert(api.sheetTouches === 0, "an empty webhook parameter opened the sheet");
+
+  api.doPost({
+    parameter: { stripeWebhook: "   " },
+    postData: { contents: JSON.stringify({ action: "getInitialAppData", clientToken: "beta-token" }) }
+  });
+  assert(api.lastJson.success === true, JSON.stringify(api.lastJson));
+});
+
+test("a wrong Stripe webhook token is rejected before the sheet or Stripe", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-002");
+  invoices.getRange(2, 9).setValue("Invoiced");
+  const wrong = postWebhook(api, "nope", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(wrong.success === false && wrong.status === 403, JSON.stringify(wrong));
+  assert(wrong.error === "Stripe webhook was not accepted.", wrong.error);
+  assert(api.sheetTouches === 0, "a wrong webhook token opened the sheet");
+  assert(stripeFetches(api).length === 0, "a wrong webhook token called Stripe");
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "";
+  const unset = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(unset.success === false && unset.status === 403, JSON.stringify(unset));
+  assert(api.sheetTouches === 0, "an unset webhook token opened the sheet");
+  assert(stripeFetches(api).length === 0, "an unset webhook token called Stripe");
+});
+
+test("an unpaid Stripe session leaves the invoice status alone", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-002");
+  invoices.getRange(2, 2).setValue("Acme");
+  invoices.getRange(2, 7).setValue(200);
+  invoices.getRange(2, 9).setValue("Invoiced");
+  api.stripeHandler = function (url) {
+    assert(url.indexOf("/v1/checkout/sessions/cs_test_123") !== -1, url);
+    return { code: 200, body: { id: "cs_test_123", payment_status: "unpaid", metadata: { sheetId: "workbook", invoiceId: "INV-JR26-002" } } };
+  };
+  const unpaid = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(unpaid.success === true && unpaid.ignored === true, JSON.stringify(unpaid));
+  assert(unpaid.paymentStatus === "unpaid", JSON.stringify(unpaid));
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+  assert(stripeFetches(api).length === 1, "the unpaid session was trusted from the POST body");
+
+  api.stripeHandler = function () {
+    return { code: 200, body: { id: "cs_test_123", payment_status: "open", metadata: { sheetId: "workbook", invoiceId: "INV-JR26-002" } } };
+  };
+  const open = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(open.success === true && open.ignored === true, JSON.stringify(open));
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+});
+
+test("a paid Stripe session marks an invoiced invoice Paid", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-002");
+  invoices.getRange(2, 2).setValue("Acme");
+  invoices.getRange(2, 7).setValue(200);
+  invoices.getRange(2, 8).setValue(atNoon(2026, 9, 1));
+  invoices.getRange(2, 9).setValue("Invoiced");
+  const time = workbook.sheets["Time&Attendance"];
+  time.getRange(2, 2).setValue("INV-JR26-002");
+  time.getRange(2, 4).setValue("Acme");
+  time.getRange(2, 11).setValue(50);
+  let seenAuth = "";
+  api.stripeHandler = function (url, options) {
+    seenAuth = options && options.headers && options.headers.Authorization;
+    assert(!options.payload, "the checkout read sent a body");
+    return paidSession("INV-JR26-002");
+  };
+  const paid = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(paid.success === true, paid.error);
+  assert(paid.status === "Paid", paid.status);
+  assert(statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
+  assert(time.getRange(2, 14).getValue() === 50, "the billed rate stayed open");
+  assert(seenAuth === "Bearer sk_test_example", seenAuth);
+  assert(invoices.getRange(2, 8).getValue().getTime() === atNoon(2026, 9, 1).getTime(), "the invoice date was rewritten");
+});
+
+test("a paid Stripe session marks a draft Invoiced and then Paid", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-003");
+  invoices.getRange(2, 2).setValue("Acme");
+  invoices.getRange(2, 7).setValue(50);
+  invoices.getRange(2, 9).setValue("Draft");
+  const time = workbook.sheets["Time&Attendance"];
+  time.getRange(2, 2).setValue("INV-JR26-003");
+  time.getRange(2, 4).setValue("Acme");
+  time.getRange(2, 11).setValue(40);
+  const writes = watchStatus(invoices);
+  api.stripeHandler = function () { return paidSession("INV-JR26-003"); };
+  const paid = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-003"));
+  assert(paid.success === true, paid.error);
+  assert(writes[0] === "Invoiced" && writes[writes.length - 1] === "Paid", writes.join(","));
+  assert(statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
+  const stamped = invoices.getRange(2, 8).getValue();
+  assert(stamped && typeof stamped.getTime === "function" && !isNaN(stamped.getTime()), "blank date was not stamped");
+  assert(time.getRange(2, 14).getValue() === 40, "the draft rate was not locked");
+});
+
+test("a Stripe payment on an invoice that is already Paid stays Paid", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  const stamped = atNoon(2026, 8, 1);
+  invoices.getRange(2, 1).setValue("INV-JR26-001");
+  invoices.getRange(2, 7).setValue(100);
+  invoices.getRange(2, 8).setValue(stamped);
+  invoices.getRange(2, 9).setValue("Paid");
+  api.stripeHandler = function () { return paidSession("INV-JR26-001"); };
+  const again = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-001"));
+  assert(again.success === true && again.already === true, JSON.stringify(again));
+  assert(!again.error, again.error);
+  assert(again.status === "Paid" && statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
+  assert(invoices.getRange(2, 8).getValue().getTime() === stamped.getTime(), "a second payment rewrote the date");
+});
+
+test("a paid session for another workbook does not mark the invoice Paid", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-002");
+  invoices.getRange(2, 9).setValue("Invoiced");
+  api.stripeHandler = function () { return paidSession("INV-JR26-002", "other-workbook"); };
+  const missed = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(missed.success === false, JSON.stringify(missed));
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+});
+
+test("email with a test Stripe key adds a pay link before Kind Regards", function (api, workbook) {
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const template = readyInvoiceEmail(workbook);
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-011");
+  invoices.getRange(2, 2).setValue("Bakewell Foods Ltd");
+  invoices.getRange(2, 7).setValue(1080);
+  invoices.getRange(2, 9).setValue("Draft");
+  const letter = "To Kevin McNeil\nPlease find attached invoice for 10 Sep 2026\nTotal owed €1,080.00\nFor works Maintenance Cover\n\nKind Regards\nEveryday Business";
+
+  const sent = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter
+  });
+  assert(sent.success, sent.error);
+  const payUrl = "https://buy.stripe.com/test_example";
+  const calls = stripeFetches(api);
+  assert(calls.length === 1, "pay link calls " + calls.length);
+  assert(calls[0].url === "https://api.stripe.com/v1/payment_links", calls[0].url);
+  assert(String(calls[0].options.method).toLowerCase() === "post", calls[0].options.method);
+  assert(calls[0].options.headers.Authorization === "Bearer sk_test_example", calls[0].options.headers.Authorization);
+  assert(calls[0].options.muteHttpExceptions === true, "Stripe errors were not muted");
+  const payload = String(calls[0].options.payload);
+  assert(payload.indexOf("currency%5D=eur") !== -1, payload);
+  assert(payload.indexOf("unit_amount%5D=108000") !== -1, payload);
+  assert(payload.indexOf("metadata%5BinvoiceId%5D=INV-JR26-011") !== -1, payload);
+  assert(payload.indexOf("metadata%5BclientName%5D=Bakewell%20Foods%20Ltd") !== -1, payload);
+  assert(payload.indexOf("metadata%5BsheetId%5D=workbook") !== -1, payload);
+  assert(payload.indexOf("invoice_creation%5Benabled%5D=false") !== -1, payload);
+  assert(payload.indexOf("automatic_tax%5Benabled%5D=false") !== -1, payload);
+  assert(payload.indexOf("restrictions%5Bcompleted_sessions%5D%5Blimit%5D=1") !== -1, payload);
+  assert(payload.indexOf(encodeURIComponent("Thank you. Everyday Business will record this payment.")) !== -1, payload);
+  const regards = api.lastEmail.body.indexOf("\nKind Regards\n");
+  const linkAt = api.lastEmail.body.indexOf("Pay this invoice online:\n" + payUrl);
+  assert(linkAt !== -1 && linkAt < regards, api.lastEmail.body);
+  assert(api.lastEmail.body.indexOf("Bank transfer details are on the invoice.") !== -1, api.lastEmail.body);
+  assert(api.lastEmail.htmlBody.indexOf("https://buy.stripe.com/") !== -1, api.lastEmail.htmlBody);
+  assert(sent.message.indexOf(" Pay online: " + payUrl) !== -1, sent.message);
+  assert(statusCell(workbook, 2) === "Draft", "email marked the draft");
+  const cells = template.getRange("A1:G36").getValues().join("\n");
+  assert(cells.indexOf("stripe.com") === -1, "the pay link was written onto the invoice");
+
+  const downloaded = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "download" });
+  assert(downloaded.success, downloaded.error);
+  assert(stripeFetches(api).length === 1, "saving the PDF created another pay link");
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  invoices.getRange(3, 1).setValue("INV-JR26-019");
+  invoices.getRange(3, 2).setValue("Bakewell Foods Ltd");
+  invoices.getRange(3, 7).setValue(0.49);
+  invoices.getRange(3, 9).setValue("Draft");
+  const beforeSmall = api.fetches.length;
+  const small = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-019",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter
+  });
+  assert(small.success, small.error);
+  assert(api.fetches.slice(beforeSmall).every(function (item) {
+    return String(item.url).indexOf("api.stripe.com") === -1;
+  }), "a total under €0.50 created a pay link");
+  assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+  assert(small.message.indexOf("Pay online") === -1, small.message);
+
+  api.stripeHandler = function () {
+    return { code: 400, body: { error: { message: "Invalid API key: sk_test_example" } } };
+  };
+  const denied = api.stripeRequest_("post", "/v1/payment_links", [["amount", "1"]]);
+  assert(denied.ok === false && denied.error.indexOf("sk_") === -1, denied.error);
+  assert(denied.error === "Stripe did not create the pay link.", denied.error);
+  invoices.getRange(2, 7).setValue(12);
+  const failed = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter
+  });
+  assert(failed.success, failed.error);
+  assert(failed.message.indexOf("The pay link was not added.") !== -1, failed.message);
+  assert(failed.message.indexOf("sk_") === -1, failed.message);
+  assert(api.lastEmail.body.indexOf("stripe.com") === -1, api.lastEmail.body);
+  assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+});
+
+test("email without a Stripe key sends and leaves http out of the letter", function (api, workbook) {
+  readyInvoiceEmail(workbook);
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-011");
+  invoices.getRange(2, 2).setValue("Bakewell Foods Ltd");
+  invoices.getRange(2, 7).setValue(1080);
+  const sent = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "email", email: "client@bakewell.test" });
+  assert(sent.success, sent.error);
+  assert(stripeFetches(api).length === 0, "email called Stripe without a key");
+  assert(api.lastEmail.htmlBody && api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+  assert(api.lastEmail.body.indexOf("Kind Regards") !== -1, api.lastEmail.body);
+  assert(sent.message.indexOf("Pay online") === -1, sent.message);
+  assert(api.fetchTouches >= 1, "the invoice PDF was not printed");
+});
+
+test("a live Stripe key is refused and the email still sends", function (api, workbook) {
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_live_example";
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  readyInvoiceEmail(workbook);
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-011");
+  invoices.getRange(2, 2).setValue("Bakewell Foods Ltd");
+  invoices.getRange(2, 7).setValue(1080);
+  invoices.getRange(2, 9).setValue("Invoiced");
+  const sent = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "email", email: "client@bakewell.test" });
+  assert(sent.success, sent.error);
+  assert(stripeFetches(api).length === 0, "a live key called Stripe");
+  assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+  assert(sent.message.indexOf("Pay online") === -1, sent.message);
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  const ignored = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-011"));
+  assert(ignored.success === false, JSON.stringify(ignored));
+  assert(stripeFetches(api).length === 0, "a live key confirmed a webhook with Stripe");
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+});
+
+test("checkout.session.completed marks Paid and other events are ignored", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-002");
+  invoices.getRange(2, 9).setValue("Invoiced");
+  invoices.getRange(3, 1).setValue("INV-JR26-004");
+  invoices.getRange(3, 9).setValue("Written off");
+  const ignored = postWebhook(api, "hook-token", sessionEvent("payment_intent.succeeded", "INV-JR26-002"));
+  assert(ignored.success === true && ignored.ignored === true, JSON.stringify(ignored));
+  assert(stripeFetches(api).length === 0, "an ignored event called Stripe");
+  assert(api.sheetTouches === 0, "an ignored event opened the sheet");
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  api.stripeHandler = function () { return paidSession("INV-JR26-002"); };
+  const paid = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(paid.success === true && paid.status === "Paid", JSON.stringify(paid));
+  assert(statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
+
+  api.stripeHandler = function () { return paidSession("INV-JR26-004"); };
+  const asyncPaid = postWebhook(api, "hook-token", sessionEvent("checkout.session.async_payment_succeeded", "INV-JR26-004", "cs_test_async"));
+  assert(asyncPaid.success === true && asyncPaid.status === "Paid", JSON.stringify(asyncPaid));
+  assert(statusCell(workbook, 3) === "Paid", "a written-off invoice stayed written off");
+});
+
+test("a webhook whose Stripe read is not paid leaves the invoice status alone", function (api, workbook) {
+  api.scriptProperties.STRIPE_WEBHOOK_TOKEN = "hook-token";
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-002");
+  invoices.getRange(2, 9).setValue("Invoiced");
+  api.stripeHandler = function (url) {
+    assert(url.indexOf("/v1/checkout/sessions/") !== -1, url);
+    return { code: 200, body: { id: "cs_test_123", payment_status: "unpaid", metadata: { sheetId: "workbook", invoiceId: "INV-JR26-002" } } };
+  };
+  const result = postWebhook(api, "hook-token", sessionEvent("checkout.session.completed", "INV-JR26-002"));
+  assert(result.success === true && result.ignored === true, JSON.stringify(result));
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+  assert(stripeFetches(api).length === 1, "the webhook skipped the Stripe read");
 });
 
 if (failures.length) {
