@@ -592,6 +592,15 @@ window.Alpine.data('appState', () => ({
   detailMessageAuto: "",
   detailPayUrl: "",
   payCopied: false,
+  payPollMs: 6000,
+  payWatchMs: 120000,
+  payWatchUntil: 0,
+  payWatchTimer: null,
+  payWatchBound: false,
+  payKinds: {},
+  payLinkSlot: null,
+  payChecking: false,
+  payReturnAt: 0,
   businessName: "EverydayWork",
   detailIsDraft: false,
   detailCanSavePdf: false,
@@ -862,7 +871,9 @@ window.Alpine.data('appState', () => ({
     const stored = this.storedSnapshot();
     if (stored) this.applySnapshot(stored, true);
     await this.refreshSnapshot({ quiet: !!stored, announce: !stored, resync: true });
+    this.installPayWatch();
     this.openStartupTab();
+    if (this.payWatchRelevant()) this.startPayWatch();
   },
   scrollPage() {
     try { window.scrollTo(0, 0); } catch (err) {}
@@ -880,8 +891,10 @@ window.Alpine.data('appState', () => ({
     this.syncTabClasses();
     this.clearFeedback();
     this.scrollPage();
+    this.startPayWatch();
   },
   setClientsTab() {
+    this.stopPayWatch();
     this.currentTab = "clients";
     this.clientView = "list";
     this.syncTabClasses();
@@ -889,12 +902,14 @@ window.Alpine.data('appState', () => ({
     this.scrollPage();
   },
   setTrackerTab() {
+    this.stopPayWatch();
     this.currentTab = "tracker";
     this.syncTabClasses();
     this.clearFeedback();
     this.scrollPage();
   },
   setSummaryTab() {
+    this.stopPayWatch();
     this.currentTab = "summary";
     this.taxRatesOpen = false;
     this.taxRatesLabel = "See more";
@@ -908,6 +923,7 @@ window.Alpine.data('appState', () => ({
     this.taxRatesLabel = this.taxRatesOpen ? "See less" : "See more";
   },
   async setSettingsTab() {
+    this.stopPayWatch();
     this.currentTab = "settings";
     this.syncTabClasses();
     this.clearFeedback();
@@ -1584,7 +1600,7 @@ window.Alpine.data('appState', () => ({
     try {
       let res = await this.api("getAppSnapshot", {}, { quiet: quiet });
       if (res && (res.status === 401 || res.status === 403)) {
-        this.noteResyncFailed(res);
+        if (!(opts && opts.background)) this.noteResyncFailed(res);
         return;
       }
       if (res && /Invalid API action/.test(String(res.error || ""))) {
@@ -1690,12 +1706,15 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     this.syncVisibleInvoices();
     this.scrollPage();
+    if (kind === "due" || kind === "send" || kind === "draft") this.startPayWatch();
+    else this.stopPayWatch();
   },
   showDashHome() {
     this.dashView = "home";
     this.driveUrl = "";
     this.clearFeedback();
     this.scrollPage();
+    this.startPayWatch();
   },
   showDashList() {
     this.dashView = "list";
@@ -1865,6 +1884,10 @@ window.Alpine.data('appState', () => ({
       this.detailPayUrl = "";
       this.payCopied = false;
     }
+    if (row.kind === "paid" || row.kind === "writtenoff") {
+      this.detailPayUrl = "";
+      this.payCopied = false;
+    }
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.detailIsDraft = row.kind === "draft";
@@ -1887,6 +1910,140 @@ window.Alpine.data('appState', () => ({
     this.dashView = "detail";
     if (!keepEmail) this.scrollPage();
   },
+  installPayWatch() {
+    if (this.payWatchBound || this.previewMode) return;
+    this.payWatchBound = true;
+    const self = this;
+    if (typeof document !== "undefined" && document.addEventListener) {
+      document.addEventListener("visibilitychange", function () {
+        if (document.hidden) return;
+        self.onPayWatchReturn();
+      });
+    }
+    if (typeof window !== "undefined" && window.addEventListener) {
+      window.addEventListener("focus", function () {
+        self.onPayWatchReturn();
+      });
+    }
+  },
+  payWatchRelevant() {
+    if (this.previewMode || this.currentTab !== "dashboard") return false;
+    if (this.dashView === "home") return true;
+    if (this.dashView === "list") {
+      return this.invoiceFilter === "due" || this.invoiceFilter === "send" || this.invoiceFilter === "draft";
+    }
+    if (this.dashView === "detail") {
+      const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
+      if (!row) return !!(this.detailIsDraft || this.detailCanFinish);
+      return row.kind === "draft" || row.kind === "due";
+    }
+    return false;
+  },
+  rememberPayKinds() {
+    const map = {};
+    (this.invoiceRows || []).forEach((row) => {
+      if (row && row.id) map[row.id] = row.kind || "";
+    });
+    this.payKinds = map;
+  },
+  startPayWatch() {
+    if (this.previewMode) return;
+    this.installPayWatch();
+    this.payWatchUntil = Date.now() + this.payWatchMs;
+    this.rememberPayKinds();
+    if (this.payWatchTimer) return;
+    const self = this;
+    this.payWatchTimer = setInterval(function () { self.tickPayWatch(); }, this.payPollMs);
+  },
+  stopPayWatch() {
+    if (this.payWatchTimer) {
+      clearInterval(this.payWatchTimer);
+      this.payWatchTimer = null;
+    }
+  },
+  tickPayWatch() {
+    if (this.previewMode || Date.now() > this.payWatchUntil || !this.payWatchRelevant()) {
+      this.stopPayWatch();
+      return;
+    }
+    if ((typeof document !== "undefined" && document.hidden) || this.saving || this.loading || this.payChecking) return;
+    this.noticePayments();
+  },
+  onPayWatchReturn() {
+    if (this.previewMode || !this.payWatchRelevant()) return;
+    if ((typeof document !== "undefined" && document.hidden) || this.saving || this.loading) return;
+    const now = Date.now();
+    if (now - (this.payReturnAt || 0) < 1500) return;
+    this.payReturnAt = now;
+    this.noticePayments();
+  },
+  async noticePayments() {
+    if (this.previewMode || this.payChecking || this.saving || this.loading) return;
+    if (!this.payWatchRelevant()) return;
+    this.payChecking = true;
+    const before = this.payKinds || {};
+    try {
+      await this.refreshSnapshot({ quiet: true, announce: false, background: true });
+      const notes = [];
+      (this.invoiceRows || []).forEach((row) => {
+        if (!row || !row.id) return;
+        const was = before[row.id];
+        if (was && was !== "paid" && row.kind === "paid") notes.push((row.code || row.id) + " paid");
+      });
+      if (notes.length) this.setFeedback(notes.join(" · "), false);
+      this.rememberPayKinds();
+    } finally {
+      this.payChecking = false;
+    }
+  },
+  watchInvoicePayment(row) {
+    if (!row || (row.kind !== "draft" && row.kind !== "due")) return;
+    this.startPayWatch();
+    if (this.previewMode) return;
+    this.requestPayLink(row.id || this.detailId);
+  },
+  applyPayUrl(invoiceId, payUrl) {
+    const link = String(payUrl || "").trim();
+    if (!link || this.detailId !== invoiceId) return;
+    const row = (this.invoiceRows || []).find((item) => item.id === invoiceId);
+    if (row && row.kind !== "draft" && row.kind !== "due") return;
+    this.detailPayUrl = link;
+  },
+  async requestPayLink(invoiceId) {
+    const id = String(invoiceId || "").trim();
+    if (!id || this.previewMode) return { payUrl: "", skip: true };
+    const current = this.payLinkSlot;
+    if (current && current[0] === id) return current[1];
+    const promise = this.fetchPayLink(id);
+    const slot = [id, promise];
+    this.payLinkSlot = slot;
+    try {
+      return await promise;
+    } finally {
+      if (this.payLinkSlot === slot) this.payLinkSlot = null;
+    }
+  },
+  async fetchPayLink(invoiceId) {
+    const linked = await this.api("ensurePaymentLink", { invoiceId: invoiceId }, { quiet: true, timeoutMs: 30000, write: true });
+    if (!linked || linked.timedOut) return { timedOut: true, payUrl: "", skip: false };
+    if (linked.success) {
+      const payUrl = String(linked.payUrl || "");
+      this.applyPayUrl(invoiceId, payUrl);
+      return { payUrl: payUrl, skip: true };
+    }
+    if (String(linked.error || "").indexOf("Invalid API action") !== -1) {
+      const created = await this.api("createPaymentLink", { invoiceId: invoiceId }, { quiet: true, timeoutMs: 30000, write: true });
+      if (!created || created.timedOut) return { timedOut: true, payUrl: "", skip: false };
+      if (String(created.error || "").indexOf("Invalid API action") !== -1) return { payUrl: "", skip: false };
+      if (created.success) {
+        const payUrl = String(created.payUrl || "");
+        this.applyPayUrl(invoiceId, payUrl);
+        return { payUrl: payUrl, skip: true };
+      }
+      return { payUrl: "", skip: true, failed: true };
+    }
+    return { payUrl: "", skip: true, failed: true };
+  },
   async openInvoice(id) {
     const row = (this.invoiceRows || []).find((item) => item.id === id);
     if (!row) return;
@@ -1894,13 +2051,17 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     if (this.previewMode || Array.isArray(row.lines)) {
       this.fillDetail(row, row.lines || []);
+      this.watchInvoicePayment(row);
       return;
     }
     this.fillDetail(row, []);
+    this.watchInvoicePayment(row);
     try {
       const res = await this.api("getInvoiceDetail", { invoiceId: id });
       if (res && res.success && res.invoice) {
-        this.fillDetail(Object.assign({}, row, res.invoice), res.invoice.lines || []);
+        const merged = Object.assign({}, row, res.invoice);
+        this.fillDetail(merged, res.invoice.lines || []);
+        this.watchInvoicePayment(merged);
       } else {
         this.setFeedback(this.failMessage(res, "Could not load the invoice lines."), true);
       }
@@ -1998,23 +2159,16 @@ window.Alpine.data('appState', () => ({
     let skipPayLink = false;
     let payLinkFailed = false;
     try {
-      this.loadingLabel = "Creating the pay link…";
+      this.loadingLabel = this.detailPayUrl ? "Sending the invoice…" : "Creating the pay link…";
       this.syncPdfLabels(this.loadingLabel);
-      const linked = await this.api("createPaymentLink", { invoiceId: this.detailId }, { quiet: true, timeoutMs: 30000, write: true });
+      const linked = await this.requestPayLink(this.detailId);
       if (!linked || linked.timedOut) {
-        this.setFeedback((linked && linked.error) || "That took too long, so it was stopped. Check the invoice before you try again.", true);
+        this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
         return;
       }
-      if (linked.success) {
-        payUrl = String(linked.payUrl || "");
-        skipPayLink = true;
-        if (payUrl) this.detailPayUrl = payUrl;
-      } else if (String(linked.error || "").indexOf("Invalid API action") !== -1) {
-        skipPayLink = false;
-      } else {
-        skipPayLink = true;
-        payLinkFailed = true;
-      }
+      payUrl = String(linked.payUrl || "");
+      skipPayLink = !!linked.skip;
+      payLinkFailed = !!linked.failed;
       this.loadingLabel = "Sending the invoice…";
       this.syncPdfLabels(this.loadingLabel);
       const payload = {
@@ -2031,9 +2185,10 @@ window.Alpine.data('appState', () => ({
       }
       const res = await this.api("exportInvoicePdf", payload, { quiet: true, timeoutMs: 60000, write: true });
       if (res && res.success) {
-        if (res.payUrl) this.detailPayUrl = String(res.payUrl);
+        if (res.payUrl) this.applyPayUrl(this.detailId, res.payUrl);
         this.setFeedback(this.emailedBanner(email), false);
         this.revealMarkInvoiced();
+        this.startPayWatch();
       } else if (res && res.timedOut) {
         this.setFeedback("The email took too long to confirm. Check whether it arrived before you send it again.", true);
       } else {
@@ -2066,6 +2221,7 @@ window.Alpine.data('appState', () => ({
       return;
     }
     this.payCopied = true;
+    this.startPayWatch();
     const self = this;
     setTimeout(function () { self.payCopied = false; }, 1600);
   },
