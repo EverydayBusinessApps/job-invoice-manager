@@ -1881,6 +1881,106 @@ test("email with a test Stripe key adds a pay link before Kind Regards", functio
   assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
 });
 
+test("createPaymentLink returns the pay link before the email is sent", function (api, workbook) {
+  readyInvoiceEmail(workbook);
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-JR26-011");
+  invoices.getRange(2, 2).setValue("Bakewell Foods Ltd");
+  invoices.getRange(2, 7).setValue(1080);
+  invoices.getRange(2, 9).setValue("Draft");
+  const letter = "To Kevin McNeil\nPlease find attached invoice for 10 Sep 2026\nTotal owed €1,080.00\n\nKind Regards\nEveryday Business";
+
+  const touches = api.sheetTouches;
+  api.doPost({
+    postData: { contents: JSON.stringify({ action: "createPaymentLink", payload: { invoiceId: "INV-JR26-011" } }) },
+    parameter: {}
+  });
+  assert(api.lastJson.status === 401 && api.lastJson.error === "Client token is missing.", JSON.stringify(api.lastJson));
+  assert(api.sheetTouches === touches, "a missing token opened the sheet");
+
+  api.lastEmail = null;
+  const empty = webPost(api, {
+    action: "createPaymentLink",
+    payload: { invoiceId: "INV-JR26-011" },
+    clientToken: "beta-token"
+  });
+  assert(empty.success === true && empty.payUrl === "", JSON.stringify(empty));
+  assert(stripeFetches(api).length === 0, "a missing Stripe key created a pay link");
+  assert(!api.lastEmail, "creating a pay link sent the email");
+
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const linked = webPost(api, {
+    action: "createPaymentLink",
+    payload: { invoiceId: "INV-JR26-011" },
+    clientToken: "beta-token"
+  });
+  assert(linked.success === true, JSON.stringify(linked));
+  assert(linked.payUrl === "https://buy.stripe.com/test_example", linked.payUrl);
+  assert(!api.lastEmail, "the pay link request sent the email");
+  assert(stripeFetches(api).length === 1, "pay link calls " + stripeFetches(api).length);
+  assert(statusCell(workbook, 2) === "Draft", statusCell(workbook, 2));
+
+  const beforeEmail = stripeFetches(api).length;
+  const sent = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter,
+    payUrl: linked.payUrl,
+    skipPayLink: true
+  });
+  assert(sent.success, sent.error);
+  assert(stripeFetches(api).length === beforeEmail, "email created a second pay link");
+  const regards = api.lastEmail.body.indexOf("\nKind Regards\n");
+  const linkAt = api.lastEmail.body.indexOf("Pay this invoice online:\n" + linked.payUrl);
+  assert(linkAt !== -1 && linkAt < regards, api.lastEmail.body);
+  assert(sent.message.indexOf(" Pay online: " + linked.payUrl) !== -1, sent.message);
+
+  const poisoned = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter,
+    payUrl: "https://evil.example/pay",
+    skipPayLink: true
+  });
+  assert(poisoned.success, poisoned.error);
+  assert(api.lastEmail.body.indexOf("evil.example") === -1, api.lastEmail.body);
+  assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
+  assert(stripeFetches(api).length === beforeEmail, "a rejected pay URL called Stripe");
+
+  const skipped = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter,
+    payUrl: "",
+    skipPayLink: true
+  });
+  assert(skipped.success, skipped.error);
+  assert(stripeFetches(api).length === beforeEmail, "an empty pay URL created a link during email");
+  assert(skipped.message.indexOf("Pay online") === -1, skipped.message);
+
+  const failedNote = api.exportInvoicePdf({
+    invoiceId: "INV-JR26-011",
+    mode: "email",
+    email: "client@bakewell.test",
+    message: letter,
+    payUrl: "",
+    skipPayLink: true,
+    payLinkFailed: true
+  });
+  assert(failedNote.message.indexOf("The pay link was not added.") !== -1, failedNote.message);
+  assert(api.lastEmail.body.indexOf("stripe.com") === -1, api.lastEmail.body);
+
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const start = appSource.indexOf("async emailInvoicePdf()");
+  const emailFn = appSource.slice(start, start + 2800);
+  const createAt = emailFn.indexOf('api("createPaymentLink"');
+  const exportAt = emailFn.indexOf('api("exportInvoicePdf"');
+  assert(createAt !== -1 && exportAt !== -1 && createAt < exportAt, "Email PDF creates the pay link after the email");
+});
+
 test("email without a Stripe key sends and leaves http out of the letter", function (api, workbook) {
   readyInvoiceEmail(workbook);
   const invoices = workbook.sheets.InvoiceList;

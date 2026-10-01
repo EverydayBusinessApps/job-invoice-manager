@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=22">
+  <link rel="stylesheet" href="style.css?v=23">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=30"></script>
+  <script defer src="app.js?v=31"></script>
 </head>
 <body>
 
@@ -149,6 +149,7 @@
             <label class="to-label">Preview</label>
             <textarea class="email-preview" x-model="detailMessage" rows="8" data-disable-when="saving"></textarea>
           </div>
+          <p class="page-lead pay-link" x-show="detailPayUrl">Pay online: <span x-text="detailPayUrl"></span></p>
           <button type="button" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
           <div class="inv-actions">
             <button type="button" class="btn-line" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>

@@ -585,6 +585,7 @@ window.Alpine.data('appState', () => ({
   detailSubject: "",
   detailMessage: "",
   detailMessageAuto: "",
+  detailPayUrl: "",
   businessName: "EverydayWork",
   detailIsDraft: false,
   detailCanSavePdf: false,
@@ -793,7 +794,7 @@ window.Alpine.data('appState', () => ({
   syncPdfLabels(active) {
     this.savePdfLabel = active === "Saving the PDF…" ? "Saving…" : "Save PDF";
     this.downloadPdfLabel = active === "Downloading the PDF…" ? "Downloading…" : "Download";
-    this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : "Email PDF";
+    this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : active === "Creating the pay link…" ? "Creating…" : "Email PDF";
   },
   async withInvoiceWait(label, fn) {
     if (this.saving) return;
@@ -1751,7 +1752,10 @@ window.Alpine.data('appState', () => ({
     const letterRow = this.invoiceLetterRow(row);
     const drafted = this.invoiceEmailDraft(letterRow);
     this.detailEmail = this.invoiceAddress(row);
-    if (!sameInvoice) this.detailCc = "";
+    if (!sameInvoice) {
+      this.detailCc = "";
+      this.detailPayUrl = "";
+    }
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.detailIsDraft = row.kind === "draft";
@@ -1879,23 +1883,60 @@ window.Alpine.data('appState', () => ({
       return;
     }
     this.clearFeedback();
-    await this.withInvoiceWait("Sending the invoice…", async () => {
-      try {
-        const res = await this.api("exportInvoicePdf", {
-          invoiceId: this.detailId,
-          mode: "email",
-          email: email,
-          cc: cc.value,
-          message: this.detailMessage
-        }, { quiet: true, timeoutMs: 60000, write: true });
-        if (res && res.success) {
-          this.setFeedback(res.message || "Invoice emailed. Mark it invoiced when it has gone out.", false);
-          this.revealMarkInvoiced();
-        } else this.showPdfError(res, "Could not email the PDF.");
-      } catch (err) {
-        this.setFeedback("Could not email the PDF.", true);
+    this.saving = true;
+    this.loading = true;
+    let payUrl = "";
+    let skipPayLink = false;
+    let payLinkFailed = false;
+    try {
+      this.loadingLabel = "Creating the pay link…";
+      this.syncPdfLabels(this.loadingLabel);
+      const linked = await this.api("createPaymentLink", { invoiceId: this.detailId }, { quiet: true, timeoutMs: 30000, write: true });
+      if (!linked || linked.timedOut) {
+        this.setFeedback((linked && linked.error) || "That took too long, so it was stopped. Check the invoice before you try again.", true);
+        return;
       }
-    });
+      if (linked.success) {
+        payUrl = String(linked.payUrl || "");
+        skipPayLink = true;
+        if (payUrl) this.detailPayUrl = payUrl;
+      } else if (String(linked.error || "").indexOf("Invalid API action") !== -1) {
+        skipPayLink = false;
+      } else {
+        skipPayLink = true;
+        payLinkFailed = true;
+      }
+      this.loadingLabel = "Sending the invoice…";
+      this.syncPdfLabels(this.loadingLabel);
+      const payload = {
+        invoiceId: this.detailId,
+        mode: "email",
+        email: email,
+        cc: cc.value,
+        message: this.detailMessage
+      };
+      if (skipPayLink) {
+        payload.payUrl = payUrl;
+        payload.skipPayLink = true;
+        if (payLinkFailed) payload.payLinkFailed = true;
+      }
+      const res = await this.api("exportInvoicePdf", payload, { quiet: true, timeoutMs: 60000, write: true });
+      if (res && res.success) {
+        this.setFeedback(res.message || "Invoice emailed. Mark it invoiced when it has gone out.", false);
+        this.revealMarkInvoiced();
+      } else if (res && res.timedOut && payUrl) {
+        this.setFeedback("Pay online: " + payUrl + " The email took too long to confirm. Check whether it arrived before you send it again.", true);
+      } else {
+        this.showPdfError(res, "Could not email the PDF.");
+      }
+    } catch (err) {
+      this.setFeedback(payUrl ? ("Pay online: " + payUrl) : "Could not email the PDF.", true);
+    } finally {
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+      this.syncPdfLabels("");
+    }
   },
   savePdfFile(fileName, b64) {
     const bin = atob(b64);
