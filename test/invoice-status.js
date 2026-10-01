@@ -1864,8 +1864,9 @@ test("email with a test Stripe key adds a pay link before Kind Regards", functio
   api.footerDuringPrint = "";
   const downloaded = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "download" });
   assert(downloaded.success, downloaded.error);
-  assert(api.footerDuringPrint.indexOf("stripe.com") === -1, api.footerDuringPrint);
-  assert(stripeFetches(api).length === 1, "saving the PDF created another pay link");
+  assert(downloaded.payUrl === payUrl, downloaded.payUrl || downloaded.error);
+  assert(api.footerDuringPrint.indexOf("Pay online: " + payUrl) !== -1, api.footerDuringPrint);
+  assert(stripeFetches(api).length === 1, "downloading the PDF created another pay link");
   assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
 
   api.footerDuringPrint = "";
@@ -2232,6 +2233,20 @@ test("ensurePaymentLink reuses the stored pay link until the total changes", fun
   const notice = appSource.slice(noticeStart, noticeStart + 2200);
   assert(notice.indexOf("keepDetail: true") !== -1, "a pay check can leave the invoice");
   assert(notice.indexOf("confirmOnHome") !== -1, "paying the open invoice does not return home");
+  const dashStart = appSource.indexOf("applyDashboard(res, keepEmail, opts)");
+  const dashEnd = appSource.indexOf("snapshotKey()", dashStart);
+  const dash = appSource.slice(dashStart, dashEnd);
+  assert(dash.indexOf('keepView === "detail"') !== -1, "an open invoice is not kept open");
+  assert(dash.indexOf('dashView = "home"') === -1, "a refresh sends the open invoice home");
+  const downloadStart = appSource.indexOf("async downloadInvoicePdf()");
+  const downloadEnd = appSource.indexOf("async emailInvoicePdf()", downloadStart);
+  const downloadFn = appSource.slice(downloadStart, downloadEnd);
+  const downloadAsk = downloadFn.indexOf("requestPayLink");
+  const downloadExport = downloadFn.indexOf('api("exportInvoicePdf"');
+  assert(downloadAsk !== -1 && downloadExport !== -1 && downloadAsk < downloadExport, "Download does not ask for the pay link");
+  assert(downloadFn.indexOf('dashView = "list"') === -1, "Download leaves the invoice");
+  assert(pageSource.indexOf('data-action="viewLoggedInvoice" data-disable-when="saving"') === -1, "View invoice waits for the workbook");
+  assert(pageSource.indexOf('data-action="viewLoggedInvoice"') !== -1, "View invoice is missing");
 });
 
 if (failures.length) {

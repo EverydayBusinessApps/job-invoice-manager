@@ -8,7 +8,7 @@
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=26">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=35"></script>
+  <script defer src="app.js?v=36"></script>
 </head>
 <body>
 
@@ -107,6 +107,7 @@
                 <div class="inv-actions">
                   <button type="button" x-show="listShowsSend" data-action="markListInvoiced" :data-id="inv.id" data-disable-when="saving">Mark invoiced</button>
                   <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Generate and send</button>
+                  <button type="button" class="btn-line" x-show="listShowsCollect" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Pay link</button>
                   <button type="button" x-show="listShowsCollect" data-action="markListPaid" :data-id="inv.id" data-disable-when="saving">Mark paid</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="markListWrittenOff" :data-id="inv.id" data-disable-when="saving">Write off</button>
                   <button type="button" class="btn-line btn-auto" x-show="listShowsDone" data-action="undoListStatus" :data-id="inv.id" data-disable-when="saving">Undo</button>
@@ -183,7 +184,7 @@
           <div class="alert alert-success" x-show="jobLogged.text">
             <p class="job-logged-line">
               <span x-text="jobLogged.text"></span>
-              <button type="button" class="text-btn" data-action="viewLoggedInvoice" data-disable-when="saving">View invoice</button>
+              <button type="button" class="text-btn" data-action="viewLoggedInvoice">View invoice</button>
             </p>
           </div>
           <div class="card-title">Log a job</div>

@@ -632,6 +632,7 @@ window.Alpine.data('appState', () => ({
   detailLinesEmpty: true,
   driveUrl: "",
   jobLogged: { text: "", id: "", code: "" },
+  loggedDraft: null,
   form: { clientName: '', date: (() => {
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, '0');
@@ -1261,6 +1262,7 @@ window.Alpine.data('appState', () => ({
   placeLoggedDraft(code, rawId, snapshot) {
     const label = String(code || rawId || "").trim();
     const id = String(rawId || code || "").trim();
+    snapshot = snapshot || {};
     if (!label) return;
     const rows = (this.invoiceRows || []).slice();
     let row = rows.find((item) => invoiceMatches(item, id, label));
@@ -1312,13 +1314,20 @@ window.Alpine.data('appState', () => ({
   },
   viewLoggedInvoice() {
     const logged = this.jobLogged || {};
-    const wanted = [logged.id, logged.code].filter(Boolean);
-    const row = (this.invoiceRows || []).find((item) => wanted.indexOf(item.id) !== -1 || wanted.indexOf(item.code) !== -1);
-    const id = row ? row.id : (logged.id || logged.code);
+    const draft = this.loggedDraft || {};
+    const idHint = logged.id || draft.id || "";
+    const codeHint = logged.code || draft.code || "";
+    let row = (this.invoiceRows || []).find((item) => invoiceMatches(item, idHint, codeHint));
+    if (!row && (idHint || codeHint)) {
+      this.placeLoggedDraft(codeHint || idHint, idHint || codeHint, draft.snapshot || {});
+      row = (this.invoiceRows || []).find((item) => invoiceMatches(item, idHint, codeHint));
+    }
+    const id = row ? row.id : (idHint || codeHint);
     if (!id) return;
     this.currentTab = "dashboard";
     this.syncTabClasses();
     this.jobLogged = { text: "", id: "", code: "" };
+    this.dashView = "detail";
     this.openInvoice(id);
   },
   async submitForm() {
@@ -1364,6 +1373,7 @@ window.Alpine.data('appState', () => ({
         const code = adding && chosenId ? chosenId : "INV-JR26-018";
         this.rememberLoggedJob(code);
         this.showLoggedJob(code, code, estimate);
+        this.loggedDraft = { id: code, code: code, snapshot: snapshot };
         this.placeLoggedDraft(code, code, snapshot);
         this.resetJobForm();
         return;
@@ -1386,6 +1396,7 @@ window.Alpine.data('appState', () => ({
         snapshot.amount = amount;
         this.rememberLoggedJob(code, rawId);
         this.showLoggedJob(code, rawId, amount);
+        this.loggedDraft = { id: String(rawId || code), code: String(code || rawId), snapshot: snapshot };
         this.placeLoggedDraft(code, rawId, snapshot);
         this.resetJobForm();
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true, keepDetail: true });
@@ -1524,7 +1535,6 @@ window.Alpine.data('appState', () => ({
     const keepView = this.dashView;
     const keepId = this.detailId;
     const keepCode = this.detailCode;
-    const keepDetail = !!(opts && opts.keepDetail);
     if (res.businessName) this.businessName = res.businessName;
     this.asOf = res.asOf || "";
     this.periodData = res.periods || {};
@@ -1545,10 +1555,9 @@ window.Alpine.data('appState', () => ({
     this.syncPeriodClasses();
     this.syncActive();
     this.syncVisibleInvoices();
-    if (keepView === "detail" && (keepId || keepCode)) {
+    if (keepView === "detail") {
       const row = this.invoiceRows.find((item) => invoiceMatches(item, keepId, keepCode));
       if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], keepEmail);
-      else if (!keepDetail) this.dashView = "home";
     } else {
       this.dashView = keepView || "home";
     }
@@ -2121,6 +2130,17 @@ window.Alpine.data('appState', () => ({
     if (res && res.markedInvoiced && code) msg += " Invoice " + code + " marked invoiced.";
     return msg;
   },
+  payExportPayload(mode, linked) {
+    const payload = { invoiceId: this.detailId, mode: mode };
+    if (linked && linked.skip) {
+      payload.payUrl = String(linked.payUrl || "");
+      payload.skipPayLink = true;
+      if (linked.failed) payload.payLinkFailed = true;
+    } else if (this.detailPayUrl) {
+      payload.payUrl = this.detailPayUrl;
+    }
+    return payload;
+  },
   async saveInvoicePdf() {
     if (this.saving || !this.detailId) return;
     const code = this.detailCode || this.detailId;
@@ -2130,25 +2150,38 @@ window.Alpine.data('appState', () => ({
       return;
     }
     this.clearFeedback();
-    await this.withInvoiceWait("Saving the PDF…", async () => {
-      try {
-        const res = await this.api("exportInvoicePdf", this.pdfExportPayload("drive"), { quiet: true, timeoutMs: 60000, write: true });
-        if (res && res.success) {
-          this.driveUrl = res.url || "";
-          this.noteIssued(res);
-          this.setFeedback(this.pdfSavedMessage(res), false);
-          if (res.markedInvoiced) {
-            this.dashView = "list";
-            this.scrollPage();
-            await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-          }
-        } else {
-          this.showPdfError(res, "Could not save " + code + " to the Invoices folder.");
-        }
-      } catch (err) {
-        this.setFeedback("Could not save " + code + " to the Invoices folder.", true);
+    this.saving = true;
+    this.loading = true;
+    try {
+      this.loadingLabel = this.detailPayUrl ? "Saving the PDF…" : "Creating the pay link…";
+      this.savePdfLabel = this.detailPayUrl ? "Saving…" : "Creating…";
+      const linked = await this.requestPayLink(this.detailId);
+      if (!linked || linked.timedOut) {
+        this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
+        return;
       }
-    });
+      this.loadingLabel = "Saving the PDF…";
+      this.savePdfLabel = "Saving…";
+      const res = await this.api("exportInvoicePdf", this.payExportPayload("drive", linked), { quiet: true, timeoutMs: 60000, write: true });
+      if (res && res.success) {
+        if (res.payUrl) this.applyPayUrl(this.detailId, res.payUrl);
+        this.driveUrl = res.url || "";
+        this.noteIssued(res);
+        this.setFeedback(this.pdfSavedMessage(res), false);
+        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true, keepDetail: true });
+      } else if (res && res.timedOut) {
+        this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
+      } else {
+        this.showPdfError(res, "Could not save " + code + " to the Invoices folder.");
+      }
+    } catch (err) {
+      this.setFeedback("Could not save " + code + " to the Invoices folder.", true);
+    } finally {
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+      this.syncPdfLabels("");
+    }
   },
   async downloadInvoicePdf() {
     if (this.saving || !this.detailId) return;
@@ -2158,25 +2191,38 @@ window.Alpine.data('appState', () => ({
       return;
     }
     this.clearFeedback();
-    await this.withInvoiceWait("Downloading the PDF…", async () => {
-      try {
-        const res = await this.api("exportInvoicePdf", this.pdfExportPayload("download"), { quiet: true, timeoutMs: 60000, write: true });
-        if (res && res.success && res.pdfBase64) {
-          this.savePdfFile(res.fileName, res.pdfBase64);
-          this.noteIssued(res);
-          this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
-          if (res.markedInvoiced) {
-            this.dashView = "list";
-            this.scrollPage();
-            await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-          }
-        } else {
-          this.setFeedback(this.failMessage(res, "Could not download the PDF."), true);
-        }
-      } catch (err) {
-        this.setFeedback("Could not download the PDF.", true);
+    this.saving = true;
+    this.loading = true;
+    try {
+      this.loadingLabel = this.detailPayUrl ? "Downloading the PDF…" : "Creating the pay link…";
+      this.downloadPdfLabel = this.detailPayUrl ? "Downloading…" : "Creating…";
+      const linked = await this.requestPayLink(this.detailId);
+      if (!linked || linked.timedOut) {
+        this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
+        return;
       }
-    });
+      this.loadingLabel = "Downloading the PDF…";
+      this.downloadPdfLabel = "Downloading…";
+      const res = await this.api("exportInvoicePdf", this.payExportPayload("download", linked), { quiet: true, timeoutMs: 60000, write: true });
+      if (res && res.success && res.pdfBase64) {
+        if (res.payUrl) this.applyPayUrl(this.detailId, res.payUrl);
+        this.savePdfFile(res.fileName, res.pdfBase64);
+        this.noteIssued(res);
+        this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
+        if (res.markedInvoiced) await this.refreshSnapshot({ quiet: true, announce: false, resync: true, keepDetail: true });
+      } else if (res && res.timedOut) {
+        this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
+      } else {
+        this.setFeedback(this.failMessage(res, "Could not download the PDF."), true);
+      }
+    } catch (err) {
+      this.setFeedback("Could not download the PDF.", true);
+    } finally {
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+      this.syncPdfLabels("");
+    }
   },
   async emailInvoicePdf() {
     if (this.saving || !this.detailId) return;

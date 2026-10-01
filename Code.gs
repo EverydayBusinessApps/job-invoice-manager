@@ -1728,7 +1728,7 @@ function exportInvoicePdf(payload) {
     sheet.getRange("B1").setValue(code);
 
     let payUrl = acceptedPayUrl_(payload && payload.payUrl);
-    if (mode === "email" && !payUrl && !(payload && payload.skipPayLink)) {
+    if (!payUrl && !(payload && payload.skipPayLink)) {
       const linked = ensureInvoicePaymentLink_(ss, invoiceId);
       payUrl = linked.url || "";
     }
@@ -1787,6 +1787,7 @@ function exportInvoicePdf(payload) {
         pdfBase64: Utilities.base64Encode(blob.getBytes()),
         markedInvoiced: marked.changed,
         status: marked.status,
+        payUrl: payUrl || "",
         message: fileName + " is the invoice PDF, ready to download." + issued
       };
     }
@@ -1810,6 +1811,7 @@ function exportInvoicePdf(payload) {
       url: url,
       markedInvoiced: marked.changed,
       status: marked.status,
+      payUrl: payUrl || "",
       message: "Saved " + stored + " to the Invoices folder on Google Drive." + issued
     };
   } catch (err) {
@@ -2213,12 +2215,14 @@ function invoicePayAmount_(ss, invoiceId) {
   var code = invoicePrintCode_(ss, invoiceId);
   var row = invoiceSheet ? findInvoiceListRow_(invoiceSheet, invoiceId) : 0;
   if (!row && invoiceSheet && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
-  if (!row) return { cents: 0, code: code, clientName: "" };
+  if (!row) return { cents: 0, code: code, clientName: "", closed: false };
   var values = invoiceSheet.getRange(row, 1, 1, 9).getValues()[0];
+  var status = displayStatus_(values[8]);
   return {
     cents: euroCents_(values[6]),
     code: code,
-    clientName: clientText_(values[1])
+    clientName: clientText_(values[1]),
+    closed: status === "Paid" || status === "Written off"
   };
 }
 
@@ -2364,6 +2368,12 @@ function ensureInvoicePaymentLink_(ss, invoiceId) {
     var links = readPayLinks_();
     var stored = storedPayLink_(links, invoiceId, amount.code);
     var sameTotal = !!(stored && Number(stored.cents) === amount.cents);
+    if (amount.closed) {
+      if (stored && acceptedPayUrl_(stored.url)) {
+        return { url: acceptedPayUrl_(stored.url), id: String(stored.id || ""), reused: true };
+      }
+      return { url: "" };
+    }
     if (!stripeSecret_()) return { url: "" };
     if (amount.cents < 50) {
       if (stored && !sameTotal) {
