@@ -598,7 +598,7 @@ window.Alpine.data('appState', () => ({
   payWatchTimer: null,
   payWatchBound: false,
   payKinds: {},
-  payLinkFlight: null,
+  payLinkSlot: null,
   payChecking: false,
   payReturnAt: 0,
   businessName: "EverydayWork",
@@ -2012,13 +2012,15 @@ window.Alpine.data('appState', () => ({
   async requestPayLink(invoiceId) {
     const id = String(invoiceId || "").trim();
     if (!id || this.previewMode) return { payUrl: "", skip: true };
-    if (this.payLinkFlight && this.payLinkFlight.id === id) return this.payLinkFlight.promise;
+    const current = this.payLinkSlot;
+    if (current && current[0] === id) return current[1];
     const promise = this.fetchPayLink(id);
-    this.payLinkFlight = { id: id, promise: promise };
+    const slot = [id, promise];
+    this.payLinkSlot = slot;
     try {
       return await promise;
     } finally {
-      if (this.payLinkFlight && this.payLinkFlight.promise === promise) this.payLinkFlight = null;
+      if (this.payLinkSlot === slot) this.payLinkSlot = null;
     }
   },
   async fetchPayLink(invoiceId) {
