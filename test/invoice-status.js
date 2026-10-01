@@ -237,7 +237,10 @@ function createWorkbook() {
 function loadApi(workbook) {
   const context = {
     SpreadsheetApp: {
-      getActiveSpreadsheet: function () { return workbook; },
+      getActiveSpreadsheet: function () {
+        context.sheetTouches += 1;
+        return workbook;
+      },
       flush: function () {},
       Direction: { UP: "up" }
     },
@@ -316,7 +319,26 @@ function loadApi(workbook) {
         };
       }
     },
-    ContentService: { MimeType: { JSON: "json" }, createTextOutput: function () { return { setMimeType: function () { return {}; } }; } },
+    ContentService: {
+      MimeType: { JSON: "json" },
+      createTextOutput: function (text) {
+        context.lastBody = text;
+        try { context.lastJson = JSON.parse(text); } catch (err) { context.lastJson = null; }
+        return { setMimeType: function () { return this; } };
+      }
+    },
+    scriptProperties: { CLIENT_TOKEN: "beta-token" },
+    PropertiesService: {
+      getScriptProperties: function () {
+        return {
+          getProperty: function (name) {
+            const store = context.scriptProperties || {};
+            if (!Object.prototype.hasOwnProperty.call(store, name) || store[name] == null) return null;
+            return store[name];
+          }
+        };
+      }
+    },
     UrlFetchApp: {
       fetch: function (url, options) {
         context.fetchTouches += 1;
@@ -338,7 +360,10 @@ function loadApi(workbook) {
     console: console,
     driveTouches: 0,
     mailTouches: 0,
-    fetchTouches: 0
+    fetchTouches: 0,
+    sheetTouches: 0,
+    lastBody: "",
+    lastJson: null
   };
   context.global = context;
   vm.createContext(context);
@@ -1428,6 +1453,103 @@ test("time sheet reads stop at the last shift", function (api, workbook) {
     return args.length === 4 && args[3] >= 12;
   });
   assert(fallbackWide.length === 1 && fallbackWide[0][2] === 4, JSON.stringify(fallbackWide));
+});
+
+function webPost(api, body) {
+  api.doPost({ postData: { contents: JSON.stringify(body) }, parameter: {} });
+  return api.lastJson;
+}
+
+test("a web request without the client token does not open the sheet", function (api, workbook) {
+  api.doGet({});
+  assert(api.lastJson && api.lastJson.success === false && api.lastJson.status === 401, JSON.stringify(api.lastJson));
+  assert(api.lastJson.error === "Client token is missing.", api.lastJson.error);
+  assert(api.sheetTouches === 0, "a missing token opened the sheet");
+
+  api.doGet({ parameter: { clientToken: "wrong-token" } });
+  assert(api.lastJson.status === 403 && api.lastJson.success === false, JSON.stringify(api.lastJson));
+  assert(api.lastJson.error === "Client token was not accepted.", api.lastJson.error);
+  assert(api.sheetTouches === 0, "a wrong token opened the sheet");
+
+  const headerOnly = api.doPost({
+    parameter: {},
+    headers: { "X-Client-Token": "beta-token" },
+    postData: { contents: JSON.stringify({ action: "logTimeEntry", payload: shift() }) }
+  });
+  assert(api.lastJson.status === 401, JSON.stringify(api.lastJson));
+  assert(api.sheetTouches === 0, "a header token opened the sheet");
+  assert(headerOnly, "doPost returned nothing");
+
+  const wrong = webPost(api, { action: "logTimeEntry", payload: shift(), clientToken: "wrong-token" });
+  assert(wrong.status === 403 && wrong.success === false, JSON.stringify(wrong));
+  assert(api.sheetTouches === 0, "a rejected post opened the sheet");
+
+  api.scriptProperties.CLIENT_TOKEN = "";
+  const unset = webPost(api, { action: "getInitialAppData", clientToken: "beta-token" });
+  assert(unset.status === 403 && /not set/.test(unset.error), JSON.stringify(unset));
+  assert(api.sheetTouches === 0, "an unset property opened the sheet");
+  api.scriptProperties.CLIENT_TOKEN = "beta-token";
+
+  const mismatch = api.doPost({
+    parameter: { clientToken: "beta-token" },
+    postData: { contents: JSON.stringify({ action: "getInitialAppData", clientToken: "other-token" }) }
+  });
+  assert(mismatch, "mismatch post returned nothing");
+  assert(api.lastJson.status === 403, JSON.stringify(api.lastJson));
+  assert(api.sheetTouches === 0, "mismatched tokens opened the sheet");
+
+  api.doGet({ parameter: { clientToken: "beta-token" } });
+  assert(api.lastJson.success === true && api.lastJson.invoicePdf === "inv-template-plain", JSON.stringify(api.lastJson));
+  assert(api.sheetTouches === 0, "the health check opened the sheet");
+
+  const logged = webPost(api, { action: "logTimeEntry", payload: shift(), clientToken: "beta-token" });
+  assert(logged.success, logged.error);
+  assert(logged.message === "Job logged on invoice INV-JR26-001.", logged.message);
+  assert(statusCell(workbook, 2) === "Draft", statusCell(workbook, 2));
+
+  const listed = webPost(api, { action: "getInitialAppData", clientToken: "beta-token" });
+  assert(listed.success, listed.error);
+  assert(listed.invoices && listed.invoices.length >= 1, "invoice list was empty");
+
+  const invoiced = webPost(api, {
+    action: "compileInvoice",
+    payload: { invoiceId: logged.invoiceId },
+    clientToken: "beta-token"
+  });
+  assert(invoiced.success, invoiced.error);
+  assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  const paid = webPost(api, {
+    action: "updateInvoiceStatus",
+    payload: { invoiceId: logged.invoiceId, status: "Paid" },
+    clientToken: "beta-token"
+  });
+  assert(paid.success, paid.error);
+  assert(statusCell(workbook, 2) === "Paid", statusCell(workbook, 2));
+
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  template.getRange("A4").setValue("INVOICE");
+  const config = createSheet("Config");
+  workbook.sheets.Config = config;
+  config.getRange("B5").setValue("Everyday Business");
+  config.getRange("B7").setValue("records@everydaybusiness.ie");
+  workbook.sheets.ClientRecords.getRange(2, 1).setValue("Acme");
+  workbook.sheets.ClientRecords.getRange(2, 7).setValue("Ada");
+  const emailed = webPost(api, {
+    action: "exportInvoicePdf",
+    payload: { invoiceId: logged.invoiceId, mode: "email", email: "ada@acme.test" },
+    clientToken: "beta-token"
+  });
+  assert(emailed.success, emailed.error);
+  assert(api.lastEmail && api.lastEmail.to === "Ada <ada@acme.test>", JSON.stringify(api.lastEmail));
+  assert(statusCell(workbook, 2) === "Paid", "email moved a paid invoice");
+
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert(/clientToken: this\.clientToken/.test(appSource), "the page does not send clientToken");
+  assert(!/X-Client-Token/.test(appSource), "the page sends a custom header");
+  const demo = fs.readFileSync(path.join(__dirname, "..", "config.js"), "utf8");
+  assert(/apiUrl/.test(demo) && /clientToken/.test(demo), "demo config is missing apiUrl or clientToken");
 });
 
 if (failures.length) {
