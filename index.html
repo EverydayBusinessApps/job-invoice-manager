@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=25">
+  <link rel="stylesheet" href="style.css?v=26">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=34"></script>
+  <script defer src="app.js?v=35"></script>
 </head>
 <body>
 
@@ -32,7 +32,12 @@
     <div class="banner sample" x-show="dashboardNote" x-text="dashboardNote"></div>
 
     <main>
-      <div id="save-feedback" x-show="feedback.text" :class="feedback.isError ? 'alert alert-error' : 'alert alert-success'" x-text="feedback.text"></div>
+      <div id="save-feedback" x-show="feedback.text">
+        <div class="alert alert-row" :class="feedback.isError ? 'alert-error' : 'alert-success'">
+          <span x-text="feedback.text"></span>
+          <button type="button" class="alert-x" data-action="dismissFeedback" aria-label="Dismiss">x</button>
+        </div>
+      </div>
       <button type="button" class="btn-alt" x-show="mailAuthUrl" data-action="openMailAuth">Allow email sending</button>
 
       <!-- VIEW: DASHBOARD -->
@@ -136,6 +141,7 @@
           </div>
           <div class="send-bar" x-text="detailWork"></div>
           <h3 class="send-heading">Send this invoice</h3>
+          <fieldset class="send-fields" data-lock-paid>
           <div x-show="detailPayUrl">
             <div class="pay-row">
               <a class="pay-open" data-pay-link target="_blank" rel="noopener noreferrer" x-text="detailPayUrl"></a>
@@ -166,6 +172,7 @@
           <h3 class="send-heading">When it has gone out</h3>
           <button type="button" id="mark-invoiced" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
           <p class="page-lead">That moves it to invoices to collect.</p>
+          </fieldset>
           <button type="button" class="btn-line btn-auto" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
         </div>
       </div>

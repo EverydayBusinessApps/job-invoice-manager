@@ -2215,6 +2215,23 @@ test("ensurePaymentLink reuses the stored pay link until the total changes", fun
   const emailEnd = appSource.indexOf("pdfExportPayload(mode)", emailStart);
   assert(appSource.slice(emailStart, emailEnd).indexOf("startPayWatch") !== -1, "emailing the invoice does not start the pay check");
   assert(appSource.indexOf('+ " paid"') !== -1, "a paid invoice has no banner");
+  assert(/feedbackHoldMs:\s*8000/.test(appSource), "the paid note does not clear itself");
+  assert(appSource.indexOf("dismissFeedback") !== -1, "the paid note has no dismiss");
+  assert(appSource.indexOf("detailLocked") !== -1, "a paid invoice stays editable");
+  const pageSource = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert(pageSource.indexOf("data-lock-paid") !== -1, "the send form has no paid lock");
+  assert(pageSource.indexOf("dismissFeedback") !== -1, "the banner has no dismiss control");
+  const submitStart = appSource.indexOf("async submitForm()");
+  const submitEnd = appSource.indexOf("money(n)", submitStart);
+  const submit = appSource.slice(submitStart, submitEnd);
+  const placeAt = submit.indexOf("this.placeLoggedDraft");
+  const refreshAt = submit.lastIndexOf("this.refreshSnapshot");
+  assert(placeAt !== -1 && refreshAt !== -1 && placeAt < refreshAt, "the draft is not on screen before the workbook answers");
+  assert(submit.indexOf("keepDetail: true") !== -1, "logging a job can leave the invoice");
+  const noticeStart = appSource.indexOf("async noticePayments()");
+  const notice = appSource.slice(noticeStart, noticeStart + 2200);
+  assert(notice.indexOf("keepDetail: true") !== -1, "a pay check can leave the invoice");
+  assert(notice.indexOf("confirmOnHome") !== -1, "paying the open invoice does not return home");
 });
 
 if (failures.length) {

@@ -53,7 +53,7 @@ Checklist:
 
 ## Pay link (Stripe test mode)
 
-EverydayWork keeps the jobs and the Paid status. Opening an unpaid invoice prepares a Stripe test-mode pay link for the total (EUR) when Script property `STRIPE_SECRET_KEY` is set (`sk_test_…`). Copy pay link and Email invoice use that stored link. A new link is created only when the total changes. The same link is in the email and, once it is on the page, in the PDF footer. Bank transfer details stay on the PDF. When Stripe reports the payment, that invoice is marked Paid in the Sheet. The page checks for that payment for about two minutes, and again when you come back to the tab. Refresh still checks straight away.
+EverydayWork keeps the jobs and the Paid status. Opening an unpaid invoice prepares a Stripe test-mode pay link for the total (EUR) when Script property `STRIPE_SECRET_KEY` is set (`sk_test_…`). Copy pay link and Email invoice use that stored link. A new link is created only when the total changes. The same link is in the email and, once it is on the page, in the PDF footer. Bank transfer details stay on the PDF. When Stripe reports the payment, that invoice is marked Paid in the Sheet. The page checks for that payment for about two minutes, and again when you come back to the tab. Refresh still checks straight away. If that invoice is open when the payment lands, EverydayWork returns to Home. The note clears after a few seconds, or when you dismiss it.
 
 Paste it in Apps Script: Project Settings → Script properties. Never in the frontend, GitHub, or chat.
 

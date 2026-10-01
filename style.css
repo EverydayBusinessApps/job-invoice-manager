@@ -91,6 +91,28 @@ nav { background-color: #00263B; color: #FAFFE4; display: flex; justify-content:
 nav button, nav a { background: none; color: #FAFFE4; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; padding: 0.45rem 0.15rem 0.15rem; width: auto; min-width: 0; flex: 1 1 0; font-weight: 500; line-height: 1.2; text-align: center; text-decoration: none; }
 button.see-more { width: auto; align-self: flex-start; background: transparent; color: #00263B; font-size: 0.8rem; font-weight: 700; padding: 0; text-align: left; }
 .alert { padding: 0.875rem; border-radius: 0.75rem; text-align: center; font-size: 0.875rem; font-weight: 600; border: 1px solid transparent; }
+.alert-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; text-align: left; }
+.alert-row > span { flex: 1 1 auto; text-align: center; }
+button.alert-x { width: 1.75rem; min-width: 1.75rem; height: 1.75rem; flex: 0 0 auto; padding: 0; background: transparent; color: inherit; font-size: 1rem; line-height: 1; border-radius: 0.4rem; }
+button.alert-x:disabled { background: transparent; color: inherit; }
+fieldset.send-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset.send-fields > * + * { margin-top: 0.85rem; }
+fieldset.send-fields > .page-lead { margin-top: 0.3rem; }
+fieldset.send-fields:disabled a.pay-open { color: #94a3b8; pointer-events: none; }
+fieldset.send-fields:disabled label,
+fieldset.send-fields:disabled .send-heading,
+fieldset.send-fields:disabled .page-lead { color: #94a3b8; }
+fieldset.send-fields:disabled input,
+fieldset.send-fields:disabled textarea,
+fieldset.send-fields:disabled select,
+fieldset.send-fields:disabled button,
+fieldset.send-fields:disabled button.pay-copy,
+fieldset.send-fields:disabled button.btn-line {
+  background-color: #e2e8f0;
+  color: #94a3b8;
+  border-color: #cbd5e1;
+  cursor: not-allowed;
+}
 .job-logged-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.75rem; margin: 0; }
 button.text-btn { width: auto; background: transparent; color: inherit; padding: 0; border-radius: 0; font-weight: 700; text-decoration: underline; text-underline-offset: 0.18em; }
 button.text-btn:disabled { background: transparent; color: inherit; opacity: 0.55; }

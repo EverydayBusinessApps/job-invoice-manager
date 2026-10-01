@@ -111,4 +111,11 @@ const longWork = context.invoiceCardFacts({
 assert(longWork.work.length <= 90, "work stays short " + longWork.work);
 assert(/…$/.test(longWork.work), "long work is cut " + longWork.work);
 
+const match = context.invoiceMatches;
+assert(match({ id: "19", code: "INV-JR26-019" }, "19", "INV-JR26-019"), "invoice id match");
+assert(match({ id: "INV-JR26-019", code: "INV-JR26-019" }, "19", "INV-JR26-019"), "invoice code match after the id changes");
+assert(!match({ id: "INV-JR26-020", code: "INV-JR26-020" }, "19", "INV-JR26-019"), "a different invoice matched");
+assert(!match(null, "19", "INV-JR26-019"), "a missing invoice matched");
+assert(!match({ id: "19", code: "INV-JR26-019" }, "", ""), "blank keys matched an invoice");
+
 console.log("Irish sole trader indication passed.");

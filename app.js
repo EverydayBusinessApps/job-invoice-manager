@@ -225,6 +225,14 @@ window.Alpine = {
     root.querySelectorAll('[data-disable-when]').forEach((item) => {
       item.disabled = !!this.getPath(state, item.getAttribute('data-disable-when'));
     });
+    root.querySelectorAll('[data-lock-paid]').forEach((item) => {
+      const locked = !!this.getPath(state, 'detailLocked');
+      item.disabled = locked;
+      if (!locked) return;
+      item.querySelectorAll('input, textarea, select, button').forEach((control) => {
+        control.disabled = true;
+      });
+    });
     root.querySelectorAll('[data-pay-link]').forEach((el) => {
       const url = this.getPath(state, 'detailPayUrl') || '';
       if (url) el.setAttribute('href', url);
@@ -398,6 +406,15 @@ function roundCents(value) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+function invoiceMatches(row, id, code) {
+  if (!row) return false;
+  const keys = [id, code].map((value) => String(value || "").trim()).filter(Boolean);
+  if (!keys.length) return false;
+  const rowId = String(row.id || "").trim();
+  const rowCode = String(row.code || "").trim();
+  return keys.indexOf(rowId) !== -1 || keys.indexOf(rowCode) !== -1;
+}
+
 function estimateSoleTraderTax(profit) {
   const income = Math.max(0, roundCents(profit));
   const standard = Math.min(income, 44000);
@@ -452,6 +469,8 @@ window.Alpine.data('appState', () => ({
   settingsButtonLabel: "Save settings",
   currentTab: 'dashboard',
   feedback: { text: '', isError: false },
+  feedbackHoldMs: 8000,
+  feedbackToken: 0,
   clients: [],
   clientRecords: [],
   clientRecordsEmpty: true,
@@ -599,6 +618,7 @@ window.Alpine.data('appState', () => ({
   payWatchBound: false,
   payKinds: {},
   payLinkSlot: null,
+  payForId: "",
   payChecking: false,
   payReturnAt: 0,
   businessName: "EverydayWork",
@@ -606,6 +626,7 @@ window.Alpine.data('appState', () => ({
   detailCanSavePdf: false,
   detailCanFinish: false,
   detailCanUndo: false,
+  detailLocked: false,
   detailLines: [],
   detailLinesRaw: [],
   detailLinesEmpty: true,
@@ -1242,7 +1263,7 @@ window.Alpine.data('appState', () => ({
     const id = String(rawId || code || "").trim();
     if (!label) return;
     const rows = (this.invoiceRows || []).slice();
-    let row = rows.find((item) => item.id === id || item.code === label || item.id === label);
+    let row = rows.find((item) => invoiceMatches(item, id, label));
     const line = {
       date: snapshot.iso,
       details: snapshot.jobDetails,
@@ -1365,9 +1386,10 @@ window.Alpine.data('appState', () => ({
         snapshot.amount = amount;
         this.rememberLoggedJob(code, rawId);
         this.showLoggedJob(code, rawId, amount);
+        this.placeLoggedDraft(code, rawId, snapshot);
         this.resetJobForm();
-        await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-        const found = (this.invoiceRows || []).some((item) => item.id === rawId || item.id === code || item.code === code);
+        await this.refreshSnapshot({ quiet: true, announce: false, resync: true, keepDetail: true });
+        const found = (this.invoiceRows || []).some((item) => invoiceMatches(item, rawId, code));
         if (!found) this.placeLoggedDraft(code, rawId, snapshot);
         return;
       }
@@ -1498,9 +1520,11 @@ window.Alpine.data('appState', () => ({
     this.listEmptyLabel = "Nothing waiting here.";
     this.listShowsHint = !this.listEmpty && !!this.listHint;
   },
-  applyDashboard(res, keepEmail) {
+  applyDashboard(res, keepEmail, opts) {
     const keepView = this.dashView;
     const keepId = this.detailId;
+    const keepCode = this.detailCode;
+    const keepDetail = !!(opts && opts.keepDetail);
     if (res.businessName) this.businessName = res.businessName;
     this.asOf = res.asOf || "";
     this.periodData = res.periods || {};
@@ -1521,10 +1545,10 @@ window.Alpine.data('appState', () => ({
     this.syncPeriodClasses();
     this.syncActive();
     this.syncVisibleInvoices();
-    if (keepView === "detail" && keepId) {
-      const row = this.invoiceRows.find((item) => item.id === keepId);
+    if (keepView === "detail" && (keepId || keepCode)) {
+      const row = this.invoiceRows.find((item) => invoiceMatches(item, keepId, keepCode));
       if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], keepEmail);
-      else this.dashView = "home";
+      else if (!keepDetail) this.dashView = "home";
     } else {
       this.dashView = keepView || "home";
     }
@@ -1557,7 +1581,7 @@ window.Alpine.data('appState', () => ({
       return { name: (c && (c.name || c.Name || c.clientName)) || "" };
     }).filter((c) => c.name);
   },
-  applySnapshot(res, keepEmail) {
+  applySnapshot(res, keepEmail, opts) {
     if (Array.isArray(res.clientRecords)) this.applyClientRecords(res.clientRecords);
     else if (Array.isArray(res.clients) && res.clients.length && !this.clientDetailsLive) {
       this.applyClientRecords(res.clients.map((client) => ({
@@ -1566,7 +1590,7 @@ window.Alpine.data('appState', () => ({
       })));
     } else if (Array.isArray(res.clients) && res.clients.length) this.applyClientList(res.clients);
     this.unbilled = res.unbilled || {};
-    this.applyDashboard(res, keepEmail);
+    this.applyDashboard(res, keepEmail, opts);
     if (Array.isArray(res.invoices)) {
       this.invoices = this.mapInvoices(res.invoices);
       this.refreshClientInvoices();
@@ -1619,7 +1643,7 @@ window.Alpine.data('appState', () => ({
       if (snapshot) {
         this.dashboardLive = true;
         this.dashboardNote = "";
-        this.applySnapshot(snapshot, true);
+        this.applySnapshot(snapshot, true, opts);
         this.rememberSnapshot(snapshot);
         if (announce && !quiet) this.setFeedback((this.activeLabel || "Dashboard") + " is loaded.", false);
         return;
@@ -1809,7 +1833,7 @@ window.Alpine.data('appState', () => ({
     setTimeout(go, 120);
   },
   restampInvoice(id, status) {
-    const row = (this.invoiceRows || []).find((item) => item.id === id);
+    const row = (this.invoiceRows || []).find((item) => invoiceMatches(item, id, id));
     if (!row) return;
     const label = status === "Undo" ? "Invoiced" : status;
     row.status = label;
@@ -1819,7 +1843,7 @@ window.Alpine.data('appState', () => ({
     else if (label === "Written off") row.kind = "writtenoff";
     this.recomputeOpenPiles();
     this.syncVisibleInvoices();
-    if (this.detailId === row.id) this.setDetailPhase(label);
+    if (invoiceMatches(row, this.detailId, this.detailCode)) this.setDetailPhase(label);
   },
   recomputeOpenPiles() {
     const rows = this.invoiceRows || [];
@@ -1854,14 +1878,14 @@ window.Alpine.data('appState', () => ({
     this.openDoneEmpty = done < 1;
   },
   focusInvoice(id) {
-    const row = (this.invoiceRows || []).find((item) => item.id === id);
+    const row = (this.invoiceRows || []).find((item) => invoiceMatches(item, id, id));
     if (!row) return null;
     this.detailId = row.id;
     this.detailCode = row.code || row.id;
     return row;
   },
   fillDetail(row, lines, keepEmail) {
-    const sameInvoice = !!keepEmail && this.detailId === row.id;
+    const sameInvoice = !!keepEmail && invoiceMatches(row, this.detailId, this.detailCode);
     this.detailId = row.id;
     this.detailCode = row.code || row.id;
     this.detailClient = row.clientName || "No client";
@@ -1883,6 +1907,7 @@ window.Alpine.data('appState', () => ({
       this.detailCc = "";
       this.detailPayUrl = "";
       this.payCopied = false;
+      this.payForId = "";
     }
     if (row.kind === "paid" || row.kind === "writtenoff") {
       this.detailPayUrl = "";
@@ -1894,6 +1919,7 @@ window.Alpine.data('appState', () => ({
     this.detailCanSavePdf = row.kind !== "draft";
     this.detailCanFinish = row.kind === "due";
     this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
+    this.detailLocked = row.kind === "paid" || row.kind === "writtenoff";
     if (!sameInvoice || this.detailMessage === this.detailMessageAuto) {
       this.detailMessage = drafted;
       this.detailMessageAuto = drafted;
@@ -1933,7 +1959,7 @@ window.Alpine.data('appState', () => ({
       return this.invoiceFilter === "due" || this.invoiceFilter === "send" || this.invoiceFilter === "draft";
     }
     if (this.dashView === "detail") {
-      const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
+      const row = (this.invoiceRows || []).find((item) => invoiceMatches(item, this.detailId, this.detailCode));
       if (!row) return !!(this.detailIsDraft || this.detailCanFinish);
       return row.kind === "draft" || row.kind === "due";
     }
@@ -1942,7 +1968,10 @@ window.Alpine.data('appState', () => ({
   rememberPayKinds() {
     const map = {};
     (this.invoiceRows || []).forEach((row) => {
-      if (row && row.id) map[row.id] = row.kind || "";
+      if (!row) return;
+      const kind = row.kind || "";
+      if (row.id) map[row.id] = kind;
+      if (row.code) map[row.code] = kind;
     });
     this.payKinds = map;
   },
@@ -1982,15 +2011,26 @@ window.Alpine.data('appState', () => ({
     if (!this.payWatchRelevant()) return;
     this.payChecking = true;
     const before = this.payKinds || {};
+    const openId = this.detailId;
+    const openCode = this.detailCode;
+    const onOpenInvoice = this.currentTab === "dashboard" && this.dashView === "detail";
     try {
-      await this.refreshSnapshot({ quiet: true, announce: false, background: true });
+      await this.refreshSnapshot({ quiet: true, announce: false, background: true, keepDetail: true });
       const notes = [];
+      const seen = {};
+      let openPaid = false;
       (this.invoiceRows || []).forEach((row) => {
-        if (!row || !row.id) return;
-        const was = before[row.id];
-        if (was && was !== "paid" && row.kind === "paid") notes.push((row.code || row.id) + " paid");
+        if (!row) return;
+        const was = (row.id && before[row.id]) || (row.code && before[row.code]) || "";
+        if (!was || was === "paid" || row.kind !== "paid") return;
+        const label = (row.code || row.id) + " paid";
+        if (seen[label]) return;
+        seen[label] = true;
+        notes.push(label);
+        if (onOpenInvoice && invoiceMatches(row, openId, openCode)) openPaid = true;
       });
-      if (notes.length) this.setFeedback(notes.join(" · "), false);
+      if (openPaid) this.confirmOnHome(notes.join(" · "));
+      else if (notes.length) this.setFeedback(notes.join(" · "), false);
       this.rememberPayKinds();
     } finally {
       this.payChecking = false;
@@ -2004,8 +2044,11 @@ window.Alpine.data('appState', () => ({
   },
   applyPayUrl(invoiceId, payUrl) {
     const link = String(payUrl || "").trim();
-    if (!link || this.detailId !== invoiceId) return;
-    const row = (this.invoiceRows || []).find((item) => item.id === invoiceId);
+    const id = String(invoiceId || "").trim();
+    if (!link || !id || this.detailLocked) return;
+    const same = id === String(this.detailId || "") || id === String(this.detailCode || "") || id === String(this.payForId || "");
+    if (!same) return;
+    const row = (this.invoiceRows || []).find((item) => invoiceMatches(item, this.detailId, this.detailCode));
     if (row && row.kind !== "draft" && row.kind !== "due") return;
     this.detailPayUrl = link;
   },
@@ -2024,6 +2067,7 @@ window.Alpine.data('appState', () => ({
     }
   },
   async fetchPayLink(invoiceId) {
+    this.payForId = String(invoiceId || "");
     const linked = await this.api("ensurePaymentLink", { invoiceId: invoiceId }, { quiet: true, timeoutMs: 30000, write: true });
     if (!linked || linked.timedOut) return { timedOut: true, payUrl: "", skip: false };
     if (linked.success) {
@@ -2045,7 +2089,7 @@ window.Alpine.data('appState', () => ({
     return { payUrl: "", skip: true, failed: true };
   },
   async openInvoice(id) {
-    const row = (this.invoiceRows || []).find((item) => item.id === id);
+    const row = (this.invoiceRows || []).find((item) => invoiceMatches(item, id, id));
     if (!row) return;
     this.driveUrl = "";
     this.clearFeedback();
@@ -2337,8 +2381,18 @@ window.Alpine.data('appState', () => ({
     }
   },
   setFeedback(msg, isErr) {
+    this.feedbackToken += 1;
+    const token = this.feedbackToken;
     this.feedback.text = msg;
     this.feedback.isError = !!isErr;
+    if (!isErr) {
+      const hold = this.feedbackHoldMs || 8000;
+      setTimeout(() => {
+        if (this.feedbackToken !== token || this.feedback.isError) return;
+        this.feedback.text = "";
+        this.mailAuthUrl = "";
+      }, hold);
+    }
     setTimeout(() => {
       const node = document.getElementById("save-feedback");
       if (!node || node.style.display === "none") return;
@@ -2353,10 +2407,14 @@ window.Alpine.data('appState', () => ({
   openMailAuth() {
     if (this.mailAuthUrl) window.open(this.mailAuthUrl, "_blank", "noopener");
   },
-  clearFeedback() {
-    this.feedback.text = '';
+  dismissFeedback() {
+    this.feedbackToken += 1;
+    this.feedback.text = "";
     this.feedback.isError = false;
     this.mailAuthUrl = "";
+  },
+  clearFeedback() {
+    this.dismissFeedback();
     if (this.jobLogged && this.jobLogged.text) this.jobLogged = { text: "", id: "", code: "" };
   },
   sampleSettings() {
