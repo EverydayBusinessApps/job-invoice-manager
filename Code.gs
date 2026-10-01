@@ -1705,7 +1705,7 @@ function exportInvoicePdf(payload) {
   const email = String((payload && payload.email) || "").trim();
   let cc = "";
   if (mode === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return { success: false, error: "Enter an email address to send the PDF." };
+    return { success: false, error: "Enter an email address to send the invoice." };
   }
   if (mode === "email") {
     const parsed = invoiceCopyList_(payload && payload.cc, [email]);
@@ -1722,31 +1722,27 @@ function exportInvoicePdf(payload) {
   }
 
   const previous = sheet.getRange("B1").getValue();
+  let payStamp = null;
   try {
     widenInvoiceTotals_(sheet);
     sheet.getRange("B1").setValue(code);
+
+    let payUrl = acceptedPayUrl_(payload && payload.payUrl);
+    if (mode === "email" && !payUrl && !(payload && payload.skipPayLink)) {
+      const linked = createInvoicePaymentLink_(ss, invoiceId);
+      payUrl = linked.url || "";
+    }
+    payStamp = stampInvoicePayFooter_(sheet, payUrl);
     SpreadsheetApp.flush();
     Utilities.sleep(2000);
 
     const timezone = ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone();
     const today = Utilities.formatDate(new Date(), timezone, "yyyy-MM-dd");
     const fileName = invoicePdfName_(code, today);
-    const blob = renderInvoicePdf_(ss, sheet).setName(fileName);
+    const blob = renderInvoicePdf_(ss, sheet, payStamp && payStamp.row).setName(fileName);
     let prepared = invoiceEmailText_(ss, invoiceId, payload && payload.message);
-    let payUrl = "";
-    let payLinkNote = "";
-    if (mode === "email") {
-      payUrl = acceptedPayUrl_(payload && payload.payUrl);
-      if (payUrl) {
-        prepared = { text: appendInvoicePayLink_(prepared.text, payUrl), contact: prepared.contact };
-      } else if (payload && payload.skipPayLink) {
-        if (payload.payLinkFailed) payLinkNote = " The pay link was not added.";
-      } else {
-        const linked = createInvoicePaymentLink_(ss, invoiceId);
-        payUrl = linked.url || "";
-        if (payUrl) prepared = { text: appendInvoicePayLink_(prepared.text, payUrl), contact: prepared.contact };
-        else if (linked.error) payLinkNote = " The pay link was not added.";
-      }
+    if (mode === "email" && payUrl) {
+      prepared = { text: appendInvoicePayLink_(prepared.text, payUrl), contact: prepared.contact };
     }
 
     let copyTo = "";
@@ -1796,18 +1792,14 @@ function exportInvoicePdf(payload) {
     }
 
     if (mode === "email") {
-      let message = "Emailed " + fileName + " to " + email + ".";
-      if (cc) message += " Cc " + cc + ".";
-      if (copyTo) message += " A copy went to " + copyTo + " for your records.";
-      if (payUrl) message += " Pay online: " + payUrl;
-      if (payLinkNote) message += payLinkNote;
       return {
         success: true,
         mode: mode,
         fileName: fileName,
         markedInvoiced: false,
         status: marked.status,
-        message: message
+        payUrl: payUrl || "",
+        message: "Emailed " + code + " to " + email + "."
       };
     }
 
@@ -1824,6 +1816,7 @@ function exportInvoicePdf(payload) {
     return { success: false, error: invoicePdfError_(err, mode) };
   } finally {
     sheet.getRange("B1").setValue(previous);
+    restoreInvoicePayFooter_(sheet, payStamp);
     SpreadsheetApp.flush();
     lock.releaseLock();
   }
@@ -2235,6 +2228,35 @@ function acceptedPayUrl_(value) {
   return "";
 }
 
+function payFooterRow_(sheet) {
+  var values = sheet.getRange(2, 1, 35, 7).getValues();
+  var last = 1;
+  for (var i = 0; i < values.length; i++) {
+    for (var c = 0; c < values[i].length; c++) {
+      if (String(values[i][c] == null ? "" : values[i][c]).trim()) {
+        last = i + 2;
+        break;
+      }
+    }
+  }
+  return last < 36 ? last + 1 : 37;
+}
+
+function stampInvoicePayFooter_(sheet, url) {
+  var link = acceptedPayUrl_(url);
+  if (!link || !sheet) return null;
+  var row = payFooterRow_(sheet);
+  var cell = sheet.getRange(row, 1);
+  var previous = cell.getValue();
+  cell.setValue("Pay online: " + link);
+  return { row: row, previous: previous };
+}
+
+function restoreInvoicePayFooter_(sheet, stamp) {
+  if (!sheet || !stamp) return;
+  sheet.getRange(stamp.row, 1).setValue(stamp.previous);
+}
+
 function createPaymentLink(payload) {
   var invoiceId = String((payload && payload.invoiceId) || "").trim();
   if (!invoiceId) return { success: false, error: "Choose an invoice." };
@@ -2523,23 +2545,23 @@ function templatePdfAuthHint_() {
  * gridlines=false. If that connection is not allowed yet, the spreadsheet
  * PDF is used after the grid is hidden on INV-Template.
  */
-function renderInvoicePdf_(ss, sheet) {
+function renderInvoicePdf_(ss, sheet, footerRow) {
   if (sheet.getName && sheet.getName() !== "INV-Template") {
     throw new Error("The invoice PDF was taken from " + sheet.getName() + " instead of the invoice.");
   }
   if (sheet.setHiddenGridlines) sheet.setHiddenGridlines(true);
   try {
-    return fetchTemplatePdf_(ss, sheet);
+    return fetchTemplatePdf_(ss, sheet, footerRow);
   } catch (err) {
     const text = String(err && err.message ? err.message : err);
     if (!/permission|authorization|external_request|UrlFetchApp/i.test(text)) throw err;
-    return renderInvoicePdfFromBlob_(ss, sheet);
+    return renderInvoicePdfFromBlob_(ss, sheet, footerRow);
   }
 }
 
-function fetchTemplatePdf_(ss, sheet) {
+function fetchTemplatePdf_(ss, sheet, footerRow) {
   SpreadsheetApp.flush();
-  const response = UrlFetchApp.fetch(templatePdfUrl_(ss, sheet), {
+  const response = UrlFetchApp.fetch(templatePdfUrl_(ss, sheet, footerRow), {
     headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
     muteHttpExceptions: true
   });
@@ -2555,7 +2577,8 @@ function fetchTemplatePdf_(ss, sheet) {
   return blob;
 }
 
-function templatePdfUrl_(ss, sheet) {
+function templatePdfUrl_(ss, sheet, footerRow) {
+  const lastRow = footerRow && Number(footerRow) > 36 ? Number(footerRow) : 36;
   const params = [
     "format=pdf",
     "gridlines=false",
@@ -2576,7 +2599,7 @@ function templatePdfUrl_(ss, sheet) {
     params.push("gid=" + sheet.getSheetId());
     params.push("r1=1");
     params.push("c1=0");
-    params.push("r2=36");
+    params.push("r2=" + lastRow);
     params.push("c2=7");
   }
   return "https://docs.google.com/spreadsheets/d/" + ss.getId() + "/export?" + params.join("&");
@@ -2589,7 +2612,7 @@ function templatePdfUrl_(ss, sheet) {
  * visible. Those tabs are put back after the bytes are read. The grid on
  * INV-Template stays hidden.
  */
-function renderInvoicePdfFromBlob_(ss, sheet) {
+function renderInvoicePdfFromBlob_(ss, sheet, footerRow) {
   const state = {
     showedTemplate: false,
     hiddenSheets: [],
@@ -2614,7 +2637,8 @@ function renderInvoicePdfFromBlob_(ss, sheet) {
     }
     state.picker = concealForPdf_(sheet, 1, 1, "row");
     const maxRows = sheet.getMaxRows ? sheet.getMaxRows() : 36;
-    if (maxRows > 36) state.tail = concealForPdf_(sheet, 37, maxRows - 36, "row");
+    const tailStart = footerRow && Number(footerRow) > 36 ? Number(footerRow) + 1 : 37;
+    if (maxRows >= tailStart) state.tail = concealForPdf_(sheet, tailStart, maxRows - tailStart + 1, "row");
     const maxCols = sheet.getMaxColumns ? sheet.getMaxColumns() : 7;
     if (maxCols > 7) state.columns = concealForPdf_(sheet, 8, maxCols - 7, "column");
     if (sheet.activate) sheet.activate();

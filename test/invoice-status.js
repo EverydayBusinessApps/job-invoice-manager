@@ -901,7 +901,8 @@ test("email sends the invoice to the client and a copy to us", function (api, wo
   assert(api.lastEmail.body.indexOf("Please find attached invoice for") !== -1, api.lastEmail.body);
   assert(api.lastEmail.body.indexOf("Kind Regards") !== -1 && api.lastEmail.body.indexOf("Everyday Business") !== -1, api.lastEmail.body);
   assert(api.lastEmail.subject === "Everyday Business INV-JR26-011", api.lastEmail.subject);
-  assert(/jane@everydaybusiness.ie/.test(sent.message), sent.message);
+  assert(sent.message === "Emailed INV-JR26-011 to client@bakewell.test.", sent.message);
+  assert(sent.message.indexOf("jane@") === -1 && sent.message.indexOf("Cc ") === -1, sent.message);
   assert(api.lastEmail.attachments && api.lastEmail.attachments.length === 1, "missing attachment");
 
   const originalUser = api.Session.getEffectiveUser;
@@ -924,7 +925,8 @@ test("email sends the invoice to the client and a copy to us", function (api, wo
   });
   assert(copied.success, copied.error);
   assert(api.lastEmail.cc === "accounts@bakewell.test, boss@bakewell.test", api.lastEmail.cc);
-  assert(/Cc accounts@bakewell.test, boss@bakewell.test/.test(copied.message), copied.message);
+  assert(copied.message === "Emailed INV-JR26-011 to client@bakewell.test.", copied.message);
+  assert(copied.message.indexOf("Cc ") === -1, copied.message);
   assert(api.lastEmail.bcc === "jane@everydaybusiness.ie", api.lastEmail.bcc);
 
   const sameAsTo = api.exportInvoicePdf({
@@ -1803,6 +1805,14 @@ test("email with a test Stripe key adds a pay link before Kind Regards", functio
   invoices.getRange(2, 7).setValue(1080);
   invoices.getRange(2, 9).setValue("Draft");
   const letter = "To Kevin McNeil\nPlease find attached invoice for 10 Sep 2026\nTotal owed €1,080.00\nFor works Maintenance Cover\n\nKind Regards\nEveryday Business";
+  const originalFetch = api.UrlFetchApp.fetch;
+  api.UrlFetchApp.fetch = function (url, options) {
+    if (String(url).indexOf("/export?") !== -1) {
+      api.footerDuringPrint = template.getRange(2, 1, 36, 1).getValues().join("\n");
+      api.printRange = url;
+    }
+    return originalFetch.apply(this, arguments);
+  };
 
   const sent = api.exportInvoicePdf({
     invoiceId: "INV-JR26-011",
@@ -1833,15 +1843,38 @@ test("email with a test Stripe key adds a pay link before Kind Regards", functio
   assert(linkAt !== -1 && linkAt < regards, api.lastEmail.body);
   assert(api.lastEmail.body.indexOf("Bank transfer details are on the invoice.") !== -1, api.lastEmail.body);
   assert(api.lastEmail.htmlBody.indexOf("https://buy.stripe.com/") !== -1, api.lastEmail.htmlBody);
-  assert(sent.message.indexOf(" Pay online: " + payUrl) !== -1, sent.message);
+  assert(sent.message === "Emailed INV-JR26-011 to client@bakewell.test.", sent.message);
+  assert(sent.message.indexOf("http") === -1 && sent.message.indexOf("Cc ") === -1, sent.message);
+  assert(api.footerDuringPrint.indexOf("Pay online: " + payUrl) !== -1, api.footerDuringPrint);
+  assert(api.printRange.indexOf("r2=36") !== -1, api.printRange);
   assert(statusCell(workbook, 2) === "Draft", "email marked the draft");
   const cells = template.getRange("A1:G36").getValues().join("\n");
   assert(cells.indexOf("stripe.com") === -1, "the pay link was written onto the invoice");
 
+  api.footerDuringPrint = "";
   const downloaded = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "download" });
   assert(downloaded.success, downloaded.error);
+  assert(api.footerDuringPrint.indexOf("stripe.com") === -1, api.footerDuringPrint);
   assert(stripeFetches(api).length === 1, "saving the PDF created another pay link");
   assert(statusCell(workbook, 2) === "Invoiced", statusCell(workbook, 2));
+
+  api.footerDuringPrint = "";
+  const shared = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "download", payUrl: payUrl });
+  assert(shared.success, shared.error);
+  assert(api.footerDuringPrint.indexOf("Pay online: " + payUrl) !== -1, api.footerDuringPrint);
+  assert(stripeFetches(api).length === 1, "a saved pay link called Stripe again");
+  assert(template.getRange(2, 1, 36, 1).getValues().join("\n").indexOf("stripe.com") === -1, "the pay link stayed on the sheet");
+
+  template.getRange("A36").setValue("Bank");
+  api.footerDuringPrint = "";
+  api.printRange = "";
+  const filed = api.exportInvoicePdf({ invoiceId: "INV-JR26-011", mode: "download", payUrl: payUrl });
+  assert(filed.success, filed.error);
+  assert(api.printRange.indexOf("r2=37") !== -1, api.printRange);
+  assert(api.footerDuringPrint.indexOf("Pay online: " + payUrl) !== -1, api.footerDuringPrint);
+  assert(template.getRange("A36").getValue() === "Bank", "the bank row was replaced");
+  assert(String(template.getRange("A37").getValue() || "").indexOf("stripe.com") === -1, "the footer stayed on the sheet");
+  assert(stripeFetches(api).length === 1, "a full sheet created another pay link");
 
   invoices.getRange(3, 1).setValue("INV-JR26-019");
   invoices.getRange(3, 2).setValue("Bakewell Foods Ltd");
@@ -1875,7 +1908,7 @@ test("email with a test Stripe key adds a pay link before Kind Regards", functio
     message: letter
   });
   assert(failed.success, failed.error);
-  assert(failed.message.indexOf("The pay link was not added.") !== -1, failed.message);
+  assert(failed.message === "Emailed INV-JR26-011 to client@bakewell.test.", failed.message);
   assert(failed.message.indexOf("sk_") === -1, failed.message);
   assert(api.lastEmail.body.indexOf("stripe.com") === -1, api.lastEmail.body);
   assert(api.lastEmail.htmlBody.indexOf("http") === -1, api.lastEmail.htmlBody);
@@ -1934,7 +1967,8 @@ test("createPaymentLink returns the pay link before the email is sent", function
   const regards = api.lastEmail.body.indexOf("\nKind Regards\n");
   const linkAt = api.lastEmail.body.indexOf("Pay this invoice online:\n" + linked.payUrl);
   assert(linkAt !== -1 && linkAt < regards, api.lastEmail.body);
-  assert(sent.message.indexOf(" Pay online: " + linked.payUrl) !== -1, sent.message);
+  assert(sent.message === "Emailed INV-JR26-011 to client@bakewell.test.", sent.message);
+  assert(sent.message.indexOf(linked.payUrl) === -1, sent.message);
 
   const poisoned = api.exportInvoicePdf({
     invoiceId: "INV-JR26-011",
@@ -1970,7 +2004,8 @@ test("createPaymentLink returns the pay link before the email is sent", function
     skipPayLink: true,
     payLinkFailed: true
   });
-  assert(failedNote.message.indexOf("The pay link was not added.") !== -1, failedNote.message);
+  assert(failedNote.message === "Emailed INV-JR26-011 to client@bakewell.test.", failedNote.message);
+  assert(failedNote.message.indexOf("The pay link was not added.") === -1, failedNote.message);
   assert(api.lastEmail.body.indexOf("stripe.com") === -1, api.lastEmail.body);
 
   const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
@@ -1978,7 +2013,7 @@ test("createPaymentLink returns the pay link before the email is sent", function
   const emailFn = appSource.slice(start, start + 2800);
   const createAt = emailFn.indexOf('api("createPaymentLink"');
   const exportAt = emailFn.indexOf('api("exportInvoicePdf"');
-  assert(createAt !== -1 && exportAt !== -1 && createAt < exportAt, "Email PDF creates the pay link after the email");
+  assert(createAt !== -1 && exportAt !== -1 && createAt < exportAt, "Email invoice creates the pay link after the email");
 });
 
 test("email without a Stripe key sends and leaves http out of the letter", function (api, workbook) {
