@@ -731,6 +731,14 @@ window.Alpine.data('appState', () => ({
     this.apiUrl = String(cfg.apiUrl || "").trim();
     this.clientToken = String(cfg.clientToken || "").trim();
   },
+  clientRequestUrl() {
+    // Apps Script answers the browser from a redirect. With the token only in
+    // the body, that redirect comes back empty and the page shows "Client token
+    // is missing" even after the email has already been sent. The same token
+    // on the URL lets the reply come back.
+    const join = this.apiUrl.indexOf("?") === -1 ? "?" : "&";
+    return this.apiUrl + join + "clientToken=" + encodeURIComponent(this.clientToken);
+  },
   async api(actionName, payloadData = {}, opts) {
     const quiet = opts && opts.quiet;
     const writing = !!(opts && opts.write);
@@ -751,7 +759,7 @@ window.Alpine.data('appState', () => ({
       if (controller) controller.abort();
     }, timeoutMs);
     try {
-      const response = await fetch(this.apiUrl, {
+      const response = await fetch(this.clientRequestUrl(), {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
         body: JSON.stringify({ action: actionName, payload: payloadData, clientToken: this.clientToken }),
