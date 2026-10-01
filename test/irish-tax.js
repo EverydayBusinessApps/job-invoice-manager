@@ -57,6 +57,15 @@ assert(draftFacts.when === "10/09/2026", "draft date " + draftFacts.when);
 assert(draftFacts.hours === "1 h", "draft hours " + draftFacts.hours);
 assert(draftFacts.work === "Survey", "draft work " + draftFacts.work);
 
+const collapsed = context.collapseInvoiceRows([
+  { id: "17", code: "INV-EB-017", status: "Draft", kind: "draft", total: 150 },
+  { id: "INV-JR26-017", code: "INV-JR26-017", status: "Draft", kind: "draft", total: 150 },
+  { id: "INV-EB-017", code: "INV-EB-017", status: "Invoiced", kind: "due", total: 150 }
+]);
+assert(collapsed.length === 1, "collapsed " + collapsed.length);
+assert(collapsed[0].id === "INV-EB-017" && collapsed[0].code === "INV-EB-017", JSON.stringify(collapsed[0]));
+assert(collapsed[0].status === "Invoiced" && collapsed[0].kind === "due", collapsed[0].status + " " + collapsed[0].kind);
+
 const span = context.invoiceCardFacts({
   date: "2026-09-30",
   hours: 3.5,
