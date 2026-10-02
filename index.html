@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=25">
+  <link rel="stylesheet" href="style.css?v=26">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=36"></script>
+  <script defer src="app.js?v=37"></script>
 </head>
 <body>
 
@@ -46,7 +46,7 @@
                 <span class="metric-title">Invoices to send</span>
                 <span class="metric-value" x-text="openSendAmount"></span>
                 <span class="metric-sub" x-text="openSendCount"></span>
-                <span class="pile-hint">Email drafts and mark them sent</span>
+                <span class="pile-hint">Open a draft and check the invoice</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
@@ -77,7 +77,7 @@
           <p class="page-lead" x-show="listShowsHint" x-text="listHint"></p>
           <div class="inv-stack">
             <template x-for="inv in visibleInvoices">
-              <article class="inv-card">
+              <article class="inv-card" data-action="openInvoice" :data-id="inv.id">
                 <div class="inv-client" x-text="inv.client"></div>
                 <div class="inv-code" x-text="inv.line"></div>
                 <div class="inv-facts">
@@ -102,8 +102,10 @@
                 <div class="inv-actions">
                   <button type="button" x-show="listShowsSend" data-action="markListInvoiced" :data-id="inv.id" data-disable-when="saving">Mark invoiced</button>
                   <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Generate and send</button>
+                  <button type="button" class="btn-line" x-show="listShowsCollect" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">View</button>
                   <button type="button" x-show="listShowsCollect" data-action="markListPaid" :data-id="inv.id" data-disable-when="saving">Mark paid</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="markListWrittenOff" :data-id="inv.id" data-disable-when="saving">Write off</button>
+                  <button type="button" class="btn-line" x-show="listShowsDone" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">View</button>
                   <button type="button" class="btn-line btn-auto" x-show="listShowsDone" data-action="undoListStatus" :data-id="inv.id" data-disable-when="saving">Undo</button>
                 </div>
               </article>
@@ -114,59 +116,113 @@
 
         <div x-show="dashView === 'detail'" class="sheet-page">
           <button type="button" class="back-home" data-action="showDashHome">Back to home</button>
-          <h2 class="page-title" x-text="detailCode"></h2>
-          <div class="send-bar" x-text="detailClient"></div>
-          <div class="grid-2">
-            <div class="metric-box">
-              <span class="metric-title">Status</span>
-              <span class="metric-value metric-value-sm" x-text="detailStatus"></span>
+          <article class="invoice-sheet">
+            <div class="invoice-head">
+              <div>
+                <p class="invoice-kicker" x-text="detailStatus"></p>
+                <h2 class="page-title" x-text="detailCode"></h2>
+                <p class="invoice-client" x-text="detailClient"></p>
+                <p class="invoice-job" x-show="detailJobShow" x-text="detailJob"></p>
+              </div>
+              <div class="invoice-total-block">
+                <span class="metric-title gold">Total</span>
+                <span class="invoice-total" x-text="detailTotal"></span>
+              </div>
             </div>
-            <div class="metric-box alt">
-              <span class="metric-title gold">Total</span>
-              <span class="metric-value" x-text="detailTotal"></span>
+            <dl class="invoice-meta">
+              <div>
+                <dt>Invoice date</dt>
+                <dd x-text="detailWhen"></dd>
+              </div>
+              <div>
+                <dt>Due</dt>
+                <dd x-text="detailDue"></dd>
+              </div>
+              <div>
+                <dt>Hours</dt>
+                <dd x-text="detailHours"></dd>
+              </div>
+              <div>
+                <dt>Period</dt>
+                <dd x-text="detailPeriod"></dd>
+              </div>
+            </dl>
+            <div class="invoice-lines">
+              <template x-for="line in detailLines">
+                <div class="invoice-line">
+                  <div class="invoice-line-main">
+                    <span class="invoice-line-title" x-text="line.details"></span>
+                    <span class="invoice-line-meta" x-text="line.meta"></span>
+                  </div>
+                  <span class="invoice-line-amt" x-text="line.amount"></span>
+                </div>
+              </template>
+              <p class="page-lead" x-show="detailLinesEmpty">No lines on this invoice yet.</p>
             </div>
-            <div class="metric-box">
-              <span class="metric-title">Invoice date</span>
-              <span class="metric-value metric-value-sm" x-text="detailWhen"></span>
+            <div class="invoice-totals">
+              <div class="invoice-total-row">
+                <span>Net</span>
+                <span x-text="detailNet"></span>
+              </div>
+              <div class="invoice-total-row">
+                <span>VAT</span>
+                <span x-text="detailVat"></span>
+              </div>
+              <div class="invoice-total-row invoice-grand">
+                <span>Total</span>
+                <span x-text="detailTotal"></span>
+              </div>
             </div>
-            <div class="metric-box">
-              <span class="metric-title">Due</span>
-              <span class="metric-value metric-value-sm" x-text="detailDueDate"></span>
+          </article>
+          <p class="page-lead" x-show="detailIsDraft">Check this invoice, then mark it invoiced.</p>
+          <div id="email-sheet" class="email-sheet" x-show="emailOpen">
+            <div class="form-group">
+              <label class="to-label">To</label>
+              <input type="email" x-model="detailEmail" placeholder="client@company.com" data-disable-when="saving">
+            </div>
+            <div class="form-group">
+              <label class="to-label">Cc</label>
+              <input type="text" inputmode="email" x-model="detailCc" placeholder="Optional" autocomplete="off" data-disable-when="saving">
+            </div>
+            <p class="page-lead" x-show="ccNeedsDeploy">Cc is included after you paste Code.gs and deploy a new version.</p>
+            <div class="form-group">
+              <label class="to-label">Note</label>
+              <textarea class="email-preview" x-model="detailMessage" rows="3" data-disable-when="saving"></textarea>
+            </div>
+            <button type="button" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
+          </div>
+          <div class="send-dock">
+            <div class="send-dock-inner">
+              <div x-show="detailPayUrl">
+                <div class="pay-row">
+                  <a class="pay-open" data-pay-link target="_blank" rel="noopener noreferrer" x-text="detailPayUrl"></a>
+                  <button type="button" class="pay-copy" data-action="copyPayLink" aria-label="Copy pay link">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H10V7h9v14z"/></svg>
+                  </button>
+                </div>
+                <p class="pay-copied" x-show="payCopied">Copied</p>
+              </div>
+              <button type="button" id="mark-invoiced" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
+              <div class="inv-actions">
+                <button type="button" class="btn-line" data-action="toggleEmail" data-disable-when="saving" x-text="emailToggleLabel"></button>
+                <button type="button" class="btn-line" x-show="detailShowPay" data-action="copyPayLink" data-disable-when="saving">Copy pay link</button>
+              </div>
+              <div x-show="detailCanSavePdf">
+                <div class="inv-actions">
+                  <button type="button" class="btn-line" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
+                  <button type="button" class="btn-line" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
+                </div>
+              </div>
+              <div x-show="detailCanFinish">
+                <div class="inv-actions">
+                  <button type="button" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
+                  <button type="button" class="btn-line" data-action="markDetailWrittenOff" data-disable-when="saving">Write off</button>
+                </div>
+              </div>
+              <button type="button" class="btn-line" x-show="detailCanUndo" data-action="undoDetailStatus" data-disable-when="saving">Undo</button>
+              <button type="button" class="btn-line btn-auto" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
             </div>
           </div>
-          <div class="send-bar" x-text="detailWork"></div>
-          <h3 class="send-heading">Send this invoice</h3>
-          <div x-show="detailPayUrl">
-            <div class="pay-row">
-              <a class="pay-open" data-pay-link target="_blank" rel="noopener noreferrer" x-text="detailPayUrl"></a>
-              <button type="button" class="pay-copy" data-action="copyPayLink" aria-label="Copy pay link">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H10V7h9v14z"/></svg>
-              </button>
-            </div>
-            <p class="pay-copied" x-show="payCopied">Copied</p>
-          </div>
-          <div class="form-group">
-            <label class="to-label">To</label>
-            <input type="email" x-model="detailEmail" placeholder="client@company.com" data-disable-when="saving">
-          </div>
-          <div class="form-group">
-            <label class="to-label">Cc</label>
-            <input type="text" inputmode="email" x-model="detailCc" placeholder="Optional" autocomplete="off" data-disable-when="saving">
-          </div>
-          <p class="page-lead" x-show="ccNeedsDeploy">Cc is included after you paste Code.gs and deploy a new version.</p>
-          <div class="form-group">
-            <label class="to-label">Preview</label>
-            <textarea class="email-preview" x-model="detailMessage" rows="8" data-disable-when="saving"></textarea>
-          </div>
-          <button type="button" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
-          <div class="inv-actions">
-            <button type="button" class="btn-line" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
-            <button type="button" class="btn-line" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
-          </div>
-          <h3 class="send-heading">When it has gone out</h3>
-          <button type="button" id="mark-invoiced" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
-          <p class="page-lead">That moves it to invoices to collect.</p>
-          <button type="button" class="btn-line btn-auto" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
         </div>
       </div>
 
