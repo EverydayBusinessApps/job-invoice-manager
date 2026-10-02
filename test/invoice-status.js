@@ -2282,6 +2282,168 @@ test("ensurePaymentLink reuses the stored pay link until the total changes", fun
   assert(appSource.indexOf('+ " paid"') !== -1, "a paid invoice has no banner");
 });
 
+function seedVat(workbook, applied, rate) {
+  let config = workbook.sheets.Config;
+  if (!config) {
+    config = createSheet("Config");
+    workbook.sheets.Config = config;
+  }
+  config.getRange(22, 1).setValue("vatApplied");
+  config.getRange(22, 2).setValue(applied);
+  config.getRange(23, 1).setValue("vatRate");
+  config.getRange(23, 2).setValue(rate);
+  return config;
+}
+
+test("VAT settings after the breaks block stay a percent, not a clock time", function (api, workbook) {
+  const config = seedConfig(workbook);
+  config.getRange(22, 1).setValue("vatApplied");
+  config.getRange(22, 2).setValue("N");
+  config.getRange(23, 1).setValue("vatRate");
+  config.getRange(23, 2).setValue(0.23);
+  const read = api.fetchSettings();
+  assert(read.success, read.error);
+  const labels = read.settings.map(function (item) { return item.label; });
+  assert(labels.indexOf("vatApplied") !== -1 && labels.indexOf("vatRate") !== -1, labels.join(","));
+  assert(read.breaks.map(function (item) { return item.label; }).indexOf("vatApplied") === -1, "VAT was read as a break");
+  const rate = read.settings.filter(function (item) { return item.label === "vatRate"; })[0];
+  assert(rate.value === "0.23", rate.value);
+  assert(read.breaks[1].value === "00:30", "break times stopped reading as hours and minutes");
+});
+
+test("new invoices stamp VAT from B22 and B23, and a later change leaves older rows alone", function (api, workbook) {
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-EB-001");
+  invoices.getRange(2, 2).setValue("Harbour Co.");
+  invoices.getRange(2, 7).setValue(100);
+  invoices.getRange(2, 8).setValue(new Date(2026, 7, 1));
+  invoices.getRange(2, 9).setValue("Draft");
+  const config = seedVat(workbook, "N", 23);
+  const saved = api.saveSettings_({
+    settings: [
+      { row: 22, label: "vatApplied", value: "Y" },
+      { row: 23, label: "vatRate", value: "23" }
+    ]
+  });
+  assert(saved.success, saved.error);
+  assert(config.getRange(22, 2).getValue() === "Y", "B22 was not saved");
+  assert(config.getRange(23, 2).getValue() === 23, "B23 was not saved as a percent");
+  assert(invoices.getRange(2, 10).getValue() === "", "saving settings stamped an older invoice");
+  assert(invoices.getRange(2, 12).getValue() === "" && invoices.getRange(2, 13).getValue() === "", "saving settings wrote VAT on an older invoice");
+  assert(api.invoicePayAmount_(workbook, "INV-EB-001").cents === 10000, "an unstamped invoice did not charge Total Due");
+
+  const badRate = api.saveSettings_({
+    settings: [
+      { row: 22, label: "vatApplied", value: "N" },
+      { row: 23, label: "vatRate", value: "-1" }
+    ]
+  });
+  assert(!badRate.success && /number/.test(badRate.error), badRate.error);
+  assert(config.getRange(22, 2).getValue() === "Y", "a bad rate still changed VAT applied");
+
+  const logged = api.executeTimeLog(shift());
+  assert(logged.success, logged.error);
+  const row = invoices.getLastRow();
+  assert(invoices.getRange(row, 10).getValue() === "Y", "VAT Applied " + invoices.getRange(row, 10).getValue());
+  assert(invoices.getRange(row, 11).getValue() === 23, "VAT Rate " + invoices.getRange(row, 11).getValue());
+  invoices.getRange(row, 7).setValue(200);
+  api.refreshStampedInvoiceVat_(workbook, logged.invoiceId);
+  assert(invoices.getRange(row, 12).getValue() === 46, "VAT Amount " + invoices.getRange(row, 12).getValue());
+  assert(invoices.getRange(row, 13).getValue() === 246, "Gross Total " + invoices.getRange(row, 13).getValue());
+  assert(invoices.getRange(row, 7).getValue() === 200, "Total Due changed");
+  assert(api.invoicePayAmount_(workbook, logged.invoiceId).cents === 24600, "the pay link did not use Gross Total");
+
+  config.getRange(22, 2).setValue("N");
+  config.getRange(23, 2).setValue(9);
+  api.refreshStampedInvoiceVat_(workbook, logged.invoiceId);
+  assert(invoices.getRange(row, 10).getValue() === "Y" && invoices.getRange(row, 11).getValue() === 23, "a later config change rewrote the stamp");
+  assert(invoices.getRange(row, 13).getValue() === 246, "gross followed the new rate");
+  assert(invoices.getRange(2, 10).getValue() === "", "a new invoice stamped the older row");
+
+  const added = api.executeTimeLog(shift({ invoiceMode: "existing", invoiceId: "INV-EB-001", jobDetails: "Follow-up" }));
+  assert(added.success, added.error);
+  assert(invoices.getRange(2, 10).getValue() === "", "adding time stamped an older invoice");
+
+  const report = api.fetchDashboard();
+  assert(report.success, report.error);
+  const fresh = (report.invoices || []).filter(function (item) { return item.vatApplied === "Y"; })[0];
+  assert(fresh && fresh.total === 200 && fresh.vat === 46 && fresh.gross === 246 && fresh.payable === 246, JSON.stringify(fresh));
+  const older = (report.invoices || []).filter(function (item) { return item.id === "INV-EB-001" || item.code === "INV-EB-001"; })[0];
+  assert(older && !older.vatApplied && older.payable === 100, JSON.stringify(older));
+});
+
+test("VAT on writes rows 33 to 35 for the print and the pay link uses Gross Total", function (api, workbook) {
+  seedVat(workbook, "Y", 0.23);
+  const invoices = workbook.sheets.InvoiceList;
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  template.getRange(33, 5).setFormula('=XLOOKUP(G6,InvoiceList!A:A,InvoiceList!K:K,"Not Found")');
+  template.getRange(33, 7).setFormula('=XLOOKUP(G6,InvoiceList!A:A,InvoiceList!L:L,"Not Found")');
+  template.getRange(34, 7).setFormula('=XLOOKUP(G6,InvoiceList!A:A,InvoiceList!M:M,"Not Found")');
+  const logged = api.executeTimeLog(shift());
+  assert(logged.success, logged.error);
+  const row = invoices.getLastRow();
+  invoices.getRange(row, 7).setValue(100);
+  assert(invoices.getRange(row, 11).getValue() === 23, "0.23 was not stored as 23 percent");
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const original = api.UrlFetchApp.fetch;
+  api.UrlFetchApp.fetch = function (url, options) {
+    if (String(url).indexOf("/export?") !== -1) {
+      api.vatDuringPrint = {
+        hidden: template.isRowHiddenByUser(33) || template.isRowHiddenByUser(34) || template.isRowHiddenByUser(35),
+        rate: template.getRange(33, 5).getValue(),
+        amount: template.getRange(33, 7).getValue(),
+        gross: template.getRange(34, 7).getValue()
+      };
+    }
+    return original.apply(this, arguments);
+  };
+  const sent = api.exportInvoicePdf({ invoiceId: logged.invoiceId, mode: "email", email: "client@example.com" });
+  assert(sent.success, sent.error);
+  assert(api.vatDuringPrint && api.vatDuringPrint.hidden === false, JSON.stringify(api.vatDuringPrint));
+  assert(api.vatDuringPrint.rate === 23 && api.vatDuringPrint.amount === 23 && api.vatDuringPrint.gross === 123, JSON.stringify(api.vatDuringPrint));
+  assert(template.getRange(33, 5).getFormula().indexOf("XLOOKUP") !== -1, "the VAT lookup was not restored");
+  assert(template.getRange(34, 7).getFormula().indexOf("XLOOKUP") !== -1, "the gross lookup was not restored");
+  assert(template.isRowHiddenByUser(33) === false, "VAT rows stayed hidden");
+  const payload = String(stripeFetches(api)[0].options.payload);
+  assert(payload.indexOf("unit_amount%5D=12300") !== -1, payload);
+  assert(api.lastEmail.body.indexOf("€123.00") !== -1, api.lastEmail.body);
+});
+
+test("VAT off hides invoice rows 33 to 35 and the pay link stays on Total Due", function (api, workbook) {
+  seedVat(workbook, "N", 23);
+  const invoices = workbook.sheets.InvoiceList;
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  template.getRange(33, 4).setValue("VAT Rate");
+  template.getRange(33, 5).setFormula('=XLOOKUP(G6,InvoiceList!A:A,InvoiceList!K:K,"Not Found")');
+  const logged = api.executeTimeLog(shift());
+  assert(logged.success, logged.error);
+  const row = invoices.getLastRow();
+  invoices.getRange(row, 7).setValue(80);
+  assert(invoices.getRange(row, 10).getValue() === "N", "VAT Applied " + invoices.getRange(row, 10).getValue());
+  assert(invoices.getRange(row, 12).getValue() === "" && invoices.getRange(row, 13).getValue() === "", "VAT off wrote a gross total");
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const original = api.UrlFetchApp.fetch;
+  api.UrlFetchApp.fetch = function (url, options) {
+    if (String(url).indexOf("/export?") !== -1) {
+      api.vatHidden = template.isRowHiddenByUser(33) && template.isRowHiddenByUser(34) && template.isRowHiddenByUser(35);
+      api.vatRateCell = template.getRange(33, 5).getValue();
+    }
+    return original.apply(this, arguments);
+  };
+  const sent = api.exportInvoicePdf({ invoiceId: logged.invoiceId, mode: "email", email: "client@example.com" });
+  assert(sent.success, sent.error);
+  assert(api.vatHidden === true, "VAT rows were visible on the print");
+  assert(api.vatRateCell === "", "VAT off wrote a rate onto the invoice");
+  assert(template.isRowHiddenByUser(33) === false && template.isRowHiddenByUser(35) === false, "VAT rows stayed hidden after the PDF");
+  assert(template.getRange(33, 4).getValue() === "VAT Rate", "the VAT label was cleared");
+  assert(template.getRange(33, 5).getFormula().indexOf("XLOOKUP") !== -1, "the VAT lookup was cleared");
+  const payload = String(stripeFetches(api)[0].options.payload);
+  assert(payload.indexOf("unit_amount%5D=8000") !== -1, payload);
+  assert(api.lastEmail.body.indexOf("€80.00") !== -1, api.lastEmail.body);
+});
+
 if (failures.length) {
   console.error("\n" + failures.length + " failed");
   process.exit(1);

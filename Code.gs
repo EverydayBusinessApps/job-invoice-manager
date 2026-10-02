@@ -398,7 +398,7 @@ function nextInvoiceInt_(invoiceSheet) {
   return nextInvoiceInt;
 }
 
-function appendInvoiceListRow_(invoiceSheet, status) {
+function appendInvoiceListRow_(invoiceSheet, status, ss) {
   const invLastValues = invoiceSheet.getRange("H1:H").getValues();
   let nextInvListRow = 1;
   while (invLastValues[nextInvListRow - 1] && invLastValues[nextInvListRow - 1][0] !== "") {
@@ -406,13 +406,96 @@ function appendInvoiceListRow_(invoiceSheet, status) {
   }
   invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
   invoiceSheet.getRange(nextInvListRow, 9).setValue(status || "Draft"); // Column I: Invoice Status
+  if (ss) stampNewInvoiceVat_(ss, invoiceSheet, nextInvListRow);
   return nextInvListRow;
 }
 
-function createDraftInvoice_(invoiceSheet) {
+function createDraftInvoice_(invoiceSheet, ss) {
   const invoiceId = nextInvoiceInt_(invoiceSheet);
-  appendInvoiceListRow_(invoiceSheet, "Draft");
+  appendInvoiceListRow_(invoiceSheet, "Draft", ss);
   return invoiceId;
+}
+
+/**
+ * Config B22 is Y or N. B23 is the rate, either 23 or 0.23.
+ * A rate above 1 is a percent. A rate of 1 or less is a fraction.
+ */
+function vatNumber_(raw) {
+  if (typeof raw === "number" && isFinite(raw)) return raw;
+  const n = Number(String(raw == null ? "" : raw).replace(/[^0-9.-]/g, ""));
+  return isFinite(n) ? n : NaN;
+}
+
+function vatAppliedYes_(raw) {
+  return /^y(es)?$/i.test(String(raw == null ? "" : raw).trim());
+}
+
+function vatFraction_(raw) {
+  const n = vatNumber_(raw);
+  if (!isFinite(n) || n < 0) return 0;
+  if (n > 1) return n / 100;
+  return n;
+}
+
+function vatPercent_(raw) {
+  const n = vatNumber_(raw);
+  if (!isFinite(n) || n < 0) return 0;
+  if (n > 1) return Math.round(n * 100) / 100;
+  return Math.round(n * 10000) / 100;
+}
+
+function vatConfig_(ss) {
+  const config = ss && ss.getSheetByName ? ss.getSheetByName("Config") : null;
+  const appliedRaw = config ? config.getRange(22, 2).getValue() : "";
+  const rateRaw = config ? config.getRange(23, 2).getValue() : "";
+  return {
+    applied: vatAppliedYes_(appliedRaw),
+    percent: vatPercent_(rateRaw)
+  };
+}
+
+function stampNewInvoiceVat_(ss, invoiceSheet, row) {
+  if (!invoiceSheet || !row) return;
+  if (clientText_(invoiceSheet.getRange(row, 10).getValue())) return;
+  const cfg = vatConfig_(ss);
+  invoiceSheet.getRange(row, 10).setValue(cfg.applied ? "Y" : "N");
+  invoiceSheet.getRange(row, 11).setValue(cfg.percent);
+  writeInvoiceVatAmounts_(invoiceSheet, row);
+}
+
+function refreshStampedInvoiceVat_(ss, invoiceId) {
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return;
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  if (!located.row) return;
+  writeInvoiceVatAmounts_(invoiceSheet, located.row);
+}
+
+function writeInvoiceVatAmounts_(invoiceSheet, row) {
+  if (!invoiceSheet || !row) return;
+  const mark = clientText_(invoiceSheet.getRange(row, 10).getValue());
+  if (!mark) return;
+  if (!vatAppliedYes_(mark)) {
+    invoiceSheet.getRange(row, 12).setValue("");
+    invoiceSheet.getRange(row, 13).setValue("");
+    return;
+  }
+  if (typeof SpreadsheetApp !== "undefined" && SpreadsheetApp.flush) SpreadsheetApp.flush();
+  const fraction = vatFraction_(invoiceSheet.getRange(row, 11).getValue());
+  const net = numberOrNull_(invoiceSheet.getRange(row, 7).getValue());
+  const netMoney = roundMoney_(net == null ? 0 : net);
+  const vat = roundMoney_(netMoney * fraction);
+  invoiceSheet.getRange(row, 12).setValue(vat);
+  invoiceSheet.getRange(row, 13).setValue(roundMoney_(netMoney + vat));
+}
+
+function invoiceVatPayable_(values) {
+  const net = numberOrNull_(values[6]);
+  const netMoney = roundMoney_(net == null ? 0 : net);
+  if (!vatAppliedYes_(values[9])) return netMoney;
+  const gross = numberOrNull_(values[12]);
+  if (gross == null) return netMoney;
+  return roundMoney_(gross);
 }
 
 /**
@@ -497,7 +580,7 @@ function executeTimeLog(payload) {
   }
 
   if (mode !== "existing") {
-    invoiceId = createDraftInvoice_(invoiceSheet);
+    invoiceId = createDraftInvoice_(invoiceSheet, ss);
   }
 
   // Insert exactly into raw input cells matching your column layout coordinates
@@ -513,7 +596,9 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
-  return jobSavedResult_(ss, mode, invoiceId, overnight, false, loggedShiftAmount_(timeSheet, nextRow));
+  const amount = loggedShiftAmount_(timeSheet, nextRow);
+  refreshStampedInvoiceVat_(ss, invoiceId);
+  return jobSavedResult_(ss, mode, invoiceId, overnight, false, amount);
 }
 
 function loggedShiftAmount_(sheet, row) {
@@ -689,7 +774,7 @@ function processAccountInvoice(payload) {
 
     if (updatedRowsCount > 0) {
       range.setValues(data);
-      appendInvoiceListRow_(invoiceSheet, "Invoiced");
+      appendInvoiceListRow_(invoiceSheet, "Invoiced", ss);
       marked.push(String(nextInvoiceInt));
     }
   }
@@ -1519,12 +1604,13 @@ function buildDashboardReport_(ss, asOfDate) {
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   normalizeInvoiceStatuses_(invoiceSheet);
   if (invoiceSheet && invoiceSheet.getLastRow() >= 2) {
-    const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 9).getValues();
+    const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 13).getValues();
     for (let i = 0; i < data.length; i++) {
       const listId = String(data[i][0] || "").trim();
       if (!listId) continue;
       const code = canonicalInvoiceCode_(listId, timeCodeByInt);
       const group = groupFor(code || listId);
+      const appliedText = clientText_(data[i][9]);
       const nextList = {
         id: listId,
         client: String(data[i][1] || "").trim(),
@@ -1534,7 +1620,11 @@ function buildDashboardReport_(ss, asOfDate) {
         rate: numberOrNull_(data[i][5]),
         total: numberOrNull_(data[i][6]),
         date: isoDate_(data[i][7], timezone),
-        status: displayStatus_(data[i][8])
+        status: displayStatus_(data[i][8]),
+        vatApplied: appliedText ? (vatAppliedYes_(appliedText) ? "Y" : "N") : "",
+        vatRate: appliedText ? numberOrNull_(data[i][10]) : null,
+        vat: appliedText && vatAppliedYes_(appliedText) ? numberOrNull_(data[i][11]) : null,
+        gross: appliedText && vatAppliedYes_(appliedText) ? numberOrNull_(data[i][12]) : null
       };
       group.list = preferInvoiceList_(group.list, nextList);
     }
@@ -1616,6 +1706,9 @@ function buildDashboardReport_(ss, asOfDate) {
     const dueDate = date && profile.terms ? addDaysIso_(date, profile.terms) : "";
     const overdue = kind === "due" && !!dueDate && dueDate < today;
     const total = list && list.total != null ? roundMoney_(list.total) : roundMoney_(shiftCharge);
+    const vatApplied = list && list.vatApplied ? list.vatApplied : "";
+    const gross = list && list.gross != null ? roundMoney_(list.gross) : null;
+    const owed = vatApplied === "Y" && gross != null ? gross : total;
     const hours = list && list.hours != null ? roundMoney_(list.hours) : roundMoney_(shiftHours);
     const job = (list && list.job) || (shiftRows.filter(function (shift) { return shift.details; }).map(function (shift) { return shift.details; })[0] || "");
     const lines = linesFromGroup_(shiftRows, timezone);
@@ -1632,6 +1725,11 @@ function buildDashboardReport_(ss, asOfDate) {
       daysOverdue: overdue ? daysBetweenIso_(dueDate, today) : 0,
       hours: hours,
       total: total,
+      vatApplied: vatApplied,
+      vatRate: list && list.vatRate != null ? list.vatRate : null,
+      vat: list && list.vat != null ? list.vat : null,
+      gross: gross,
+      payable: owed,
       rate: list && list.rate != null ? roundMoney_(list.rate) : 0,
       servicePeriod: service,
       jobDetails: job,
@@ -1647,20 +1745,20 @@ function buildDashboardReport_(ss, asOfDate) {
     invoices.push(invoice);
 
     if (kind === "due") {
-      open.dueAmount = roundMoney_(open.dueAmount + total);
+      open.dueAmount = roundMoney_(open.dueAmount + owed);
       open.dueCount += 1;
       if (overdue) {
-        open.overdueAmount = roundMoney_(open.overdueAmount + total);
+        open.overdueAmount = roundMoney_(open.overdueAmount + owed);
         open.overdueCount += 1;
       }
     } else if (kind === "draft") {
-      open.draftAmount = roundMoney_(open.draftAmount + total);
+      open.draftAmount = roundMoney_(open.draftAmount + owed);
       open.draftCount += 1;
     } else if (kind === "paid") {
-      open.paidAmount = roundMoney_(open.paidAmount + total);
+      open.paidAmount = roundMoney_(open.paidAmount + owed);
       open.paidCount += 1;
     } else if (kind === "writtenoff") {
-      open.writtenOffAmount = roundMoney_(open.writtenOffAmount + total);
+      open.writtenOffAmount = roundMoney_(open.writtenOffAmount + owed);
       open.writtenOffCount += 1;
     }
 
@@ -1669,24 +1767,24 @@ function buildDashboardReport_(ss, asOfDate) {
       if (!flag) return;
       const bucket = periods[key];
       if (kind !== "draft") {
-        bucket.sent = roundMoney_(bucket.sent + total);
+        bucket.sent = roundMoney_(bucket.sent + owed);
         bucket.sentCount += 1;
       }
       if (kind === "paid") {
-        bucket.paid = roundMoney_(bucket.paid + total);
+        bucket.paid = roundMoney_(bucket.paid + owed);
         bucket.paidCount += 1;
       } else if (kind === "due") {
-        bucket.due = roundMoney_(bucket.due + total);
+        bucket.due = roundMoney_(bucket.due + owed);
         bucket.dueCount += 1;
         if (overdue) {
-          bucket.overdue = roundMoney_(bucket.overdue + total);
+          bucket.overdue = roundMoney_(bucket.overdue + owed);
           bucket.overdueCount += 1;
         }
       } else if (kind === "draft") {
-        bucket.draft = roundMoney_(bucket.draft + total);
+        bucket.draft = roundMoney_(bucket.draft + owed);
         bucket.draftCount += 1;
       } else if (kind === "writtenoff") {
-        bucket.writtenOff = roundMoney_(bucket.writtenOff + total);
+        bucket.writtenOff = roundMoney_(bucket.writtenOff + owed);
         bucket.writtenOffCount += 1;
       }
     });
@@ -1836,9 +1934,12 @@ function exportInvoicePdf(payload) {
 
   const previous = sheet.getRange("B1").getValue();
   let payStamp = null;
+  let vatBlock = null;
   try {
     widenInvoiceTotals_(sheet);
     sheet.getRange("B1").setValue(code);
+    refreshStampedInvoiceVat_(ss, invoiceId);
+    vatBlock = applyInvoiceVatBlock_(sheet, invoiceVatStamp_(ss, invoiceId));
 
     let payUrl = acceptedPayUrl_(payload && payload.payUrl);
     if (mode === "email" && !payUrl && !(payload && payload.skipPayLink)) {
@@ -1928,6 +2029,7 @@ function exportInvoicePdf(payload) {
   } catch (err) {
     return { success: false, error: invoicePdfError_(err, mode) };
   } finally {
+    restoreInvoiceVatBlock_(sheet, vatBlock);
     sheet.getRange("B1").setValue(previous);
     restoreInvoicePayFooter_(sheet, payStamp);
     SpreadsheetApp.flush();
@@ -1967,7 +2069,7 @@ function readConfigSheet_(ss) {
   for (let i = 0; i < rows.length; i++) {
     const label = clientText_(rows[i][0]);
     if (!label) {
-      if (mode === "breaks" && breaks.length) break;
+      if (mode === "breaks" && breaks.length) mode = "settings";
       continue;
     }
     if (/^settings$/i.test(label)) continue;
@@ -1994,7 +2096,7 @@ function configText_(value, asTime) {
     return Utilities.formatDate(value, (Session.getScriptTimeZone && Session.getScriptTimeZone()) || "UTC", "HH:mm");
   }
   if (typeof value === "number" && isFinite(value)) {
-    if (asTime || (value > 0 && value < 1)) {
+    if (asTime) {
       const total = Math.round(value * 1440);
       const hours = Math.floor(total / 60);
       const minutes = total % 60;
@@ -2031,6 +2133,17 @@ function checkedConfigValue_(label, raw, isBreak) {
   if (isBreak) {
     if (!clockParts_(text)) return { ok: false, error: "Enter " + label + " as hours and minutes, for example 00:30." };
     return { ok: true, write: function (cell) { writeClockTime_(cell, text); } };
+  }
+  if (/^vatapplied$/i.test(label)) {
+    const mark = /^(y|yes)$/i.test(text) ? "Y" : (/^(n|no)$/i.test(text) ? "N" : "");
+    if (!mark) return { ok: false, error: "VAT applied needs to be Y or N." };
+    return { ok: true, write: function (cell) { cell.setValue(mark); } };
+  }
+  if (/^vatrate$/i.test(label)) {
+    if (!text) return { ok: true, write: function (cell) { cell.setValue(""); } };
+    const n = vatNumber_(text);
+    if (!isFinite(n) || n < 0) return { ok: false, error: "VAT rate must be a number, for example 23." };
+    return { ok: true, write: function (cell) { cell.setValue(n); } };
   }
   if (/phone|iban/i.test(label)) {
     return { ok: true, write: function (cell) { cell.setNumberFormat("@"); cell.setValue(text); } };
@@ -2327,9 +2440,10 @@ function invoicePayAmount_(ss, invoiceId) {
   var code = located.code || invoicePrintCode_(ss, invoiceId);
   var row = located.row;
   if (!row) return { cents: 0, code: code, clientName: "" };
-  var values = invoiceSheet.getRange(row, 1, 1, 9).getValues()[0];
+  refreshStampedInvoiceVat_(ss, invoiceId);
+  var values = invoiceSheet.getRange(row, 1, 1, 13).getValues()[0];
   return {
-    cents: euroCents_(values[6]),
+    cents: euroCents_(invoiceVatPayable_(values)),
     code: code,
     clientName: clientText_(values[1])
   };
@@ -2345,14 +2459,70 @@ function payFooterRow_(sheet) {
   var values = sheet.getRange(2, 1, 35, 7).getValues();
   var last = 1;
   for (var i = 0; i < values.length; i++) {
+    var rowNumber = i + 2;
+    if (rowNumber >= 33 && rowNumber <= 35) continue;
     for (var c = 0; c < values[i].length; c++) {
       if (String(values[i][c] == null ? "" : values[i][c]).trim()) {
-        last = i + 2;
+        last = rowNumber;
         break;
       }
     }
   }
-  return last < 36 ? last + 1 : 37;
+  var footer = last < 36 ? last + 1 : 37;
+  if (footer >= 33 && footer <= 35) footer = 36;
+  return footer;
+}
+
+function invoiceVatStamp_(ss, invoiceId) {
+  var invoiceSheet = ss.getSheetByName("InvoiceList");
+  var located = resolveInvoiceListRow_(ss, invoiceId);
+  if (!invoiceSheet || !located.row) return { applied: false };
+  var values = invoiceSheet.getRange(located.row, 1, 1, 13).getValues()[0];
+  if (!clientText_(values[9])) return { applied: false };
+  return {
+    applied: vatAppliedYes_(values[9]),
+    percent: vatPercent_(values[10]),
+    amount: numberOrNull_(values[11]),
+    gross: numberOrNull_(values[12])
+  };
+}
+
+function applyInvoiceVatBlock_(sheet, stamp) {
+  if (!sheet) return null;
+  var saved = { hidden: [], cells: [] };
+  var row;
+  for (row = 33; row <= 35; row++) {
+    if (sheet.isRowHiddenByUser && sheet.isRowHiddenByUser(row)) saved.hidden.push(row);
+  }
+  if (stamp && stamp.applied) {
+    if (sheet.showRows) sheet.showRows(33, 3);
+    [[33, 5, stamp.percent], [33, 7, stamp.amount == null ? "" : stamp.amount], [34, 7, stamp.gross == null ? "" : stamp.gross]].forEach(function (item) {
+      var cell = sheet.getRange(item[0], item[1]);
+      saved.cells.push({
+        row: item[0],
+        col: item[1],
+        value: cell.getValue(),
+        formula: cell.getFormula ? String(cell.getFormula() || "") : ""
+      });
+      cell.setValue(item[2]);
+    });
+  } else if (sheet.hideRows) {
+    sheet.hideRows(33, 3);
+  }
+  return saved;
+}
+
+function restoreInvoiceVatBlock_(sheet, saved) {
+  if (!sheet || !saved) return;
+  (saved.cells || []).forEach(function (cell) {
+    var range = sheet.getRange(cell.row, cell.col);
+    if (cell.formula) range.setFormula(cell.formula);
+    else range.setValue(cell.value);
+  });
+  if (sheet.showRows) sheet.showRows(33, 3);
+  (saved.hidden || []).forEach(function (row) {
+    if (sheet.hideRows) sheet.hideRows(row, 1);
+  });
 }
 
 function stampInvoicePayFooter_(sheet, url) {
@@ -2691,11 +2861,12 @@ function invoiceLetterParts_(ss, invoiceId) {
   let row = invoiceSheet ? findInvoiceListRow_(invoiceSheet, invoiceId) : 0;
   if (!row && invoiceSheet && code && code !== String(invoiceId)) row = findInvoiceListRow_(invoiceSheet, code);
   if (row) {
-    const values = invoiceSheet.getRange(row, 1, 1, 9).getValues()[0];
+    const values = invoiceSheet.getRange(row, 1, 1, 13).getValues()[0];
     parts.clientName = clientText_(values[1]);
     parts.works = clientText_(values[2]);
     parts.period = clientText_(values[3]) || isoDate_(values[7]);
-    if (values[6] !== "" && values[6] != null) parts.amount = euroText_(values[6]);
+    const owed = invoiceVatPayable_(values);
+    if (values[6] !== "" && values[6] != null || vatAppliedYes_(values[9])) parts.amount = euroText_(owed);
   }
   if (!parts.works) {
     const timeSheet = ss.getSheetByName("Time&Attendance");

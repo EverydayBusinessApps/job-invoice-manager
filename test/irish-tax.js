@@ -49,6 +49,14 @@ assert(context.expenseAmount("1,500.50") === 1500.5, "expenses");
 assert(context.expenseAmount("") === 0, "blank expenses");
 assert(context.expenseAmount("abc") === null, "bad expenses");
 
+const plain = context.invoicePayable({ total: 80, vatApplied: "N", vat: 18.4, gross: 98.4 });
+assert(plain.showsVat === false && plain.payable === 80, JSON.stringify(plain));
+const added = context.invoicePayable({ total: 200, vatApplied: "Y", vatRate: 23, vat: 46, gross: 246 });
+assert(added.showsVat === true && added.payable === 246 && added.net === 200 && added.vat === 46, JSON.stringify(added));
+assert(context.vatRateLabel(23) === "VAT 23%", context.vatRateLabel(23));
+assert(context.vatPercentText(0.23) === "23", context.vatPercentText(0.23));
+assert(context.vatPercentText("13.5") === "13.5", context.vatPercentText("13.5"));
+
 const sample = context.sampleDashboard();
 const draft = sample.invoices.filter((row) => row.id === "INV-EB-003")[0];
 const draftFacts = context.invoiceCardFacts(draft);

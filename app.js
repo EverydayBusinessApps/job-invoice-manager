@@ -258,8 +258,8 @@ function sampleDashboard() {
     success: true,
     asOf: "2026-09-22",
     open: {
-      dueAmount: 240, dueCount: 2,
-      overdueAmount: 200, overdueCount: 1,
+      dueAmount: 286, dueCount: 2,
+      overdueAmount: 246, overdueCount: 1,
       draftAmount: 50, draftCount: 1,
       paidAmount: 100, paidCount: 1,
       writtenOffAmount: 80, writtenOffCount: 1
@@ -271,7 +271,7 @@ function sampleDashboard() {
       year: { label: "1 Nov 2025 – 31 Oct 2026", hours: 12, shifts: 5, clients: 2, billable: 470, avgRate: 39.17, topClient: "Acme", topClientHours: 9, paid: 100, paidCount: 1, sent: 420, sentCount: 4, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 80, badDebtCount: 1 }
     },
     invoices: [
-      row({ id: "INV-EB-002", code: "INV-EB-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
+      row({ id: "INV-EB-002", code: "INV-EB-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, vatApplied: "Y", vatRate: 23, vat: 46, gross: 246, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
       row({ id: "INV-EB-005", code: "INV-EB-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inWeek: true, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
       row({ id: "INV-EB-003", code: "INV-EB-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-EB-001", code: "INV-EB-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
@@ -354,6 +354,39 @@ function kindForStatus(status) {
   if (rank === 2) return "writtenoff";
   if (rank === 1) return "due";
   return "draft";
+}
+
+function invoicePayable(row) {
+  const net = Number(row && row.total);
+  const netMoney = isFinite(net) ? net : 0;
+  const applied = String(row && row.vatApplied || "").trim().toUpperCase() === "Y";
+  if (!applied) return { showsVat: false, net: netMoney, payable: netMoney, vat: null, rate: null };
+  const vat = Number(row && row.vat);
+  const gross = Number(row && row.gross);
+  return {
+    showsVat: true,
+    net: netMoney,
+    vat: isFinite(vat) ? vat : null,
+    rate: row.vatRate,
+    payable: isFinite(gross) ? gross : netMoney
+  };
+}
+
+function vatRateLabel(rate) {
+  if (rate == null || rate === "") return "VAT";
+  const n = Number(rate);
+  if (!isFinite(n)) return "VAT";
+  const shown = Math.abs(n - Math.round(n)) < 0.001 ? String(Math.round(n)) : String(Math.round(n * 100) / 100);
+  return "VAT " + shown + "%";
+}
+
+function vatPercentText(value) {
+  const text = String(value == null ? "" : value).trim();
+  if (!text) return "";
+  const n = Number(text.replace(/[^0-9.-]/g, ""));
+  if (!isFinite(n) || n < 0) return text;
+  if (n > 0 && n <= 1) return String(Math.round(n * 10000) / 100);
+  return String(n);
 }
 
 function collapseInvoiceRows(rows) {
@@ -612,13 +645,15 @@ window.Alpine.data('appState', () => ({
   logoEmpty: false,
   extraSettings: [],
   settingsMeta: {},
+  vatOn: false,
+  vatSwitchLabel: "Off",
   settingsShow: {
     rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
-    website: false, phone: false, bank: false, iban: false
+    website: false, phone: false, bank: false, iban: false, vat: false, vatApplied: false, vatRate: false
   },
   settingsForm: {
     rate: "", yearEnd: "", currency: "", name: "", address: "", email: "",
-    website: "", phone: "", bank: "", iban: ""
+    website: "", phone: "", bank: "", iban: "", vatApplied: "N", vatRate: ""
   },
   asOf: "",
   openSendAmount: "€0.00",
@@ -672,7 +707,9 @@ window.Alpine.data('appState', () => ({
   detailMessage: "",
   detailMessageAuto: "",
   detailNet: "",
-  detailVat: "Not included",
+  detailVat: "",
+  detailVatLabel: "VAT",
+  detailShowsVat: false,
   detailPeriod: "—",
   detailJobShow: false,
   emailOpen: false,
@@ -1578,7 +1615,7 @@ window.Alpine.data('appState', () => ({
         when: facts.when,
         hours: facts.hours,
         work: facts.work,
-        amount: this.money(row.total)
+        amount: this.money(invoicePayable(row).payable)
       };
     });
     this.listEmpty = this.visibleInvoices.length === 0;
@@ -1851,7 +1888,7 @@ window.Alpine.data('appState', () => ({
     return [
       "To" + (contact ? " " + contact : ""),
       "Please find attached invoice for " + (period || "this period"),
-      "Total owed " + this.money(row.total),
+      "Total owed " + this.money(invoicePayable(row).payable),
       "For works " + (works || "the works listed"),
       "",
       "Kind Regards",
@@ -1923,7 +1960,7 @@ window.Alpine.data('appState', () => ({
   recomputeOpenPiles() {
     const rows = this.invoiceRows || [];
     const ofKind = (kind) => rows.filter((row) => row.kind === kind);
-    const sum = (kind) => ofKind(kind).reduce((total, row) => total + (Number(row.total) || 0), 0);
+    const sum = (kind) => ofKind(kind).reduce((total, row) => total + invoicePayable(row).payable, 0);
     this.openSendAmount = this.money(sum("draft"));
     this.openSendCount = this.countLabel(ofKind("draft").length, "invoice", "invoices");
     const due = ofKind("due");
@@ -1969,9 +2006,11 @@ window.Alpine.data('appState', () => ({
     this.detailDue = row.dueDate ? this.dueNote(row) : "No due date yet";
     this.detailDueDate = row.dueDate ? this.prettyDate(row.dueDate) : "—";
     this.detailHours = this.hoursText(row.hours) + " h";
-    const moneyBits = this.invoiceMoneyFields(row);
-    this.detailNet = moneyBits.net;
-    this.detailVat = moneyBits.vat;
+    const pay = invoicePayable(row);
+    this.detailShowsVat = pay.showsVat;
+    this.detailNet = this.money(pay.net);
+    this.detailVat = pay.showsVat && pay.vat != null ? this.money(pay.vat) : "";
+    this.detailVatLabel = vatRateLabel(pay.rate);
     const fromSheet = this.prettyPeriod(row.servicePeriod);
     const facts = invoiceCardFacts({ servicePeriod: row.servicePeriod, lines: lines, date: row.date, hours: row.hours, jobDetails: row.jobDetails });
     this.detailPeriod = fromSheet || (facts.period && facts.period !== "—" ? facts.period : "—");
@@ -1979,7 +2018,7 @@ window.Alpine.data('appState', () => ({
     const fromLine = (lines || []).map((line) => line && line.details).filter(Boolean)[0] || "";
     const job = row.jobDetails && row.jobDetails !== "—" ? row.jobDetails : fromLine;
     this.detailWork = job ? (job + " · " + this.detailHours) : this.detailHours;
-    this.detailTotal = this.money(row.total);
+    this.detailTotal = this.money(pay.payable);
     this.detailService = row.servicePeriod || "—";
     this.detailJob = row.jobDetails || "—";
     const letterRow = this.invoiceLetterRow(row);
@@ -2153,17 +2192,6 @@ window.Alpine.data('appState', () => ({
       return { payUrl: "", skip: true, failed: true };
     }
     return { payUrl: "", skip: true, failed: true };
-  },
-  invoiceMoneyFields(row) {
-    const total = Number(row && row.total) || 0;
-    const vatRaw = row && row.vat;
-    const netRaw = row && row.net;
-    const vat = vatRaw != null && vatRaw !== "" && isFinite(Number(vatRaw)) ? Number(vatRaw) : null;
-    const net = netRaw != null && netRaw !== "" && isFinite(Number(netRaw)) ? Number(netRaw) : total;
-    return {
-      net: this.money(net),
-      vat: vat == null ? "Not included" : this.money(vat)
-    };
   },
   toggleEmail() {
     this.emailOpen = !this.emailOpen;
@@ -2523,7 +2551,9 @@ window.Alpine.data('appState', () => ({
         row(8, "Website", "www.EverydayBusiness.ie"),
         row(9, "Business Phone", "00353 123 45678"),
         row(11, "Bank Account Name", "Everyday Business"),
-        row(12, "IBAN", "IEXX XXXX XXXX XXXX XXXX XX")
+        row(12, "IBAN", "IEXX XXXX XXXX XXXX XXXX XX"),
+        row(22, "vatApplied", "N"),
+        row(23, "vatRate", "23")
       ]
     };
   },
@@ -2539,7 +2569,9 @@ window.Alpine.data('appState', () => ({
       website: "website",
       "business phone": "phone",
       "bank account name": "bank",
-      iban: "iban"
+      iban: "iban",
+      vatapplied: "vatApplied",
+      vatrate: "vatRate"
     };
     if (settings[name]) return { key: settings[name], kind: "setting" };
     return null;
@@ -2547,7 +2579,7 @@ window.Alpine.data('appState', () => ({
   applySettings(res) {
     const show = {
       rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
-      website: false, phone: false, bank: false, iban: false
+      website: false, phone: false, bank: false, iban: false, vat: false, vatApplied: false, vatRate: false
     };
     const meta = {};
     const extra = [];
@@ -2558,8 +2590,18 @@ window.Alpine.data('appState', () => ({
         return;
       }
       show[mapped.key] = true;
+      if (mapped.key === "vatApplied" || mapped.key === "vatRate") show.vat = true;
       meta[mapped.key] = { row: row.row, label: row.label, kind: "setting" };
-      this.settingsForm[mapped.key] = row.value == null ? "" : String(row.value);
+      if (mapped.key === "vatApplied") {
+        const mark = /^y/i.test(String(row.value || "").trim()) ? "Y" : "N";
+        this.settingsForm.vatApplied = mark;
+        this.vatOn = mark === "Y";
+        this.vatSwitchLabel = this.vatOn ? "On" : "Off";
+      } else if (mapped.key === "vatRate") {
+        this.settingsForm.vatRate = vatPercentText(row.value);
+      } else {
+        this.settingsForm[mapped.key] = row.value == null ? "" : String(row.value);
+      }
     });
     this.settingsShow = show;
     this.settingsMeta = meta;
@@ -2660,7 +2702,15 @@ window.Alpine.data('appState', () => ({
     if (this.settingsShow.email && email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Business email needs to look like an email address.";
     const yearEnd = (this.settingsForm.yearEnd || "").trim();
     if (this.settingsShow.yearEnd && yearEnd && !yearEndParts(yearEnd)) return "Financial year end needs a day and month, for example 31 October.";
+    const vatRate = (this.settingsForm.vatRate || "").trim();
+    if (this.settingsShow.vatRate && vatRate && !/^\d+(\.\d+)?$/.test(vatRate)) return "VAT rate must be a number, for example 23.";
     return "";
+  },
+  toggleVat() {
+    const on = this.settingsForm.vatApplied !== "Y";
+    this.settingsForm.vatApplied = on ? "Y" : "N";
+    this.vatOn = on;
+    this.vatSwitchLabel = on ? "On" : "Off";
   },
   settingsSavedMessage() {
     const name = String(this.settingsForm.name || "").trim();
