@@ -49,7 +49,7 @@ button.pay-copy { width: 2.5rem; height: 2.5rem; flex: 0 0 2.5rem; padding: 0; b
 button.pay-copy:disabled { background: #ffffff; color: #94a3b8; }
 .pay-copied { margin: -0.35rem 0 0.75rem; color: #065f46; font-size: 0.8rem; font-weight: 700; }
 .inv-stack { display: flex; flex-direction: column; gap: 0.85rem; }
-.inv-card { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.95rem; padding: 1rem 1.05rem 1.05rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
+.inv-card { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.95rem; padding: 1rem 1.05rem 1.05rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); cursor: pointer; }
 .inv-client { font-size: 1.15rem; font-weight: 700; color: #00263B; }
 .inv-code { margin-top: 0.15rem; color: #64748b; font-size: 0.92rem; font-weight: 500; }
 .inv-facts { margin-top: 0.45rem; display: flex; flex-direction: column; gap: 0.16rem; }
@@ -66,7 +66,36 @@ button.btn-line.btn-auto { flex: 0 0 auto; padding-left: 1.15rem; padding-right:
 .send-heading { margin: 0; font-size: 1.2rem; font-weight: 700; color: #00263B; }
 button.back-home { width: auto; align-self: flex-start; background: transparent; color: #00263B; font-size: 0.85rem; font-weight: 700; padding: 0; text-align: left; }
 label.to-label { text-transform: none; letter-spacing: 0; font-size: 0.95rem; font-weight: 600; color: #334155; }
-textarea.email-preview { min-height: 9rem; line-height: 1.45; white-space: pre-wrap; background: #ffffff; }
+textarea.email-preview { min-height: 4.25rem; line-height: 1.4; white-space: pre-wrap; background: #ffffff; }
+.invoice-sheet { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.95rem; padding: 1rem 1rem 0.75rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); scroll-margin-top: 5.25rem; }
+.invoice-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
+.invoice-head > div:first-child { min-width: 0; }
+.invoice-sheet .page-title { overflow-wrap: anywhere; }
+.invoice-meta > div { min-width: 0; }
+.inv-actions { flex-wrap: wrap; }
+.invoice-kicker { margin: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; }
+.invoice-client { margin: 0.15rem 0 0; font-size: 1.05rem; font-weight: 700; color: #00263B; overflow-wrap: anywhere; }
+.invoice-job { margin: 0.25rem 0 0; color: #334155; font-size: 0.92rem; font-weight: 600; overflow-wrap: anywhere; }
+.invoice-total-block { flex: 0 0 auto; text-align: right; }
+.invoice-total { display: block; margin-top: 0.15rem; font-size: 1.45rem; font-weight: 700; color: #00263B; line-height: 1.1; }
+.invoice-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 0.75rem; margin: 0.9rem 0 0; }
+.invoice-meta dt { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8; }
+.invoice-meta dd { margin: 0.12rem 0 0; font-size: 0.92rem; font-weight: 600; color: #1e293b; overflow-wrap: anywhere; }
+.invoice-lines { margin-top: 0.85rem; border-top: 1px solid #e6eaee; }
+.invoice-line { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; padding: 0.7rem 0; border-bottom: 1px solid #f1f5f9; }
+.invoice-line-main { min-width: 0; }
+.invoice-line-title { display: block; font-weight: 700; color: #00263B; overflow-wrap: anywhere; }
+.invoice-line-meta { display: block; margin-top: 0.15rem; color: #64748b; font-size: 0.8rem; font-weight: 600; overflow-wrap: anywhere; }
+.invoice-line-amt { flex: 0 0 auto; font-weight: 700; color: #00263B; }
+.invoice-totals { margin-top: 0.35rem; }
+.invoice-total-row { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.22rem 0; font-size: 0.92rem; font-weight: 600; color: #334155; }
+.invoice-grand { margin-top: 0.15rem; padding-top: 0.45rem; border-top: 2px solid #AA9251; font-size: 1.05rem; font-weight: 700; color: #00263B; }
+.email-sheet { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.85rem; padding: 0.7rem; }
+.email-sheet > * + * { margin-top: 0.55rem; }
+.email-sheet button { padding: 0.7rem; }
+.send-dock { position: sticky; bottom: 4.4rem; z-index: 30; background: #f4f6f8; padding-top: 0.35rem; }
+.send-dock-inner { display: flex; flex-direction: column; gap: 0.55rem; }
+.metric-title.gold { color: #AA9251; }
 .metric-box.alt .metric-title.gold { color: #AA9251; }
 section { background: #ffffff; border: 1px solid #f1f5f9; border-radius: 1rem; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
 section + section { margin-top: 1rem; }

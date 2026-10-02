@@ -671,6 +671,13 @@ window.Alpine.data('appState', () => ({
   detailSubject: "",
   detailMessage: "",
   detailMessageAuto: "",
+  detailNet: "",
+  detailVat: "Not included",
+  detailPeriod: "—",
+  detailJobShow: false,
+  emailOpen: false,
+  emailToggleLabel: "Email invoice",
+  detailShowPay: false,
   detailPayUrl: "",
   payCopied: false,
   payPollMs: 6000,
@@ -1775,10 +1782,10 @@ window.Alpine.data('appState', () => ({
     };
     this.listTitle = (titles[kind] || "Invoices") + (periodScoped && this.activeLabel ? " · " + this.activeLabel : "");
     const hints = {
-      due: "Payment in? Mark it paid.",
-      send: "Ready? Mark them invoiced.",
-      draft: "Ready? Mark them invoiced.",
-      done: "Wrong one? Undo puts it back to collect."
+      due: "Tap an invoice to check it, or mark it paid.",
+      send: "Tap an invoice to check it, then mark it invoiced.",
+      draft: "Tap an invoice to check it, then mark it invoiced.",
+      done: "Tap an invoice to check it. Undo puts it back to collect."
     };
     this.listHint = hints[kind] || "";
     this.dashView = "list";
@@ -1860,16 +1867,21 @@ window.Alpine.data('appState', () => ({
     this.setFeedback(wasDraft
       ? "Preview cannot print the PDF. Invoice marked invoiced."
       : "Preview cannot print the PDF.", false);
-    if (wasDraft) {
-      this.dashView = "list";
-      this.scrollPage();
-    }
   },
   homeStatusMessage(status) {
     if (status === "Paid") return "Marked paid.";
     if (status === "Written off") return "Written off.";
     if (status === "Undo") return "Back in invoices to collect.";
     return "Marked invoiced.";
+  },
+  noteInvoiceUpdated(message) {
+    this.setFeedback(message, false);
+    if (this.dashView !== "detail") return;
+    setTimeout(() => {
+      const node = document.querySelector(".invoice-sheet");
+      if (!node) return;
+      try { node.scrollIntoView({ block: "start" }); } catch (err) {}
+    }, 60);
   },
   confirmOnHome(message) {
     this.currentTab = "dashboard";
@@ -1957,6 +1969,13 @@ window.Alpine.data('appState', () => ({
     this.detailDue = row.dueDate ? this.dueNote(row) : "No due date yet";
     this.detailDueDate = row.dueDate ? this.prettyDate(row.dueDate) : "—";
     this.detailHours = this.hoursText(row.hours) + " h";
+    const moneyBits = this.invoiceMoneyFields(row);
+    this.detailNet = moneyBits.net;
+    this.detailVat = moneyBits.vat;
+    const fromSheet = this.prettyPeriod(row.servicePeriod);
+    const facts = invoiceCardFacts({ servicePeriod: row.servicePeriod, lines: lines, date: row.date, hours: row.hours, jobDetails: row.jobDetails });
+    this.detailPeriod = fromSheet || (facts.period && facts.period !== "—" ? facts.period : "—");
+    this.detailJobShow = !!(row.jobDetails && row.jobDetails !== "—");
     const fromLine = (lines || []).map((line) => line && line.details).filter(Boolean)[0] || "";
     const job = row.jobDetails && row.jobDetails !== "—" ? row.jobDetails : fromLine;
     this.detailWork = job ? (job + " · " + this.detailHours) : this.detailHours;
@@ -1970,7 +1989,9 @@ window.Alpine.data('appState', () => ({
       this.detailCc = "";
       this.detailPayUrl = "";
       this.payCopied = false;
+      this.emailOpen = false;
     }
+    this.emailToggleLabel = this.emailOpen ? "Hide email" : "Email invoice";
     if (row.kind === "paid" || row.kind === "writtenoff") {
       this.detailPayUrl = "";
       this.payCopied = false;
@@ -1981,6 +2002,7 @@ window.Alpine.data('appState', () => ({
     this.detailCanSavePdf = row.kind !== "draft";
     this.detailCanFinish = row.kind === "due";
     this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
+    this.detailShowPay = row.kind === "draft" || row.kind === "due";
     if (!sameInvoice || this.detailMessage === this.detailMessageAuto) {
       this.detailMessage = drafted;
       this.detailMessageAuto = drafted;
@@ -1991,6 +2013,7 @@ window.Alpine.data('appState', () => ({
       details: line.details || "—",
       span: [line.start, line.finish].filter(Boolean).join("–"),
       hours: this.hoursText(line.hours) + " h",
+      meta: [this.prettyDate(line.date), [line.start, line.finish].filter(Boolean).join("–"), this.hoursText(line.hours) + " h", line.rate ? (this.money(line.rate) + "/h") : ""].filter((part) => part && part !== "—").join(" · "),
       amount: this.money(line.amount)
     }));
     this.detailLinesEmpty = this.detailLines.length === 0;
@@ -2131,7 +2154,29 @@ window.Alpine.data('appState', () => ({
     }
     return { payUrl: "", skip: true, failed: true };
   },
+  invoiceMoneyFields(row) {
+    const total = Number(row && row.total) || 0;
+    const vatRaw = row && row.vat;
+    const netRaw = row && row.net;
+    const vat = vatRaw != null && vatRaw !== "" && isFinite(Number(vatRaw)) ? Number(vatRaw) : null;
+    const net = netRaw != null && netRaw !== "" && isFinite(Number(netRaw)) ? Number(netRaw) : total;
+    return {
+      net: this.money(net),
+      vat: vat == null ? "Not included" : this.money(vat)
+    };
+  },
+  toggleEmail() {
+    this.emailOpen = !this.emailOpen;
+    this.emailToggleLabel = this.emailOpen ? "Hide email" : "Email invoice";
+    if (!this.emailOpen) return;
+    setTimeout(() => {
+      const node = document.getElementById("email-sheet");
+      if (!node) return;
+      try { node.scrollIntoView({ block: "nearest" }); } catch (err) {}
+    }, 60);
+  },
   async openInvoice(id) {
+    if (this.saving) return;
     const row = (this.invoiceRows || []).find((item) => item.id === id);
     if (!row) return;
     this.driveUrl = "";
@@ -2181,8 +2226,7 @@ window.Alpine.data('appState', () => ({
           this.noteIssued(res);
           this.setFeedback(this.pdfSavedMessage(res), false);
           if (res.markedInvoiced) {
-            this.dashView = "list";
-            this.scrollPage();
+            this.restampInvoice(this.detailId, "Invoiced");
             await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
           }
         } else {
@@ -2209,8 +2253,7 @@ window.Alpine.data('appState', () => ({
           this.noteIssued(res);
           this.setFeedback(res.message || "PDF downloaded. Attach it to your email.", false);
           if (res.markedInvoiced) {
-            this.dashView = "list";
-            this.scrollPage();
+            this.restampInvoice(this.detailId, "Invoiced");
             await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
           }
         } else {
@@ -2235,6 +2278,8 @@ window.Alpine.data('appState', () => ({
     }
     if (this.previewMode) {
       await this.withInvoiceWait("Sending the invoice…", () => this.wait(1500));
+      this.emailOpen = false;
+      this.emailToggleLabel = "Email invoice";
       this.setFeedback(this.emailedBanner(email), false);
       this.revealMarkInvoiced();
       return;
@@ -2273,6 +2318,8 @@ window.Alpine.data('appState', () => ({
       const res = await this.api("exportInvoicePdf", payload, { quiet: true, timeoutMs: 60000, write: true });
       if (res && res.success) {
         if (res.payUrl) this.applyPayUrl(this.detailId, res.payUrl);
+        this.emailOpen = false;
+        this.emailToggleLabel = "Email invoice";
         this.setFeedback(this.emailedBanner(email), false);
         this.revealMarkInvoiced();
         this.startPayWatch();
@@ -2300,8 +2347,14 @@ window.Alpine.data('appState', () => ({
     return "Emailed " + code + " to " + String(email || "").trim() + ".";
   },
   async copyPayLink() {
+    if (!String(this.detailPayUrl || "").trim() && !this.previewMode) {
+      await this.requestPayLink(this.detailId);
+    }
     const url = String(this.detailPayUrl || "").trim();
-    if (!url) return;
+    if (!url) {
+      this.setFeedback(this.previewMode ? "Preview has no pay link." : "No pay link on this invoice yet.", true);
+      return;
+    }
     const copied = await this.writeClipboard(url);
     if (!copied) {
       this.setFeedback("Could not copy the pay link.", true);
@@ -2353,7 +2406,7 @@ window.Alpine.data('appState', () => ({
     if (this.saving || !this.detailId) return;
     if (this.previewMode) {
       this.restampInvoice(this.detailId, "Invoiced");
-      this.confirmOnHome("Marked invoiced.");
+      this.noteInvoiceUpdated("Marked invoiced.");
       return;
     }
     this.saving = true;
@@ -2364,7 +2417,8 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         this.restampInvoice(this.detailId, "Invoiced");
         this.setDetailPhase("Invoiced");
-        this.confirmOnHome("Marked invoiced.");
+        this.noteInvoiceUpdated("Marked invoiced.");
+        this.watchInvoicePayment({ id: this.detailId, kind: "due" });
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
@@ -2399,12 +2453,17 @@ window.Alpine.data('appState', () => ({
     this.detailCanSavePdf = status !== "Draft";
     this.detailCanFinish = status === "Invoiced";
     this.detailCanUndo = status === "Paid" || status === "Written off";
+    this.detailShowPay = this.detailIsDraft || this.detailCanFinish;
+    if (!this.detailShowPay) {
+      this.detailPayUrl = "";
+      this.payCopied = false;
+    }
   },
   async markDetailStatus(status) {
     if (this.saving || !this.detailId) return;
     if (this.previewMode) {
       this.restampInvoice(this.detailId, status);
-      this.confirmOnHome(this.homeStatusMessage(status));
+      this.noteInvoiceUpdated(this.homeStatusMessage(status));
       return;
     }
     this.saving = true;
@@ -2413,8 +2472,10 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api("updateInvoiceStatus", { invoiceId: this.detailId, status: status }, { write: true });
       if (res && res.success) {
-        this.setDetailPhase(res.status || (status === "Undo" ? "Invoiced" : status));
-        this.confirmOnHome(this.homeStatusMessage(status));
+        const next = res.status || (status === "Undo" ? "Invoiced" : status);
+        this.restampInvoice(this.detailId, status === "Undo" ? "Undo" : next);
+        this.setDetailPhase(next);
+        this.noteInvoiceUpdated(this.homeStatusMessage(status));
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         return;
       }
