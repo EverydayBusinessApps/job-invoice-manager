@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=26">
+  <link rel="stylesheet" href="style.css?v=27">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=37"></script>
+  <script defer src="app.js?v=38"></script>
 </head>
 <body>
 
@@ -159,13 +159,13 @@
               </template>
               <p class="page-lead" x-show="detailLinesEmpty">No lines on this invoice yet.</p>
             </div>
-            <div class="invoice-totals">
+            <div class="invoice-totals" x-show="detailShowsVat">
               <div class="invoice-total-row">
                 <span>Net</span>
                 <span x-text="detailNet"></span>
               </div>
               <div class="invoice-total-row">
-                <span>VAT</span>
+                <span x-text="detailVatLabel"></span>
                 <span x-text="detailVat"></span>
               </div>
               <div class="invoice-total-row invoice-grand">
@@ -517,6 +517,22 @@
             <label>IBAN</label>
             <input type="text" x-model="settingsForm.iban" data-disable-when="saving">
           </div>
+          <details class="option-group" x-show="settingsShow.vat">
+            <summary>VAT</summary>
+            <p class="vat-note">VAT changes apply to new invoices only.</p>
+            <div x-show="settingsShow.vatApplied">
+              <div class="switch-row">
+                <span class="switch-label">Charge VAT <span x-text="vatSwitchLabel"></span></span>
+                <button type="button" class="switch" data-action="toggleVat" :class="vatOn ? 'switch-on' : ''" aria-label="Charge VAT">
+                  <span class="switch-knob"></span>
+                </button>
+              </div>
+            </div>
+            <div class="form-group" x-show="settingsShow.vatRate">
+              <label>VAT rate (%)</label>
+              <input type="text" inputmode="decimal" x-model="settingsForm.vatRate" data-disable-when="saving">
+            </div>
+          </details>
           <div id="settings-extra"></div>
           <button type="button" data-action="saveSettings" data-disable-when="saving" x-text="settingsButtonLabel"></button>
         </section>
