@@ -648,8 +648,8 @@ window.Alpine.data('appState', () => ({
   vatOn: false,
   vatSwitchLabel: "Off",
   settingsShow: {
-    rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
-    website: false, phone: false, bank: false, iban: false, vat: false, vatApplied: false, vatRate: false
+    rate: true, yearEnd: true, currency: true, name: true, address: true, email: true,
+    website: true, phone: true, bank: true, iban: true, vat: true, vatApplied: true, vatRate: true
   },
   settingsForm: {
     rate: "", yearEnd: "", currency: "", name: "", address: "", email: "",
@@ -2579,7 +2579,22 @@ window.Alpine.data('appState', () => ({
     if (settings[name]) return { key: settings[name], kind: "setting" };
     return null;
   },
-  applySettings(res) {
+  settingsSnapshot() {
+    try { return JSON.stringify(this.settingsForm); } catch (err) { return ""; }
+  },
+  settingsEdits(before) {
+    let prior = {};
+    try { prior = JSON.parse(before || "{}"); } catch (err) { prior = {}; }
+    const keep = {};
+    Object.keys(this.settingsForm || {}).forEach((key) => {
+      const now = this.settingsForm[key] == null ? "" : String(this.settingsForm[key]);
+      const then = prior[key] == null ? "" : String(prior[key]);
+      if (now !== then) keep[key] = true;
+    });
+    return keep;
+  },
+  applySettings(res, keep) {
+    const locked = keep || {};
     const show = {
       rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
       website: false, phone: false, bank: false, iban: false, vat: false, vatApplied: false, vatRate: false
@@ -2595,6 +2610,7 @@ window.Alpine.data('appState', () => ({
       show[mapped.key] = true;
       if (mapped.key === "vatApplied" || mapped.key === "vatRate") show.vat = true;
       meta[mapped.key] = { row: row.row, label: row.label, kind: "setting" };
+      if (locked[mapped.key]) return;
       if (mapped.key === "vatApplied") {
         const mark = /^y/i.test(String(row.value || "").trim()) ? "Y" : "N";
         this.settingsForm.vatApplied = mark;
@@ -2610,9 +2626,8 @@ window.Alpine.data('appState', () => ({
     this.settingsMeta = meta;
     this.extraSettings = extra;
     this.renderExtraSettings(extra);
-    if (res && res.logo) {
+    if (res && res.logo && !this.logoDirty) {
       this.logoPreview = res.logo;
-      this.logoDirty = false;
     }
     if (this.settingsForm.name) this.businessName = this.settingsForm.name;
     this.syncLogoPreview();
@@ -2726,28 +2741,33 @@ window.Alpine.data('appState', () => ({
       this.applySettings(this.sampleSettings());
       return;
     }
-    this.loading = true;
-    this.loadingLabel = "Loading settings…";
+    const before = this.settingsSnapshot();
     try {
-      const res = await this.api("getSettings", {}, { quiet: true });
+      const res = await this.api("getSettings", { skipLogo: true }, { quiet: true });
       if (res && /Invalid API action/.test(String(res.error || ""))) {
         const blank = this.sampleSettings();
         blank.settings.forEach((row) => { row.value = ""; });
-        this.applySettings(blank);
+        this.applySettings(blank, this.settingsEdits(before));
         this.setFeedback("Could not read settings. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
         return;
       }
       if (res && res.success) {
-        this.applySettings(res);
+        this.applySettings(res, this.settingsEdits(before));
+        if (!res.logo) this.loadSettingsLogo();
         return;
       }
       this.setFeedback(this.failMessage(res, "Could not read settings. Try Refresh."), true);
     } catch (err) {
       this.setFeedback("Could not read settings. Try Refresh.", true);
-    } finally {
-      this.loading = false;
-      this.loadingLabel = "Updating…";
     }
+  },
+  async loadSettingsLogo() {
+    try {
+      const res = await this.api("getSettings", { logoOnly: true }, { quiet: true });
+      if (!res || !res.logo || this.logoDirty) return;
+      this.logoPreview = res.logo;
+      this.syncLogoPreview();
+    } catch (err) {}
   },
   async saveSettings() {
     if (this.saving) return;

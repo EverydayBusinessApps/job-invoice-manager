@@ -1436,6 +1436,23 @@ test("week and financial year windows follow the day and the Config year end", f
   assert(report.periods.week.hours === 2, "week hours " + report.periods.week.hours);
 });
 
+test("settings values return without opening the invoice logo", function (api, workbook) {
+  seedConfig(workbook);
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  let reads = 0;
+  template.getImages = function () {
+    reads += 1;
+    return [];
+  };
+  const fast = api.fetchSettings({ skipLogo: true });
+  assert(fast.success && !fast.logo, JSON.stringify(fast));
+  assert(fast.settings.some(function (item) { return item.label === "Business Name"; }), "the form values were left out");
+  assert(reads === 0, "the logo was opened with the form");
+  const logo = api.fetchSettings({ logoOnly: true });
+  assert(logo.success === true && reads === 1, "the logo was not read on its own");
+});
+
 test("the settings logo is the image on INV-Template", function (api) {
   function textBlob(name, text) {
     return {
