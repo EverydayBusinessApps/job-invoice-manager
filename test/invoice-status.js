@@ -2295,6 +2295,22 @@ function seedVat(workbook, applied, rate) {
   return config;
 }
 
+test("VAT settings after the breaks block stay a percent, not a clock time", function (api, workbook) {
+  const config = seedConfig(workbook);
+  config.getRange(22, 1).setValue("vatApplied");
+  config.getRange(22, 2).setValue("N");
+  config.getRange(23, 1).setValue("vatRate");
+  config.getRange(23, 2).setValue(0.23);
+  const read = api.fetchSettings();
+  assert(read.success, read.error);
+  const labels = read.settings.map(function (item) { return item.label; });
+  assert(labels.indexOf("vatApplied") !== -1 && labels.indexOf("vatRate") !== -1, labels.join(","));
+  assert(read.breaks.map(function (item) { return item.label; }).indexOf("vatApplied") === -1, "VAT was read as a break");
+  const rate = read.settings.filter(function (item) { return item.label === "vatRate"; })[0];
+  assert(rate.value === "0.23", rate.value);
+  assert(read.breaks[1].value === "00:30", "break times stopped reading as hours and minutes");
+});
+
 test("new invoices stamp VAT from B22 and B23, and a later change leaves older rows alone", function (api, workbook) {
   const invoices = workbook.sheets.InvoiceList;
   invoices.getRange(2, 1).setValue("INV-EB-001");

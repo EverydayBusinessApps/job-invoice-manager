@@ -2096,7 +2096,7 @@ function configText_(value, asTime) {
     return Utilities.formatDate(value, (Session.getScriptTimeZone && Session.getScriptTimeZone()) || "UTC", "HH:mm");
   }
   if (typeof value === "number" && isFinite(value)) {
-    if (asTime || (value > 0 && value < 1)) {
+    if (asTime) {
       const total = Math.round(value * 1440);
       const hours = Math.floor(total / 60);
       const minutes = total % 60;
