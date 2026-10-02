@@ -558,9 +558,9 @@ window.Alpine.data('appState', () => ({
   loading: false,
   loadingLabel: "Updating…",
   saving: false,
-  savePdfLabel: "Save PDF",
-  downloadPdfLabel: "Download",
-  emailPdfLabel: "Email invoice",
+  savePdfLabel: "Save in Drive",
+  downloadPdfLabel: "Download PDF",
+  emailPdfLabel: "Send email",
   logButtonLabel: "Log a job",
   clientButtonLabel: "Save client",
   settingsButtonLabel: "Save settings",
@@ -713,7 +713,7 @@ window.Alpine.data('appState', () => ({
   detailPeriod: "—",
   detailJobShow: false,
   emailOpen: false,
-  emailToggleLabel: "Email invoice",
+  emailToggleLabel: "Email",
   detailShowPay: false,
   detailPayUrl: "",
   payCopied: false,
@@ -933,9 +933,12 @@ window.Alpine.data('appState', () => ({
     return new Promise((resolve) => setTimeout(resolve, ms));
   },
   syncPdfLabels(active) {
-    this.savePdfLabel = active === "Saving the PDF…" ? "Saving…" : "Save PDF";
-    this.downloadPdfLabel = active === "Downloading the PDF…" ? "Downloading…" : "Download";
-    this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : active === "Creating the pay link…" ? "Creating…" : "Email invoice";
+    this.savePdfLabel = active === "Saving the PDF…" ? "Saving…" : "Save in Drive";
+    this.downloadPdfLabel = active === "Downloading the PDF…" ? "Downloading…" : "Download PDF";
+    this.emailPdfLabel = active === "Sending the invoice…" ? "Sending…" : active === "Creating the pay link…" ? "Creating…" : "Send email";
+  },
+  syncEmailToggle() {
+    this.emailToggleLabel = this.emailOpen ? "Hide email" : "Email";
   },
   async withInvoiceWait(label, fn) {
     if (this.saving) return;
@@ -2030,7 +2033,7 @@ window.Alpine.data('appState', () => ({
       this.payCopied = false;
       this.emailOpen = false;
     }
-    this.emailToggleLabel = this.emailOpen ? "Hide email" : "Email invoice";
+    this.syncEmailToggle();
     if (row.kind === "paid" || row.kind === "writtenoff") {
       this.detailPayUrl = "";
       this.payCopied = false;
@@ -2195,10 +2198,10 @@ window.Alpine.data('appState', () => ({
   },
   toggleEmail() {
     this.emailOpen = !this.emailOpen;
-    this.emailToggleLabel = this.emailOpen ? "Hide email" : "Email invoice";
+    this.syncEmailToggle();
     if (!this.emailOpen) return;
     setTimeout(() => {
-      const node = document.getElementById("email-sheet");
+      const node = document.querySelector("#email-sheet button");
       if (!node) return;
       try { node.scrollIntoView({ block: "nearest" }); } catch (err) {}
     }, 60);
@@ -2307,7 +2310,7 @@ window.Alpine.data('appState', () => ({
     if (this.previewMode) {
       await this.withInvoiceWait("Sending the invoice…", () => this.wait(1500));
       this.emailOpen = false;
-      this.emailToggleLabel = "Email invoice";
+      this.syncEmailToggle();
       this.setFeedback(this.emailedBanner(email), false);
       this.revealMarkInvoiced();
       return;
@@ -2347,7 +2350,7 @@ window.Alpine.data('appState', () => ({
       if (res && res.success) {
         if (res.payUrl) this.applyPayUrl(this.detailId, res.payUrl);
         this.emailOpen = false;
-        this.emailToggleLabel = "Email invoice";
+        this.syncEmailToggle();
         this.setFeedback(this.emailedBanner(email), false);
         this.revealMarkInvoiced();
         this.startPayWatch();

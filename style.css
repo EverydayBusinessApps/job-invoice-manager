@@ -61,6 +61,9 @@ button.pay-copy:disabled { background: #ffffff; color: #94a3b8; }
 .inv-card .inv-actions { margin-top: 0.9rem; }
 .inv-actions button { flex: 1 1 0; width: auto; }
 button.btn-line { background: #ffffff; color: #00263B; border: 1.5px solid #00263B; }
+button.btn-quiet { width: auto; align-self: center; background: transparent; color: #64748b; padding: 0.15rem 0.35rem; font-size: 0.8rem; font-weight: 700; }
+button.btn-quiet:disabled { background: transparent; color: #94a3b8; }
+.send-dock .pay-row, .send-dock .pay-copied { margin: 0; }
 button.btn-line.btn-auto { flex: 0 0 auto; padding-left: 1.15rem; padding-right: 1.15rem; }
 .send-bar { background: #00263B; color: #FAFFE4; border-radius: 0.75rem; padding: 0.85rem 1rem; font-weight: 700; overflow-wrap: anywhere; }
 .send-heading { margin: 0; font-size: 1.2rem; font-weight: 700; color: #00263B; }
@@ -103,7 +106,7 @@ button.switch.switch-on .switch-knob { transform: translateX(1.3rem); }
 .email-sheet { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.85rem; padding: 0.7rem; }
 .email-sheet > * + * { margin-top: 0.55rem; }
 .email-sheet button { padding: 0.7rem; }
-.send-dock { position: sticky; bottom: 4.4rem; z-index: 30; background: #f4f6f8; padding-top: 0.35rem; }
+.send-dock { position: sticky; bottom: 4.4rem; z-index: 30; background: #f4f6f8; padding-top: 0.35rem; max-height: calc(100dvh - 9.5rem); overflow-y: auto; }
 .send-dock-inner { display: flex; flex-direction: column; gap: 0.55rem; }
 .metric-title.gold { color: #AA9251; }
 .metric-box.alt .metric-title.gold { color: #AA9251; }
