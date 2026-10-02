@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=27">
+  <link rel="stylesheet" href="style.css?v=28">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=38"></script>
+  <script defer src="app.js?v=39"></script>
 </head>
 <body>
 
@@ -101,7 +101,7 @@
                 <div class="inv-amount" x-text="inv.amount"></div>
                 <div class="inv-actions">
                   <button type="button" x-show="listShowsSend" data-action="markListInvoiced" :data-id="inv.id" data-disable-when="saving">Mark invoiced</button>
-                  <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Generate and send</button>
+                  <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Open invoice</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">View</button>
                   <button type="button" x-show="listShowsCollect" data-action="markListPaid" :data-id="inv.id" data-disable-when="saving">Mark paid</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="markListWrittenOff" :data-id="inv.id" data-disable-when="saving">Write off</button>
@@ -193,34 +193,27 @@
           </div>
           <div class="send-dock">
             <div class="send-dock-inner">
+              <button type="button" id="mark-invoiced" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
+              <div class="inv-actions">
+                <button type="button" x-show="detailShowPay" data-action="copyPayLink" data-disable-when="saving" :class="detailCanFinish ? '' : 'btn-line'">Copy pay link</button>
+                <button type="button" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel" :class="detailCanFinish ? '' : 'btn-line'"></button>
+              </div>
+              <p class="pay-copied" x-show="payCopied">Copied</p>
               <div x-show="detailPayUrl">
                 <div class="pay-row">
                   <a class="pay-open" data-pay-link target="_blank" rel="noopener noreferrer" x-text="detailPayUrl"></a>
-                  <button type="button" class="pay-copy" data-action="copyPayLink" aria-label="Copy pay link">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H10V7h9v14z"/></svg>
-                  </button>
-                </div>
-                <p class="pay-copied" x-show="payCopied">Copied</p>
-              </div>
-              <button type="button" id="mark-invoiced" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
-              <div class="inv-actions">
-                <button type="button" class="btn-line" data-action="toggleEmail" data-disable-when="saving" x-text="emailToggleLabel"></button>
-                <button type="button" class="btn-line" x-show="detailShowPay" data-action="copyPayLink" data-disable-when="saving">Copy pay link</button>
-              </div>
-              <div x-show="detailCanSavePdf">
-                <div class="inv-actions">
-                  <button type="button" class="btn-line" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
-                  <button type="button" class="btn-line" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel"></button>
                 </div>
               </div>
+              <button type="button" class="btn-line" data-action="toggleEmail" data-disable-when="saving" x-text="emailToggleLabel"></button>
               <div x-show="detailCanFinish">
                 <div class="inv-actions">
-                  <button type="button" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
+                  <button type="button" class="btn-line" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>
                   <button type="button" class="btn-line" data-action="markDetailWrittenOff" data-disable-when="saving">Write off</button>
                 </div>
               </div>
+              <button type="button" class="btn-quiet" x-show="detailCanSavePdf" data-action="saveInvoicePdf" data-disable-when="saving" x-text="savePdfLabel"></button>
               <button type="button" class="btn-line" x-show="detailCanUndo" data-action="undoDetailStatus" data-disable-when="saving">Undo</button>
-              <button type="button" class="btn-line btn-auto" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
+              <button type="button" class="btn-quiet" x-show="driveUrl" data-action="openDriveLink">Open saved PDF in Drive</button>
             </div>
           </div>
         </div>
