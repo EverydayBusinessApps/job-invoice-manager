@@ -67,7 +67,7 @@ button.btn-line.btn-auto { flex: 0 0 auto; padding-left: 1.15rem; padding-right:
 button.back-home { width: auto; align-self: flex-start; background: transparent; color: #00263B; font-size: 0.85rem; font-weight: 700; padding: 0; text-align: left; }
 label.to-label { text-transform: none; letter-spacing: 0; font-size: 0.95rem; font-weight: 600; color: #334155; }
 textarea.email-preview { min-height: 4.25rem; line-height: 1.4; white-space: pre-wrap; background: #ffffff; }
-.invoice-sheet { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.95rem; padding: 1rem 1rem 0.75rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
+.invoice-sheet { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.95rem; padding: 1rem 1rem 0.75rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); scroll-margin-top: 5.25rem; }
 .invoice-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
 .invoice-head > div:first-child { min-width: 0; }
 .invoice-sheet .page-title { overflow-wrap: anywhere; }
