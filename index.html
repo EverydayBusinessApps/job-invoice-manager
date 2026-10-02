@@ -175,22 +175,6 @@
             </div>
           </article>
           <p class="page-lead" x-show="detailIsDraft">Check this invoice, then mark it invoiced.</p>
-          <div id="email-sheet" class="email-sheet" x-show="emailOpen">
-            <div class="form-group">
-              <label class="to-label">To</label>
-              <input type="email" x-model="detailEmail" placeholder="client@company.com" data-disable-when="saving">
-            </div>
-            <div class="form-group">
-              <label class="to-label">Cc</label>
-              <input type="text" inputmode="email" x-model="detailCc" placeholder="Optional" autocomplete="off" data-disable-when="saving">
-            </div>
-            <p class="page-lead" x-show="ccNeedsDeploy">Cc is included after you paste Code.gs and deploy a new version.</p>
-            <div class="form-group">
-              <label class="to-label">Note</label>
-              <textarea class="email-preview" x-model="detailMessage" rows="3" data-disable-when="saving"></textarea>
-            </div>
-            <button type="button" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
-          </div>
           <div class="send-dock">
             <div class="send-dock-inner">
               <button type="button" id="mark-invoiced" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
@@ -205,6 +189,22 @@
                 </div>
               </div>
               <button type="button" class="btn-line" data-action="toggleEmail" data-disable-when="saving" x-text="emailToggleLabel"></button>
+              <div id="email-sheet" class="email-sheet" x-show="emailOpen">
+                <div class="form-group">
+                  <label class="to-label">To</label>
+                  <input type="email" x-model="detailEmail" placeholder="client@company.com" data-disable-when="saving">
+                </div>
+                <div class="form-group">
+                  <label class="to-label">Cc</label>
+                  <input type="text" inputmode="email" x-model="detailCc" placeholder="Optional" autocomplete="off" data-disable-when="saving">
+                </div>
+                <p class="page-lead" x-show="ccNeedsDeploy">Cc is included after you paste Code.gs and deploy a new version.</p>
+                <div class="form-group">
+                  <label class="to-label">Note</label>
+                  <textarea class="email-preview" x-model="detailMessage" rows="3" data-disable-when="saving"></textarea>
+                </div>
+                <button type="button" data-action="emailInvoicePdf" data-disable-when="saving" x-text="emailPdfLabel"></button>
+              </div>
               <div x-show="detailCanFinish">
                 <div class="inv-actions">
                   <button type="button" class="btn-line" data-action="markDetailPaid" data-disable-when="saving">Mark paid</button>

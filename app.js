@@ -2201,7 +2201,7 @@ window.Alpine.data('appState', () => ({
     this.syncEmailToggle();
     if (!this.emailOpen) return;
     setTimeout(() => {
-      const node = document.getElementById("email-sheet");
+      const node = document.querySelector("#email-sheet button");
       if (!node) return;
       try { node.scrollIntoView({ block: "nearest" }); } catch (err) {}
     }, 60);

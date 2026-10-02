@@ -106,7 +106,7 @@ button.switch.switch-on .switch-knob { transform: translateX(1.3rem); }
 .email-sheet { background: #ffffff; border: 1px solid #e6eaee; border-radius: 0.85rem; padding: 0.7rem; }
 .email-sheet > * + * { margin-top: 0.55rem; }
 .email-sheet button { padding: 0.7rem; }
-.send-dock { position: sticky; bottom: 4.4rem; z-index: 30; background: #f4f6f8; padding-top: 0.35rem; }
+.send-dock { position: sticky; bottom: 4.4rem; z-index: 30; background: #f4f6f8; padding-top: 0.35rem; max-height: calc(100dvh - 9.5rem); overflow-y: auto; }
 .send-dock-inner { display: flex; flex-direction: column; gap: 0.55rem; }
 .metric-title.gold { color: #AA9251; }
 .metric-box.alt .metric-title.gold { color: #AA9251; }
