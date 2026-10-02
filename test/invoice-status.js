@@ -2461,8 +2461,136 @@ test("VAT off hides invoice rows 33 to 35 and the pay link stays on Total Due", 
   assert(api.lastEmail.body.indexOf("€80.00") !== -1, api.lastEmail.body);
 });
 
-if (failures.length) {
-  console.error("\n" + failures.length + " failed");
-  process.exit(1);
+function loadHomeApp() {
+  const documentStub = {
+    addEventListener: function () {},
+    getElementById: function () { return null; },
+    querySelector: function () { return null; },
+    querySelectorAll: function () { return []; },
+    createElement: function () {
+      return { style: {}, setAttribute: function () {}, appendChild: function () {}, click: function () {} };
+    },
+    body: { appendChild: function () {}, removeChild: function () {} }
+  };
+  const windowStub = {
+    EVERYDAYWORK_CONFIG: { apiUrl: "https://script.google.com/macros/s/test/exec", clientToken: "beta-token" },
+    addEventListener: function () {},
+    scrollTo: function () {}
+  };
+  windowStub.window = windowStub;
+  windowStub.document = documentStub;
+  const context = {
+    window: windowStub,
+    document: documentStub,
+    location: { search: "" },
+    localStorage: {
+      getItem: function () { return null; },
+      setItem: function () {}
+    },
+    setTimeout: setTimeout,
+    clearTimeout: clearTimeout,
+    console: console,
+    JSON: JSON,
+    Object: Object,
+    Array: Array,
+    String: String,
+    Number: Number,
+    Math: Math,
+    Date: Date,
+    isFinite: isFinite,
+    Promise: Promise,
+    fetch: function () { return Promise.reject(new Error("unexpected fetch")); }
+  };
+  context.global = context;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8"), context);
+  return context.window.Alpine.dataStore.appState();
 }
-console.log("\nAll invoice status rules passed.");
+
+function liveHomeSnapshot() {
+  return {
+    success: true,
+    periods: { month: { label: "October" } },
+    invoices: [
+      { id: "1", code: "INV-EB-001", status: "Invoiced", total: 12440.5, clientName: "Acme" },
+      { id: "2", code: "INV-EB-002", status: "Paid", total: 10632.5, clientName: "Acme" }
+    ],
+    open: {},
+    clients: [],
+    invoicePdf: "inv-template-plain",
+    emailCc: true
+  };
+}
+
+function unreachableReply(app) {
+  return { success: false, error: app.unreachableMessage(false) };
+}
+
+async function runHomeFeedbackTests() {
+  const cold = loadHomeApp();
+  let step = 0;
+  cold.api = function () {
+    step += 1;
+    if (step === 1) return unreachableReply(cold);
+    return { snapshot: liveHomeSnapshot() };
+  };
+  await cold.refreshSnapshot({ quiet: false, announce: true, resync: true });
+  assert(cold.feedback.isError === true, "the first failure did not show an error");
+  assert(cold.feedback.text === "Couldn't reach the workbook. Try Refresh.", cold.feedback.text);
+  assert(cold.dashboardLive === false, "a failed first read was treated as live");
+  assert(cold.openCollectAmount === "€0.00", cold.openCollectAmount);
+  await cold.refreshSnapshot({ quiet: true, announce: false, background: true });
+  assert(cold.dashboardLive === true, "the later read did not mark Home live");
+  assert(cold.openCollectAmount === "€12,440.50", cold.openCollectAmount);
+  assert(cold.openDoneAmount === "€10,632.50", cold.openDoneAmount);
+  assert(cold.feedback.text === "", "the unreachable banner stayed after live piles: " + cold.feedback.text);
+  assert(cold.feedback.isError === false, "the error flag stayed after live piles");
+  console.log("ok  a cold-start failure clears once Home has live piles");
+
+  const stuck = loadHomeApp();
+  stuck.api = function () { return unreachableReply(stuck); };
+  await stuck.refreshSnapshot({ quiet: false, announce: true, resync: true });
+  await stuck.refreshSnapshot({ quiet: true, announce: false, background: true });
+  assert(stuck.feedback.text === "Couldn't reach the workbook. Try Refresh.", stuck.feedback.text);
+  assert(stuck.dashboardLive === false, "a second failure was treated as live");
+  assert(stuck.openCollectAmount === "€0.00", stuck.openCollectAmount);
+  console.log("ok  a workbook that stays unreachable keeps the banner");
+
+  const other = loadHomeApp();
+  other.setFeedback("Could not save the client. Enter a client name.", true);
+  other.api = function () { return { snapshot: liveHomeSnapshot() }; };
+  await other.refreshSnapshot({ quiet: true, announce: false, background: true });
+  assert(other.feedback.text === "Could not save the client. Enter a client name.", other.feedback.text);
+  assert(other.feedback.isError === true, "a different error was cleared");
+  assert(other.openCollectAmount === "€12,440.50", other.openCollectAmount);
+  console.log("ok  a later live read leaves a different error on screen");
+
+  const again = loadHomeApp();
+  let calls = 0;
+  again.api = function () {
+    calls += 1;
+    if (calls === 2) return { snapshot: liveHomeSnapshot() };
+    return unreachableReply(again);
+  };
+  await again.refreshSnapshot({ quiet: false, announce: true, resync: true });
+  await again.refreshSnapshot({ quiet: true, announce: false, background: true });
+  assert(again.feedback.text === "", again.feedback.text);
+  await again.refreshSnapshot({ quiet: false, announce: false, resync: true });
+  assert(again.feedback.text === "Couldn't reach the workbook. Try Refresh.", again.feedback.text);
+  assert(again.feedback.isError === true, "a later failure did not show the error");
+  console.log("ok  a later failure shows the workbook error again");
+}
+
+function finishInvoiceTests() {
+  if (failures.length) {
+    console.error("\n" + failures.length + " failed");
+    process.exit(1);
+  }
+  console.log("\nAll invoice status rules passed.");
+}
+
+runHomeFeedbackTests().then(finishInvoiceTests).catch(function (err) {
+  failures.push("home feedback: " + (err && err.stack ? err.stack : err));
+  console.error("FAIL home feedback\n  " + (err && err.stack ? err.stack : err));
+  finishInvoiceTests();
+});

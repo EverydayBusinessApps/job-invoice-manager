@@ -1748,6 +1748,7 @@ window.Alpine.data('appState', () => ({
         this.dashboardNote = "";
         this.applySnapshot(snapshot, true);
         this.rememberSnapshot(snapshot);
+        this.clearUnreachableFeedback();
         if (announce && !quiet) this.setFeedback((this.activeLabel || "Dashboard") + " is loaded.", false);
         return;
       }
@@ -2538,6 +2539,12 @@ window.Alpine.data('appState', () => ({
     this.feedback.isError = false;
     this.mailAuthUrl = "";
     if (this.jobLogged && this.jobLogged.text) this.jobLogged = { text: "", id: "", code: "" };
+  },
+  clearUnreachableFeedback() {
+    if (!this.feedback || !this.feedback.isError) return;
+    if (this.feedback.text !== this.unreachableMessage(false)) return;
+    this.feedback.text = "";
+    this.feedback.isError = false;
   },
   sampleSettings() {
     const row = (n, label, value) => ({ row: n, label: label, value: value });
