@@ -158,7 +158,7 @@ function doPost(e) {
     } else if (action === "saveClient") {
       responseData = saveClientRecord_(requestData.payload);
     } else if (action === "getSettings") {
-      responseData = fetchSettings();
+      responseData = fetchSettings(requestData.payload);
     } else if (action === "saveSettings") {
       responseData = saveSettings_(requestData.payload);
     } else {
@@ -2050,11 +2050,15 @@ function recordsEmail_(ss, clientEmail) {
   return found;
 }
 
-function fetchSettings() {
+function fetchSettings(payload) {
   const ss = workbook_();
+  const source = payload || {};
+  if (source.logoOnly) {
+    return { success: true, logo: readInvoiceLogo_(ss.getSheetByName("INV-Template"), ss) };
+  }
   const read = readConfigSheet_(ss);
   if (!read.success) return read;
-  read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"), ss);
+  if (!source.skipLogo) read.logo = readInvoiceLogo_(ss.getSheetByName("INV-Template"), ss);
   return read;
 }
 
