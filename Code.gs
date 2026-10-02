@@ -1431,6 +1431,64 @@ function clockLabel_(value, timezone) {
   return String(match[1]).padStart(2, "0") + ":" + match[2];
 }
 
+function statusRank_(status) {
+  const label = displayStatus_(status);
+  if (label === "Paid") return 3;
+  if (label === "Written off") return 2;
+  if (label === "Invoiced") return 1;
+  return 0;
+}
+
+function preferInvoiceCode_(current, candidate) {
+  const a = String(current || "").trim();
+  const b = String(candidate || "").trim();
+  if (!a) return b;
+  if (!b) return a;
+  const aInv = /^INV-/i.test(a);
+  const bInv = /^INV-/i.test(b);
+  if (aInv && !bInv) return a;
+  if (bInv && !aInv) return b;
+  const aEb = /^INV-EB-/i.test(a);
+  const bEb = /^INV-EB-/i.test(b);
+  if (aEb && !bEb) return a;
+  if (bEb && !aEb) return b;
+  return a;
+}
+
+function preferInvoiceList_(current, candidate) {
+  if (!current) return candidate;
+  if (!candidate) return current;
+  const rankDiff = statusRank_(candidate.status) - statusRank_(current.status);
+  if (rankDiff > 0) return candidate;
+  if (rankDiff < 0) return current;
+  const chosen = preferInvoiceCode_(current.id, candidate.id);
+  return chosen === String(candidate.id || "").trim() ? candidate : current;
+}
+
+function mergeInvoiceGroups_(groups) {
+  const merged = {};
+  const order = [];
+  Object.keys(groups).forEach(function (code) {
+    const group = groups[code];
+    const number = invoiceKeyNumber_(code) || invoiceKeyNumber_(group.list && group.list.id);
+    const key = number || ("code:" + code);
+    if (!merged[key]) {
+      group.code = code;
+      merged[key] = group;
+      order.push(key);
+      return;
+    }
+    const dest = merged[key];
+    dest.shifts = dest.shifts.concat(group.shifts || []);
+    dest.code = preferInvoiceCode_(dest.code, code);
+    if (!group.list) return;
+    dest.list = preferInvoiceList_(dest.list, group.list);
+  });
+  return order.map(function (key) { return merged[key]; }).sort(function (a, b) {
+    return String(a.code).localeCompare(String(b.code));
+  });
+}
+
 function buildDashboardReport_(ss, asOfDate) {
   const timezone = (ss.getSpreadsheetTimeZone && ss.getSpreadsheetTimeZone()) || "UTC";
   const today = Utilities.formatDate(asOfDate || new Date(), timezone, "yyyy-MM-dd");
@@ -1467,8 +1525,7 @@ function buildDashboardReport_(ss, asOfDate) {
       if (!listId) continue;
       const code = canonicalInvoiceCode_(listId, timeCodeByInt);
       const group = groupFor(code || listId);
-      if (group.list) continue;
-      group.list = {
+      const nextList = {
         id: listId,
         client: String(data[i][1] || "").trim(),
         job: String(data[i][2] || "").trim(),
@@ -1479,6 +1536,7 @@ function buildDashboardReport_(ss, asOfDate) {
         date: isoDate_(data[i][7], timezone),
         status: displayStatus_(data[i][8])
       };
+      group.list = preferInvoiceList_(group.list, nextList);
     }
   }
 
@@ -1525,6 +1583,8 @@ function buildDashboardReport_(ss, asOfDate) {
   });
 
   const invoices = [];
+  const statusByCode = {};
+  const statusByNumber = {};
   const open = {
     dueAmount: 0, dueCount: 0, overdueAmount: 0, overdueCount: 0,
     draftAmount: 0, draftCount: 0,
@@ -1532,8 +1592,8 @@ function buildDashboardReport_(ss, asOfDate) {
     writtenOffAmount: 0, writtenOffCount: 0
   };
 
-  Object.keys(groups).sort().forEach(function (code) {
-    const group = groups[code];
+  mergeInvoiceGroups_(groups).forEach(function (group) {
+    const code = group.code;
     const list = group.list;
     const shiftRows = group.shifts;
     let client = list && list.client;
@@ -1547,6 +1607,9 @@ function buildDashboardReport_(ss, asOfDate) {
     const dates = shiftRows.map(function (shift) { return shift.date; }).filter(Boolean).sort();
     const status = list ? list.status : "Draft";
     const kind = invoiceKind_(status);
+    statusByCode[code] = status;
+    const number = invoiceKeyNumber_(code) || invoiceKeyNumber_(list && list.id);
+    if (number) statusByNumber[number] = status;
     const date = (list && list.date) || (dates.length ? dates[dates.length - 1] : "");
     const service = (list && list.service) || (dates.length ? (dates[0] === dates[dates.length - 1] ? dates[0] : dates[0] + " - " + dates[dates.length - 1]) : "");
     const anchor = date || serviceEndIso_(service) || (dates.length ? dates[dates.length - 1] : "");
@@ -1558,7 +1621,7 @@ function buildDashboardReport_(ss, asOfDate) {
     const lines = linesFromGroup_(shiftRows, timezone);
 
     const invoice = {
-      id: list ? list.id : code,
+      id: list && /^INV-/i.test(list.id) ? list.id : (/^INV-/i.test(code) ? code : (list ? list.id : code)),
       code: code,
       clientName: client,
       status: status,
@@ -1650,8 +1713,9 @@ function buildDashboardReport_(ss, asOfDate) {
       addUnbilled_(shift.client, shift.hours, shift.charge);
       return;
     }
+    const number = invoiceKeyNumber_(code) || invoiceKeyNumber_(shift.intId);
     const group = groups[code];
-    const status = group && group.list ? group.list.status : "Draft";
+    const status = (number && statusByNumber[number]) || statusByCode[code] || (group && group.list ? group.list.status : "Draft");
     if (!String(shift.intId || "").trim() || isDraftStatus_(status)) {
       addUnbilled_(shift.client, shift.hours, shift.charge);
     }

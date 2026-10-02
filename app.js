@@ -312,6 +312,87 @@ function briefWorkText(text) {
   return (space > 40 ? cut.slice(0, space) : cut).trim() + "…";
 }
 
+function invoiceNumberKey(raw) {
+  const text = String(raw || "").trim();
+  if (/^\d+(?:\.0+)?$/.test(text)) {
+    const n = parseInt(text, 10);
+    return n > 0 ? String(n) : "";
+  }
+  const tail = text.match(/^INV-[A-Za-z0-9]+-0*(\d+)$/i);
+  if (!tail) return "";
+  const n = parseInt(tail[1], 10);
+  return n > 0 ? String(n) : "";
+}
+
+function invoiceStatusRank(status) {
+  const label = String(status || "").trim();
+  if (label === "Paid") return 3;
+  if (label === "Written off" || label === "Bad debt" || label === "Bad Debt") return 2;
+  if (label === "Invoiced" || label === "Unpaid") return 1;
+  return 0;
+}
+
+function preferInvoiceLabel(current, candidate) {
+  const a = String(current || "").trim();
+  const b = String(candidate || "").trim();
+  if (!a) return b;
+  if (!b) return a;
+  const aInv = /^INV-/i.test(a);
+  const bInv = /^INV-/i.test(b);
+  if (aInv && !bInv) return a;
+  if (bInv && !aInv) return b;
+  const aEb = /^INV-EB-/i.test(a);
+  const bEb = /^INV-EB-/i.test(b);
+  if (aEb && !bEb) return a;
+  if (bEb && !aEb) return b;
+  return a;
+}
+
+function kindForStatus(status) {
+  const rank = invoiceStatusRank(status);
+  if (rank === 3) return "paid";
+  if (rank === 2) return "writtenoff";
+  if (rank === 1) return "due";
+  return "draft";
+}
+
+function collapseInvoiceRows(rows) {
+  const merged = {};
+  const order = [];
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!row) return;
+    const number = invoiceNumberKey(row.code) || invoiceNumberKey(row.id);
+    const key = number || ("row:" + String(row.id || row.code || order.length));
+    if (!merged[key]) {
+      const copy = Object.assign({}, row);
+      copy.kind = kindForStatus(copy.status);
+      merged[key] = copy;
+      order.push(key);
+      return;
+    }
+    const dest = merged[key];
+    const incomingBetter = invoiceStatusRank(row.status) > invoiceStatusRank(dest.status);
+    const winner = incomingBetter ? row : dest;
+    const loser = incomingBetter ? dest : row;
+    const next = Object.assign({}, winner);
+    next.id = preferInvoiceLabel(winner.id, loser.id) || winner.id;
+    next.code = preferInvoiceLabel(winner.code, loser.code) || winner.code;
+    next.kind = kindForStatus(next.status);
+    if ((!next.lines || !next.lines.length) && loser.lines && loser.lines.length) next.lines = loser.lines;
+    merged[key] = next;
+  });
+  return order.map((key) => merged[key]);
+}
+
+function sameInvoiceNumber(item, id, code) {
+  if (!item) return false;
+  const wanted = [id, code].filter(Boolean);
+  if (wanted.indexOf(item.id) !== -1 || wanted.indexOf(item.code) !== -1) return true;
+  const number = invoiceNumberKey(id) || invoiceNumberKey(code);
+  if (!number) return false;
+  return invoiceNumberKey(item.id) === number || invoiceNumberKey(item.code) === number;
+}
+
 function invoiceCardFacts(row) {
   const source = row || {};
   const lines = Array.isArray(source.lines) ? source.lines : [];
@@ -1242,7 +1323,7 @@ window.Alpine.data('appState', () => ({
     const id = String(rawId || code || "").trim();
     if (!label) return;
     const rows = (this.invoiceRows || []).slice();
-    let row = rows.find((item) => item.id === id || item.code === label || item.id === label);
+    let row = rows.find((item) => sameInvoiceNumber(item, id, label));
     const line = {
       date: snapshot.iso,
       details: snapshot.jobDetails,
@@ -1291,8 +1372,7 @@ window.Alpine.data('appState', () => ({
   },
   viewLoggedInvoice() {
     const logged = this.jobLogged || {};
-    const wanted = [logged.id, logged.code].filter(Boolean);
-    const row = (this.invoiceRows || []).find((item) => wanted.indexOf(item.id) !== -1 || wanted.indexOf(item.code) !== -1);
+    const row = (this.invoiceRows || []).find((item) => sameInvoiceNumber(item, logged.id, logged.code));
     const id = row ? row.id : (logged.id || logged.code);
     if (!id) return;
     this.currentTab = "dashboard";
@@ -1367,7 +1447,7 @@ window.Alpine.data('appState', () => ({
         this.showLoggedJob(code, rawId, amount);
         this.resetJobForm();
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
-        const found = (this.invoiceRows || []).some((item) => item.id === rawId || item.id === code || item.code === code);
+        const found = (this.invoiceRows || []).some((item) => sameInvoiceNumber(item, rawId, code));
         if (!found) this.placeLoggedDraft(code, rawId, snapshot);
         return;
       }
@@ -1504,7 +1584,7 @@ window.Alpine.data('appState', () => ({
     if (res.businessName) this.businessName = res.businessName;
     this.asOf = res.asOf || "";
     this.periodData = res.periods || {};
-    this.invoiceRows = Array.isArray(res.invoices) ? res.invoices : [];
+    this.invoiceRows = collapseInvoiceRows(Array.isArray(res.invoices) ? res.invoices : []);
     const open = res.open || {};
     this.openSendAmount = this.money(open.draftAmount);
     this.openSendCount = this.countLabel(open.draftCount, "invoice", "invoices");
@@ -1517,12 +1597,12 @@ window.Alpine.data('appState', () => ({
     if (open.writtenOffCount) doneBits.push(this.countLabel(open.writtenOffCount, "written off", "written off"));
     this.openDoneAmount = this.money(open.paidAmount);
     this.openDoneCount = doneBits.length ? doneBits.join(" · ") : "0 invoices";
-    this.syncOpenPiles(Number(open.draftCount) || 0, Number(open.dueCount) || 0, (Number(open.paidCount) || 0) + (Number(open.writtenOffCount) || 0));
+    this.recomputeOpenPiles();
     this.syncPeriodClasses();
     this.syncActive();
     this.syncVisibleInvoices();
     if (keepView === "detail" && keepId) {
-      const row = this.invoiceRows.find((item) => item.id === keepId);
+      const row = this.invoiceRows.find((item) => sameInvoiceNumber(item, keepId, keepId));
       if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], keepEmail);
       else this.dashView = "home";
     } else {
@@ -1809,17 +1889,24 @@ window.Alpine.data('appState', () => ({
     setTimeout(go, 120);
   },
   restampInvoice(id, status) {
-    const row = (this.invoiceRows || []).find((item) => item.id === id);
-    if (!row) return;
+    const rows = (this.invoiceRows || []).slice();
     const label = status === "Undo" ? "Invoiced" : status;
-    row.status = label;
-    if (label === "Draft") row.kind = "draft";
-    else if (label === "Invoiced") row.kind = "due";
-    else if (label === "Paid") row.kind = "paid";
-    else if (label === "Written off") row.kind = "writtenoff";
+    let touched = false;
+    rows.forEach((item) => {
+      if (!sameInvoiceNumber(item, id, id)) return;
+      touched = true;
+      item.status = label;
+      item.kind = kindForStatus(label);
+    });
+    if (!touched) return;
+    this.invoiceRows = collapseInvoiceRows(rows);
     this.recomputeOpenPiles();
     this.syncVisibleInvoices();
-    if (this.detailId === row.id) this.setDetailPhase(label);
+    const open = (this.invoiceRows || []).find((item) => sameInvoiceNumber(item, id, id));
+    if (open && (this.detailId === id || this.detailId === open.id)) {
+      this.detailId = open.id;
+      this.setDetailPhase(label);
+    }
   },
   recomputeOpenPiles() {
     const rows = this.invoiceRows || [];
@@ -2275,6 +2362,7 @@ window.Alpine.data('appState', () => ({
     try {
       const res = await this.api("compileInvoice", { invoiceId: this.detailId }, { write: true });
       if (res && res.success) {
+        this.restampInvoice(this.detailId, "Invoiced");
         this.setDetailPhase("Invoiced");
         this.confirmOnHome("Marked invoiced.");
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });

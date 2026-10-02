@@ -741,6 +741,45 @@ test("invoice print code follows the INV-Template dropdown values", function (ap
   assert(api.invoicePdfName_("INV-JR26-013", "2026-09-22") === "INV-JR26-013_2026-09-22.pdf", "pdf name");
 });
 
+test("one invoice number is listed once after it is invoiced", function (api, workbook) {
+  const invoices = workbook.sheets.InvoiceList;
+  const time = workbook.sheets["Time&Attendance"];
+  invoices.getRange(2, 1).setValue("INV-EB-017");
+  invoices.getRange(2, 2).setValue("Michael Jennings");
+  invoices.getRange(2, 7).setValue(150);
+  invoices.getRange(2, 9).setValue("Invoiced");
+  invoices.getRange(3, 1).setValue("17");
+  invoices.getRange(3, 2).setValue("Michael Jennings");
+  invoices.getRange(3, 7).setValue(150);
+  invoices.getRange(3, 9).setValue("Draft");
+  invoices.getRange(4, 1).setValue("INV-JR26-017");
+  invoices.getRange(4, 2).setValue("Michael Jennings");
+  invoices.getRange(4, 7).setValue(150);
+  invoices.getRange(4, 9).setValue("Draft");
+  time.getRange(2, 2).setValue("INV-EB-017");
+  time.getRange(2, 3).setValue(17);
+  time.getRange(2, 4).setValue("Michael Jennings");
+  time.getRange(2, 5).setValue(atNoon(2026, 9, 1));
+  time.getRange(2, 6).setValue("QA redeploy");
+  time.getRange(2, 10).setValue(1);
+  time.getRange(2, 12).setValue(150);
+
+  const report = api.buildDashboardReport_(workbook, atNoon(2026, 9, 1));
+  assert(report.success, report.error);
+  const matches = (report.invoices || []).filter(function (inv) {
+    return inv.id === "INV-EB-017" || inv.code === "INV-EB-017" || inv.id === "17" || inv.id === "INV-JR26-017" || inv.code === "INV-JR26-017";
+  });
+  assert(matches.length === 1, "duplicate cards " + JSON.stringify(matches.map(function (item) {
+    return item.id + " " + item.code + " " + item.status + " " + item.kind;
+  })));
+  assert(matches[0].id === "INV-EB-017", matches[0].id);
+  assert(matches[0].code === "INV-EB-017", matches[0].code);
+  assert(matches[0].status === "Invoiced" && matches[0].kind === "due", matches[0].status + " " + matches[0].kind);
+  assert(report.open.draftCount === 0, "draft pile " + report.open.draftCount);
+  assert(report.open.dueCount === 1, "collect pile " + report.open.dueCount);
+  assert(!report.unbilled["Michael Jennings"], "invoiced time stayed unbilled " + JSON.stringify(report.unbilled));
+});
+
 test("compile invoice marks one draft as Invoiced and stamps a blank date", function (api, workbook) {
   const invoices = workbook.sheets["InvoiceList"];
   invoices.getRange(2, 1).setValue("INV-JR26-014");
