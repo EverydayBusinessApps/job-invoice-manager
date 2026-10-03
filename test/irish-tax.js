@@ -189,4 +189,52 @@ const longWork = context.invoiceCardFacts({
 assert(longWork.work.length <= 90, "work stays short " + longWork.work);
 assert(/…$/.test(longWork.work), "long work is cut " + longWork.work);
 
+const sampleProfit = context.sampleDashboard();
+const site = sampleProfit.invoices.filter((row) => row.id === "INV-EB-002")[0];
+const siteFigure = context.invoiceJobProfit(site);
+assert(siteFigure.due === 246, "sample amount due " + siteFigure.due);
+assert(siteFigure.jobs[0].materials === 30 && siteFigure.jobs[0].hired === 12, JSON.stringify(siteFigure.jobs[0]));
+assert(siteFigure.jobs[0].km === 50 && siteFigure.jobs[0].mileageRate === 0.25, JSON.stringify(siteFigure.jobs[0]));
+assert(siteFigure.jobs[0].mileageMoney === 12.5 && siteFigure.jobs[0].loadedHourly === 10 && siteFigure.jobs[0].loadedMoney === 40, JSON.stringify(siteFigure.jobs[0]));
+assert(siteFigure.jobs[0].costs === 94.5 && siteFigure.profit === 151.5, JSON.stringify(siteFigure));
+const listed = context.jobsByProfit(sampleProfit.invoices);
+assert(listed[0].code === "INV-EB-002" && listed[0].profit === 151.5, JSON.stringify(listed[0]));
+const callout = listed.filter((job) => job.code === "INV-EB-005")[0];
+assert(callout && callout.costs === 0 && callout.profit === 40, JSON.stringify(callout));
+const settingsState = context.window.Alpine.dataStore.appState();
+const previewSettings = settingsState.sampleSettings();
+const loadedSetting = previewSettings.settings.filter((row) => row.label === "Loaded hourly cost")[0];
+const mileageSetting = previewSettings.settings.filter((row) => row.label === "Mileage rate")[0];
+assert(loadedSetting && loadedSetting.value === "18" && loadedSetting.row === 25, JSON.stringify(loadedSetting));
+assert(mileageSetting && mileageSetting.value === "0.40" && mileageSetting.row === 26, JSON.stringify(mileageSetting));
+assert(Number(loadedSetting.value) !== siteFigure.jobs[0].loadedHourly, "preview settings matched the stamped loaded cost");
+assert(Number(mileageSetting.value) !== siteFigure.jobs[0].mileageRate, "preview settings matched the stamped mileage rate");
+assert(settingsState.settingKey("Loaded hourly cost").key === "loadedCost", "loaded cost label");
+assert(settingsState.settingKey("Mileage rate").key === "mileageRate", "mileage rate label");
+
+const several = {
+  total: 150,
+  vatApplied: "Y",
+  vatRate: 23,
+  vat: 34.5,
+  gross: 184.5,
+  lines: [
+    { details: "First", hours: 2, amount: 100, materials: 10, hired: 0, mileageKm: 0, mileageRate: 0.25, loadedHourly: 10 },
+    { details: "Second", hours: 1, amount: 50, materials: 0, hired: 5, mileageKm: 10, mileageRate: 0.25, loadedHourly: 10 }
+  ]
+};
+const split = context.invoiceJobProfit(several);
+assert(split.due === 184.5 && split.profit === 137, JSON.stringify(split));
+assert(split.jobs[0].due === 123 && split.jobs[0].profit === 93, JSON.stringify(split.jobs[0]));
+assert(split.jobs[1].due === 61.5 && split.jobs[1].profit === 44, JSON.stringify(split.jobs[1]));
+const oddGross = context.invoiceJobProfit({
+  total: 200,
+  vatApplied: "Y",
+  vatRate: 23,
+  vat: 50,
+  gross: 250,
+  lines: [{ amount: 200, hours: 4, materials: 0, hired: 0, mileageKm: 0, mileageRate: 0, loadedHourly: 0 }]
+});
+assert(oddGross.due === 250 && oddGross.jobs[0].due === 250 && oddGross.profit === 250, JSON.stringify(oddGross));
+
 console.log("Irish sole trader indication passed.");

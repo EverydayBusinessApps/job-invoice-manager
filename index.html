@@ -8,7 +8,7 @@
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=29">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=43"></script>
+  <script defer src="app.js?v=44"></script>
 </head>
 <body>
 
@@ -39,6 +39,7 @@
       <div x-show="currentTab === 'dashboard'">
         <div x-show="dashView === 'home'" class="home-board">
           <button type="button" data-action="setTrackerTab">Log a job</button>
+          <button type="button" class="btn-line" data-action="openProfitList">Jobs by profit</button>
           <h2 class="home-heading">Invoices</h2>
           <div class="pile-list">
             <button type="button" class="pile" data-action="openList" data-id="send">
@@ -123,6 +124,44 @@
           <p class="page-lead" x-show="listEmpty" x-text="listEmptyLabel"></p>
         </div>
 
+        <div x-show="dashView === 'profit'" class="sheet-page">
+          <button type="button" class="back-home" data-action="showDashHome">Back to home</button>
+          <h2 class="page-title">Jobs by profit</h2>
+          <p class="page-lead">Amount due minus materials, hired equipment, mileage, and the loaded hourly cost stored on the job.</p>
+          <div id="profit-list" class="inv-stack">
+            <template x-for="job in profitJobs">
+              <article class="inv-card">
+                <div class="inv-client" x-text="job.title"></div>
+                <div class="inv-code" x-text="job.meta"></div>
+                <div class="inv-amount" x-text="job.profit"></div>
+                <div class="inv-facts">
+                  <div class="inv-fact">
+                    <span class="inv-k">Amount due</span>
+                    <span x-text="job.due"></span>
+                  </div>
+                  <div class="inv-fact">
+                    <span class="inv-k">Materials</span>
+                    <span x-text="job.materials"></span>
+                  </div>
+                  <div class="inv-fact">
+                    <span class="inv-k">Hired equipment</span>
+                    <span x-text="job.hired"></span>
+                  </div>
+                  <div class="inv-fact">
+                    <span class="inv-k">Mileage</span>
+                    <span x-text="job.mileage"></span>
+                  </div>
+                  <div class="inv-fact">
+                    <span class="inv-k">Loaded cost</span>
+                    <span x-text="job.loaded"></span>
+                  </div>
+                </div>
+              </article>
+            </template>
+          </div>
+          <p class="page-lead" x-show="profitJobsEmpty">No jobs yet.</p>
+        </div>
+
         <div x-show="dashView === 'detail'" class="sheet-page">
           <button type="button" class="back-home" data-action="showDashHome">Back to home</button>
           <article class="invoice-sheet">
@@ -156,6 +195,13 @@
                 <dd x-text="detailPeriod"></dd>
               </div>
             </dl>
+            <div id="invoice-profit">
+              <div class="invoice-total-row invoice-grand">
+                <span>Profit</span>
+                <span id="invoice-profit-figure" x-text="detailProfit"></span>
+              </div>
+              <p class="page-lead" id="invoice-profit-note" x-text="detailProfitNote"></p>
+            </div>
             <div class="invoice-lines">
               <template x-for="line in detailLines">
                 <div class="invoice-line">
@@ -306,6 +352,20 @@
               <option value="two hours">2 hrs</option>
             </select>
           </div>
+
+          <div class="form-group">
+            <label for="job-materials">Materials</label>
+            <input id="job-materials" type="text" inputmode="decimal" x-model="form.materials" placeholder="0">
+          </div>
+          <div class="form-group">
+            <label for="job-hired">Hired equipment</label>
+            <input id="job-hired" type="text" inputmode="decimal" x-model="form.hired" placeholder="0">
+          </div>
+          <div class="form-group">
+            <label for="job-mileage">Mileage (km)</label>
+            <input id="job-mileage" type="text" inputmode="decimal" x-model="form.mileageKm" placeholder="0">
+          </div>
+          <p class="page-lead">Optional. A blank box counts as zero. The mileage rate and loaded hourly cost come from Settings and stay on the job.</p>
 
           <button type="button" data-disable-when="saving" @click="submitForm" x-text="logButtonLabel"></button>
         </section>
@@ -537,6 +597,16 @@
             <label>Payment terms</label>
             <input type="text" inputmode="numeric" x-model="settingsForm.paymentTerms" data-disable-when="saving">
             <p class="vat-note">Days after the invoice date. A client with their own terms uses those. The due date is written when the invoice is marked invoiced.</p>
+          </div>
+          <div class="form-group" x-show="settingsShow.loadedCost">
+            <label for="loaded-hourly-cost">Loaded hourly cost</label>
+            <input id="loaded-hourly-cost" type="text" inputmode="decimal" x-model="settingsForm.loadedCost" data-disable-when="saving">
+            <p class="page-lead">One hourly figure for insurance, the van, pension, and health.</p>
+          </div>
+          <div class="form-group" x-show="settingsShow.mileageRate">
+            <label for="mileage-rate">Mileage rate</label>
+            <input id="mileage-rate" type="text" inputmode="decimal" x-model="settingsForm.mileageRate" placeholder="0.00" data-disable-when="saving">
+            <p class="page-lead">Euros per km. Each job keeps the rate stored when it was logged.</p>
           </div>
           <details class="option-group" x-show="settingsShow.vat">
             <summary>VAT</summary>

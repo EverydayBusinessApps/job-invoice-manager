@@ -271,7 +271,7 @@ function sampleDashboard() {
       year: { label: "1 Nov 2025 – 31 Oct 2026", hours: 12, shifts: 5, clients: 2, billable: 470, avgRate: 39.17, topClient: "Acme", topClientHours: 9, paid: 100, paidCount: 1, sent: 420, sentCount: 4, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 80, badDebtCount: 1 }
     },
     invoices: [
-      row({ id: "INV-EB-002", code: "INV-EB-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, vatApplied: "Y", vatRate: 23, vat: 46, gross: 246, email: "acme@example.com", terms: 14, payUrl: "https://example.com/pay/INV-EB-002", jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
+      row({ id: "INV-EB-002", code: "INV-EB-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, vatApplied: "Y", vatRate: 23, vat: 46, gross: 246, email: "acme@example.com", terms: 14, payUrl: "https://example.com/pay/INV-EB-002", jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200, materials: 30, hired: 12, mileageKm: 50, mileageRate: 0.25, loadedHourly: 10 }] }),
       row({ id: "INV-EB-005", code: "INV-EB-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, payUrl: "https://example.com/pay/INV-EB-005", inWeek: true, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
       row({ id: "INV-EB-003", code: "INV-EB-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, payUrl: "https://example.com/pay/INV-EB-003", inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-EB-001", code: "INV-EB-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
@@ -443,6 +443,86 @@ function invoicePayable(row) {
     rate: row.vatRate,
     payable: isFinite(gross) ? gross : netMoney
   };
+}
+
+function blankCost(value) {
+  if (value == null || value === "") return 0;
+  const n = Number(value);
+  return isFinite(n) ? n : 0;
+}
+
+function jobCostParts(line) {
+  const source = line || {};
+  const materials = blankCost(source.materials);
+  const hired = blankCost(source.hired);
+  const km = blankCost(source.mileageKm);
+  const mileageRate = blankCost(source.mileageRate);
+  const loadedHourly = blankCost(source.loadedHourly);
+  const hours = blankCost(source.hours);
+  const mileageMoney = roundCents(km * mileageRate);
+  const loadedMoney = roundCents(loadedHourly * hours);
+  return {
+    materials: materials,
+    hired: hired,
+    km: km,
+    mileageRate: mileageRate,
+    loadedHourly: loadedHourly,
+    hours: hours,
+    mileageMoney: mileageMoney,
+    loadedMoney: loadedMoney,
+    costs: roundCents(materials + hired + mileageMoney + loadedMoney)
+  };
+}
+
+function stampedVatFraction(invoice) {
+  const rate = Number(invoice && invoice.vatRate);
+  if (!isFinite(rate) || rate <= 0) return 0;
+  if (rate > 1) return rate / 100;
+  return rate;
+}
+
+function jobAmountDue(line, invoice, lineCount) {
+  const charge = roundCents(line && line.amount != null ? line.amount : (line && line.charge));
+  const count = lineCount == null ? 1 : lineCount;
+  if (count <= 1) return invoicePayable(invoice).payable;
+  const applied = String(invoice && invoice.vatApplied || "").trim().toUpperCase() === "Y";
+  if (!applied) return charge;
+  return roundCents(charge * (1 + stampedVatFraction(invoice)));
+}
+
+function invoiceJobProfit(invoice) {
+  const source = invoice || {};
+  const lines = Array.isArray(source.lines) ? source.lines : [];
+  const count = lines.length;
+  const jobs = lines.map((line) => {
+    const parts = jobCostParts(line);
+    const due = jobAmountDue(line, source, count);
+    return Object.assign({}, parts, {
+      due: due,
+      profit: roundCents(due - parts.costs),
+      details: (line && line.details) || "",
+      date: (line && line.date) || "",
+      clientName: source.clientName || "",
+      code: source.code || source.id || ""
+    });
+  });
+  const costs = roundCents(jobs.reduce((sum, job) => sum + job.costs, 0));
+  const due = invoicePayable(source).payable;
+  return { due: due, costs: costs, profit: roundCents(due - costs), jobs: jobs };
+}
+
+function jobsByProfit(invoices) {
+  const jobs = [];
+  (Array.isArray(invoices) ? invoices : []).forEach((invoice) => {
+    invoiceJobProfit(invoice).jobs.forEach((job) => jobs.push(job));
+  });
+  jobs.sort((a, b) => {
+    if (b.profit !== a.profit) return b.profit - a.profit;
+    const client = String(a.clientName).localeCompare(String(b.clientName));
+    if (client) return client;
+    return String(a.date).localeCompare(String(b.date));
+  });
+  return jobs;
 }
 
 function vatRateLabel(rate) {
@@ -725,11 +805,12 @@ window.Alpine.data('appState', () => ({
   settingsShow: {
     rate: true, yearEnd: true, currency: true, name: true, address: true, email: true,
     website: true, phone: true, bank: true, iban: true, vat: true, vatApplied: true, vatRate: true,
-    paymentTerms: true
+    paymentTerms: true, loadedCost: true, mileageRate: true
   },
   settingsForm: {
     rate: "", yearEnd: "", currency: "", name: "", address: "", email: "",
-    website: "", phone: "", bank: "", iban: "", vatApplied: "N", vatRate: "", paymentTerms: "14"
+    website: "", phone: "", bank: "", iban: "", vatApplied: "N", vatRate: "", paymentTerms: "14",
+    loadedCost: "", mileageRate: ""
   },
   asOf: "",
   openSendAmount: "€0.00",
@@ -813,6 +894,10 @@ window.Alpine.data('appState', () => ({
   detailLines: [],
   detailLinesRaw: [],
   detailLinesEmpty: true,
+  detailProfit: "€0.00",
+  detailProfitNote: "",
+  profitJobs: [],
+  profitJobsEmpty: true,
   driveUrl: "",
   jobLogged: { text: "", id: "", code: "" },
   form: { clientName: '', date: (() => {
@@ -820,7 +905,7 @@ window.Alpine.data('appState', () => ({
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     return dd + '/' + mm + '/' + now.getFullYear();
-  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '' },
+  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '', materials: '', hired: '', mileageKm: '' },
 
   timeToMinutes(value) {
     if (value == null || value === '') return null;
@@ -1422,9 +1507,10 @@ window.Alpine.data('appState', () => ({
     if (!isFinite(rate)) return 0;
     return Math.round(this.jobHours() * rate * 100) / 100;
   },
-  loggedJobSnapshot(amount) {
+  loggedJobSnapshot(amount, costs) {
     const parts = this.jobDateParts(this.form.date);
     const record = this.clientRecordFor(this.form.clientName);
+    const extra = costs || {};
     return {
       client: this.form.clientName,
       iso: parts ? parts.iso : "",
@@ -1433,7 +1519,12 @@ window.Alpine.data('appState', () => ({
       finish: this.form.finish,
       hours: this.jobHours(),
       amount: amount,
-      email: record && record.email ? record.email : ""
+      email: record && record.email ? record.email : "",
+      materials: extra.materials || 0,
+      hired: extra.hired || 0,
+      mileageKm: extra.mileageKm || 0,
+      mileageRate: expenseAmount(this.settingsForm.mileageRate) || 0,
+      loadedHourly: expenseAmount(this.settingsForm.loadedCost) || 0
     };
   },
   showLoggedJob(code, rawId, amount) {
@@ -1456,7 +1547,12 @@ window.Alpine.data('appState', () => ({
       start: snapshot.start,
       finish: snapshot.finish,
       hours: snapshot.hours,
-      amount: snapshot.amount
+      amount: snapshot.amount,
+      materials: snapshot.materials || 0,
+      hired: snapshot.hired || 0,
+      mileageKm: snapshot.mileageKm || 0,
+      mileageRate: snapshot.mileageRate || 0,
+      loadedHourly: snapshot.loadedHourly || 0
     };
     if (!row) {
       rows.push({
@@ -1490,6 +1586,9 @@ window.Alpine.data('appState', () => ({
     this.form.start = "08:00";
     this.form.lunch = "na";
     this.form.finish = "16:30";
+    this.form.materials = "";
+    this.form.hired = "";
+    this.form.mileageKm = "";
     this.form.invoiceMode = "new";
     this.form.invoiceId = "";
     this.syncOvernight();
@@ -1534,6 +1633,13 @@ window.Alpine.data('appState', () => ({
         return;
       }
     }
+    const materials = expenseAmount(this.form.materials);
+    const hired = expenseAmount(this.form.hired);
+    const mileageKm = expenseAmount(this.form.mileageKm);
+    if (materials == null || hired == null || mileageKm == null) {
+      this.setFeedback("Could not log the job. Enter materials, hired equipment, and mileage as numbers, or leave them blank.", true);
+      return;
+    }
     this.syncOvernight();
     this.saving = true;
     this.loading = true;
@@ -1543,7 +1649,7 @@ window.Alpine.data('appState', () => ({
     const chosenId = this.form.invoiceId;
     try {
       const estimate = this.jobCharge();
-      const snapshot = this.loggedJobSnapshot(estimate);
+      const snapshot = this.loggedJobSnapshot(estimate, { materials: materials, hired: hired, mileageKm: mileageKm });
       if (this.previewMode) {
         await this.wait(800);
         const code = adding && chosenId ? chosenId : "INV-EB-018";
@@ -1562,7 +1668,10 @@ window.Alpine.data('appState', () => ({
         finish: this.form.finish,
         overnight: this.overnight,
         invoiceMode: this.form.invoiceMode,
-        invoiceId: this.form.invoiceId
+        invoiceId: this.form.invoiceId,
+        materials: materials,
+        hired: hired,
+        mileageKm: mileageKm
       }, { write: true });
       if (result && result.success) {
         const amount = result.amount != null && isFinite(Number(result.amount)) ? Number(result.amount) : estimate;
@@ -1729,6 +1838,7 @@ window.Alpine.data('appState', () => ({
     this.syncPeriodClasses();
     this.syncActive();
     this.syncVisibleInvoices();
+    this.syncProfitJobs();
     if (keepView === "detail" && keepId) {
       const row = this.invoiceRows.find((item) => sameInvoiceNumber(item, keepId, keepId));
       if (row) this.fillDetail(row, row.lines || this.detailLinesRaw || [], keepEmail);
@@ -1920,6 +2030,43 @@ window.Alpine.data('appState', () => ({
     if (kind === "due" || kind === "overdue" || kind === "send" || kind === "draft") this.startPayWatch();
     else this.stopPayWatch();
   },
+  openProfitList() {
+    this.syncProfitJobs();
+    this.dashView = "profit";
+    this.driveUrl = "";
+    this.clearFeedback();
+    this.scrollPage();
+    this.stopPayWatch();
+  },
+  syncProfitJobs() {
+    const jobs = jobsByProfit(this.invoiceRows);
+    this.profitJobs = jobs.map((job) => ({
+      title: (job.clientName || "No client") + (job.details ? " · " + job.details : ""),
+      meta: [job.code, job.date ? this.prettyDate(job.date) : ""].filter(Boolean).join(" · "),
+      profit: this.money(job.profit),
+      due: this.money(job.due),
+      materials: this.money(job.materials),
+      hired: this.money(job.hired),
+      mileage: job.km + " km × " + this.money(job.mileageRate) + " = " + this.money(job.mileageMoney),
+      loaded: this.money(job.loadedHourly) + " × " + this.hoursText(job.hours) + " h = " + this.money(job.loadedMoney)
+    }));
+    this.profitJobsEmpty = this.profitJobs.length === 0;
+  },
+  profitSentence(figured) {
+    const jobs = (figured && figured.jobs) || [];
+    const materials = roundCents(jobs.reduce((sum, job) => sum + job.materials, 0));
+    const hired = roundCents(jobs.reduce((sum, job) => sum + job.hired, 0));
+    const mileageMoney = roundCents(jobs.reduce((sum, job) => sum + job.mileageMoney, 0));
+    const loadedMoney = roundCents(jobs.reduce((sum, job) => sum + job.loadedMoney, 0));
+    let mileage = this.money(mileageMoney);
+    let loaded = this.money(loadedMoney);
+    if (jobs.length === 1) {
+      const job = jobs[0];
+      mileage = this.money(job.mileageMoney) + " (" + job.km + " km × " + this.money(job.mileageRate) + ")";
+      loaded = this.money(job.loadedMoney) + " (" + this.money(job.loadedHourly) + " × " + this.hoursText(job.hours) + " h)";
+    }
+    return this.money(figured.due) + " due, minus " + this.money(materials) + " materials, " + this.money(hired) + " hired equipment, " + mileage + " mileage, and " + loaded + " loaded cost.";
+  },
   showDashHome() {
     this.dashView = "home";
     this.driveUrl = "";
@@ -2110,6 +2257,9 @@ window.Alpine.data('appState', () => ({
     const job = row.jobDetails && row.jobDetails !== "—" ? row.jobDetails : fromLine;
     this.detailWork = job ? (job + " · " + this.detailHours) : this.detailHours;
     this.detailTotal = this.money(pay.payable);
+    const figured = invoiceJobProfit(Object.assign({}, row, { lines: lines || row.lines || [] }));
+    this.detailProfit = this.money(figured.profit);
+    this.detailProfitNote = this.profitSentence(figured);
     this.detailService = row.servicePeriod || "—";
     this.detailJob = row.jobDetails || "—";
     const letterRow = this.invoiceLetterRow(row);
@@ -2812,7 +2962,9 @@ window.Alpine.data('appState', () => ({
         row(12, "IBAN", "IEXX XXXX XXXX XXXX XXXX XX"),
         row(22, "vatApplied", "N"),
         row(23, "vatRate", "23"),
-        row(24, "paymentTerms", "14")
+        row(24, "paymentTerms", "14"),
+        row(25, "Loaded hourly cost", "18"),
+        row(26, "Mileage rate", "0.40")
       ]
     };
   },
@@ -2832,7 +2984,9 @@ window.Alpine.data('appState', () => ({
       vatapplied: "vatApplied",
       vatrate: "vatRate",
       "payment terms": "paymentTerms",
-      paymentterms: "paymentTerms"
+      paymentterms: "paymentTerms",
+      "loaded hourly cost": "loadedCost",
+      "mileage rate": "mileageRate"
     };
     if (settings[name]) return { key: settings[name], kind: "setting" };
     return null;
@@ -2856,7 +3010,7 @@ window.Alpine.data('appState', () => ({
     const show = {
       rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
       website: false, phone: false, bank: false, iban: false, vat: false, vatApplied: false, vatRate: false,
-      paymentTerms: true
+      paymentTerms: true, loadedCost: true, mileageRate: true
     };
     const meta = {};
     const extra = [];
@@ -2972,6 +3126,12 @@ window.Alpine.data('appState', () => ({
     if (!this.settingsMeta.paymentTerms) {
       settings.push({ row: 0, label: "paymentTerms", value: this.settingsForm.paymentTerms || "14" });
     }
+    if (!this.settingsMeta.loadedCost) {
+      settings.push({ row: 0, label: "Loaded hourly cost", value: this.settingsForm.loadedCost || "0" });
+    }
+    if (!this.settingsMeta.mileageRate) {
+      settings.push({ row: 0, label: "Mileage rate", value: this.settingsForm.mileageRate || "0" });
+    }
     const payload = { settings: settings };
     if (this.logoDirty && this.logoPreview) payload.logo = this.logoPreview;
     return payload;
@@ -2987,6 +3147,10 @@ window.Alpine.data('appState', () => ({
     if (this.settingsShow.vatRate && vatRate && !/^\d+(\.\d+)?$/.test(vatRate)) return "VAT rate must be a number, for example 23.";
     const terms = (this.settingsForm.paymentTerms || "").trim();
     if (terms && !/^\d+$/.test(terms)) return "Payment terms need a whole number of days, for example 14.";
+    const loadedCost = (this.settingsForm.loadedCost || "").trim();
+    if (loadedCost && !/^\d+(\.\d+)?$/.test(loadedCost.replace(/,/g, ""))) return "Loaded hourly cost must be a number.";
+    const mileageRate = (this.settingsForm.mileageRate || "").trim();
+    if (mileageRate && !/^\d+(\.\d+)?$/.test(mileageRate.replace(/,/g, ""))) return "Mileage rate must be a number.";
     return "";
   },
   toggleVat() {

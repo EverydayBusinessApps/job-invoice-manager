@@ -558,6 +558,8 @@ function executeTimeLog(payload) {
   if (!clockParts_(payload.start) || !clockParts_(payload.finish)) {
     return { success: false, error: "Choose a start and finish time." };
   }
+  const costs = checkedJobCosts_(payload);
+  if (!costs.ok) return { success: false, error: costs.error };
 
   const overnight = payload.overnight === true || isOvernightTime(payload.start, payload.finish);
   const invoiceSheet = ss.getSheetByName("InvoiceList");
@@ -598,6 +600,7 @@ function executeTimeLog(payload) {
   }
   timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
+  writeJobCosts_(timeSheet, nextRow, costs, ss);
 
   const amount = loggedShiftAmount_(timeSheet, nextRow);
   refreshStampedInvoiceVat_(ss, invoiceId);
@@ -906,6 +909,151 @@ function roundMoney_(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
+// Time&Attendance columns O–S. Appended after Billed Rate (N). Values, not formulas.
+function jobCostColumns_() {
+  return { materials: 15, hired: 16, km: 17, mileageRate: 18, loaded: 19 };
+}
+
+function optionalMoney_(raw, label) {
+  const text = String(raw == null ? "" : raw).replace(/,/g, "").trim();
+  if (!text) return { ok: true, value: 0 };
+  if (!/^\d+(\.\d+)?$/.test(text)) return { ok: false, error: label + " must be a number." };
+  return { ok: true, value: roundMoney_(Number(text)) };
+}
+
+function checkedJobCosts_(payload) {
+  const source = payload || {};
+  const materials = optionalMoney_(source.materials, "Materials");
+  if (!materials.ok) return materials;
+  const hired = optionalMoney_(source.hired, "Hired equipment");
+  if (!hired.ok) return hired;
+  const km = optionalMoney_(source.mileageKm != null ? source.mileageKm : source.mileage, "Mileage");
+  if (!km.ok) return km;
+  return { ok: true, materials: materials.value, hired: hired.value, km: km.value };
+}
+
+function costOrZero_(value) {
+  const n = numberOrNull_(value);
+  if (n == null || !isFinite(n)) return 0;
+  return n;
+}
+
+function configLabeledNumber_(ss, pattern) {
+  const config = ss && ss.getSheetByName ? ss.getSheetByName("Config") : null;
+  if (!config || config.getLastRow() < 1) return 0;
+  const rows = config.getRange(1, 1, config.getLastRow(), 2).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    if (!pattern.test(clientText_(rows[i][0]))) continue;
+    const n = numberOrNull_(rows[i][1]);
+    if (n == null || !isFinite(n) || n < 0) return 0;
+    return n;
+  }
+  return 0;
+}
+
+function ensureJobCostHeaders_(timeSheet) {
+  if (!timeSheet) return;
+  const headers = ["Materials", "Hired equipment", "Mileage km", "Mileage rate", "Loaded hourly cost"];
+  const cols = jobCostColumns_();
+  const start = cols.materials;
+  for (let i = 0; i < headers.length; i++) {
+    const cell = timeSheet.getRange(1, start + i);
+    if (!clientText_(cell.getValue())) cell.setValue(headers[i]);
+  }
+}
+
+function cellIsBlank_(value) {
+  return value === "" || value == null;
+}
+
+// Materials, hired equipment, and km can be written again. The mileage rate and
+// loaded hourly cost stay as they were when the row first received them.
+function writeJobCosts_(timeSheet, row, costs, ss) {
+  if (!timeSheet || !row || !costs) return;
+  ensureJobCostHeaders_(timeSheet);
+  const cols = jobCostColumns_();
+  timeSheet.getRange(row, cols.materials).setValue(costs.materials);
+  timeSheet.getRange(row, cols.hired).setValue(costs.hired);
+  timeSheet.getRange(row, cols.km).setValue(costs.km);
+  const mileageCell = timeSheet.getRange(row, cols.mileageRate);
+  const loadedCell = timeSheet.getRange(row, cols.loaded);
+  if (cellIsBlank_(mileageCell.getValue())) {
+    mileageCell.setValue(configLabeledNumber_(ss, /^mileage rate$/i));
+  }
+  if (cellIsBlank_(loadedCell.getValue())) {
+    loadedCell.setValue(configLabeledNumber_(ss, /^loaded hourly cost$/i));
+  }
+}
+
+function jobCostPartsFromLine_(line) {
+  const source = line || {};
+  const materials = costOrZero_(source.materials);
+  const hired = costOrZero_(source.hired);
+  const km = costOrZero_(source.mileageKm);
+  const mileageRate = costOrZero_(source.mileageRate);
+  const loadedHourly = costOrZero_(source.loadedHourly);
+  const hours = costOrZero_(source.hours);
+  const mileageMoney = roundMoney_(km * mileageRate);
+  const loadedMoney = roundMoney_(loadedHourly * hours);
+  return {
+    materials: materials,
+    hired: hired,
+    km: km,
+    mileageRate: mileageRate,
+    loadedHourly: loadedHourly,
+    hours: hours,
+    mileageMoney: mileageMoney,
+    loadedMoney: loadedMoney,
+    costs: roundMoney_(materials + hired + mileageMoney + loadedMoney)
+  };
+}
+
+function stampedVatFraction_(invoice) {
+  const rate = numberOrNull_(invoice && invoice.vatRate);
+  if (rate == null || !isFinite(rate) || rate <= 0) return 0;
+  if (rate > 1) return rate / 100;
+  return rate;
+}
+
+function jobAmountDueFromLine_(line, invoice, lineCount) {
+  const charge = roundMoney_(costOrZero_(line && (line.amount != null ? line.amount : line.charge)));
+  const count = lineCount == null ? 1 : lineCount;
+  if (count <= 1) {
+    const payable = numberOrNull_(invoice && invoice.payable);
+    if (payable != null && isFinite(payable)) return roundMoney_(payable);
+    return charge;
+  }
+  const applied = String(invoice && invoice.vatApplied || "").trim().toUpperCase() === "Y";
+  if (!applied) return charge;
+  return roundMoney_(charge * (1 + stampedVatFraction_(invoice)));
+}
+
+function stampLineProfit_(invoice) {
+  if (!invoice) return invoice;
+  const lines = invoice.lines || [];
+  const count = lines.length;
+  let costs = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const parts = jobCostPartsFromLine_(line);
+    line.materials = parts.materials;
+    line.hired = parts.hired;
+    line.mileageKm = parts.km;
+    line.mileageRate = parts.mileageRate;
+    line.loadedHourly = parts.loadedHourly;
+    line.mileageMoney = parts.mileageMoney;
+    line.loadedMoney = parts.loadedMoney;
+    line.costs = parts.costs;
+    line.amountDue = jobAmountDueFromLine_(line, invoice, count);
+    line.profit = roundMoney_(line.amountDue - parts.costs);
+    costs += parts.costs;
+  }
+  invoice.jobCosts = roundMoney_(costs);
+  const due = numberOrNull_(invoice.payable);
+  invoice.profit = roundMoney_((due == null ? 0 : due) - invoice.jobCosts);
+  return invoice;
+}
+
 function numberOrNull_(value) {
   if (value === "" || value == null) return null;
   if (typeof value === "number") return isNaN(value) ? null : value;
@@ -958,6 +1106,74 @@ function paymentTermsDays_(ss, clientTerms) {
     }
   }
   return 14;
+}
+
+function findConfigLabelRow_(config, pattern) {
+  if (!config) return 0;
+  const last = Math.max(config.getLastRow(), 1);
+  const labels = config.getRange(1, 1, last, 1).getValues();
+  for (let i = 0; i < labels.length; i++) {
+    if (pattern.test(clientText_(labels[i][0]))) return i + 1;
+  }
+  return 0;
+}
+
+function nextBlankConfigRow_(config, start) {
+  if (!config) return 0;
+  const last = Math.max(config.getLastRow(), 1);
+  const height = Math.max(last, start);
+  const labels = config.getRange(1, 1, height, 1).getValues();
+  let statusRow = 0;
+  for (let i = 0; i < labels.length; i++) {
+    if (!statusRow && /^(invoice status|draft|invoiced|paid|written off)$/i.test(clientText_(labels[i][0]))) {
+      statusRow = i + 1;
+    }
+  }
+  const limit = statusRow ? statusRow - 1 : Math.max(last, start + 8);
+  for (let row = start; row <= limit; row++) {
+    const label = row - 1 < labels.length ? clientText_(labels[row - 1][0]) : "";
+    if (!label) return row;
+  }
+  return 0;
+}
+
+function ensureJobCostSettingRow_(config, pattern, label) {
+  if (!config) return 0;
+  const existing = findConfigLabelRow_(config, pattern);
+  if (existing) return existing;
+  const row = nextBlankConfigRow_(config, 24);
+  if (!row) return 0;
+  config.getRange(row, 1).setValue(label);
+  if (cellIsBlank_(config.getRange(row, 2).getValue())) config.getRange(row, 2).setValue(0);
+  return row;
+}
+
+function ensureJobCostSettings_(config) {
+  if (!config) return;
+  ensureJobCostSettingRow_(config, /^loaded hourly cost$/i, "Loaded hourly cost");
+  ensureJobCostSettingRow_(config, /^mileage rate$/i, "Mileage rate");
+}
+
+function placeJobCostSetting_(config, item) {
+  if (!item) return { ok: true };
+  const label = clientText_(item.label);
+  let pattern = null;
+  let canonical = "";
+  if (/^loaded hourly cost$/i.test(label)) {
+    pattern = /^loaded hourly cost$/i;
+    canonical = "Loaded hourly cost";
+  } else if (/^mileage rate$/i.test(label)) {
+    pattern = /^mileage rate$/i;
+    canonical = "Mileage rate";
+  } else return { ok: true };
+  const row = Number(item.row);
+  const current = row ? clientText_(config.getRange(row, 1).getValue()) : "";
+  if (row && current.toLowerCase() === label.toLowerCase()) return { ok: true };
+  const placed = ensureJobCostSettingRow_(config, pattern, canonical);
+  if (!placed) return { ok: false, error: canonical + " needs a blank row before Invoice status." };
+  item.row = placed;
+  item.label = clientText_(config.getRange(placed, 1).getValue()) || canonical;
+  return { ok: true };
 }
 
 function ensurePaymentTermsRow_(config) {
@@ -1561,7 +1777,7 @@ function readTimeRows_(ss, timezone) {
   const sheet = ss.getSheetByName("Time&Attendance");
   const last = sheet ? timeSheetLastRow_(sheet) : 0;
   if (!sheet || last < 2) return [];
-  const data = sheet.getRange(2, 1, last - 1, 12).getValues();
+  const data = sheet.getRange(2, 1, last - 1, 19).getValues();
   const rows = [];
   for (let i = 0; i < data.length; i++) {
     const client = String(data[i][3] || "").trim();
@@ -1581,7 +1797,12 @@ function readTimeRows_(ss, timezone) {
       finish: data[i][8],
       hours: hours,
       rate: rate == null ? 0 : rate,
-      charge: charge || 0
+      charge: charge || 0,
+      materials: costOrZero_(data[i][14]),
+      hired: costOrZero_(data[i][15]),
+      mileageKm: costOrZero_(data[i][16]),
+      mileageRate: costOrZero_(data[i][17]),
+      loadedHourly: costOrZero_(data[i][18])
     });
   }
   return rows;
@@ -1823,6 +2044,7 @@ function buildDashboardReport_(ss, asOfDate) {
       inYear: inIsoRange_(anchor, windows.year.start, windows.year.end),
       lines: lines
     };
+    stampLineProfit_(invoice);
     invoices.push(invoice);
 
     if (kind === "due") {
@@ -1987,7 +2209,12 @@ function linesFromGroup_(shiftRows, timezone) {
       finish: clockLabel_(shift.finish, timezone),
       hours: roundMoney_(shift.hours),
       rate: roundMoney_(shift.rate),
-      amount: roundMoney_(shift.charge)
+      amount: roundMoney_(shift.charge),
+      materials: costOrZero_(shift.materials),
+      hired: costOrZero_(shift.hired),
+      mileageKm: costOrZero_(shift.mileageKm),
+      mileageRate: costOrZero_(shift.mileageRate),
+      loadedHourly: costOrZero_(shift.loadedHourly)
     };
   });
 }
@@ -2010,7 +2237,12 @@ function readInvoiceLines_(ss, invoice) {
       finish: clockLabel_(shift.finish, timezone),
       hours: roundMoney_(shift.hours),
       rate: roundMoney_(shift.rate),
-      amount: roundMoney_(shift.charge)
+      amount: roundMoney_(shift.charge),
+      materials: costOrZero_(shift.materials),
+      hired: costOrZero_(shift.hired),
+      mileageKm: costOrZero_(shift.mileageKm),
+      mileageRate: costOrZero_(shift.mileageRate),
+      loadedHourly: costOrZero_(shift.loadedHourly)
     };
   });
 }
@@ -2201,6 +2433,7 @@ function readConfigSheet_(ss) {
   const config = ss.getSheetByName("Config");
   if (!config) return { success: false, error: "Settings are missing." };
   ensurePaymentTermsRow_(config);
+  ensureJobCostSettings_(config);
   const last = Math.max(config.getLastRow(), 1);
   const rows = config.getRange(1, 1, last, 2).getValues();
   const settings = [];
@@ -2259,6 +2492,15 @@ function checkedConfigValue_(label, raw, isBreak) {
     if (!text) return { ok: true, write: function (cell) { cell.setValue(""); } };
     const n = Number(String(text).replace(/[^0-9.-]/g, ""));
     if (!isFinite(n) || n < 0) return { ok: false, error: "Default hourly rate must be a number." };
+    return { ok: true, write: function (cell) { cell.setValue(n); } };
+  }
+  if (/^loaded hourly cost$/i.test(label) || /^mileage rate$/i.test(label)) {
+    const name = /^mileage rate$/i.test(label) ? "Mileage rate" : "Loaded hourly cost";
+    if (!text) return { ok: true, write: function (cell) { cell.setValue(0); } };
+    const cleaned = text.replace(/,/g, "");
+    if (!/^\d+(\.\d+)?$/.test(cleaned)) return { ok: false, error: name + " must be a number." };
+    const n = Number(cleaned);
+    if (!isFinite(n) || n < 0) return { ok: false, error: name + " must be a number." };
     return { ok: true, write: function (cell) { cell.setValue(n); } };
   }
   if (/email/i.test(label) && text && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
@@ -2324,6 +2566,10 @@ function saveSettings_(payload) {
     item.row = row;
     item.label = clientText_(config.getRange(row, 1).getValue()) || "paymentTerms";
   });
+  for (let i = 0; i < items.length; i++) {
+    const placed = placeJobCostSetting_(config, items[i]);
+    if (!placed.ok) return { success: false, error: placed.error };
+  }
   for (let i = 0; i < items.length; i++) {
     const item = items[i] || {};
     const row = Number(item.row);
