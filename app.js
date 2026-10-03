@@ -403,6 +403,21 @@ function accountantCsvFromRows(rows) {
   return lines.join("\n") + "\n";
 }
 
+function whatsAppInvoiceText(code, amount, payUrl) {
+  const lines = [
+    "Invoice " + String(code || "invoice").trim(),
+    "Amount due " + String(amount || "").trim()
+  ];
+  const link = String(payUrl || "").trim();
+  if (link) lines.push(link);
+  lines.push("PDF downloaded, attach it");
+  return lines.join("\n");
+}
+
+function whatsAppLink(text) {
+  return "https://wa.me/?text=" + encodeURIComponent(String(text || ""));
+}
+
 function invoicePayable(row) {
   const net = Number(row && row.total);
   const netMoney = isFinite(net) ? net : 0;
@@ -605,6 +620,7 @@ window.Alpine.data('appState', () => ({
   loading: false,
   loadingLabel: "Updating…",
   saving: false,
+  sharingWhatsApp: false,
   savePdfLabel: "Save in Drive",
   downloadPdfLabel: "Download PDF",
   emailPdfLabel: "Send email",
@@ -2445,6 +2461,98 @@ window.Alpine.data('appState', () => ({
     this.startPayWatch();
     const self = this;
     setTimeout(function () { self.payCopied = false; }, 1600);
+  },
+  openBlankTab() {
+    try {
+      const tab = window.open("about:blank", "_blank");
+      if (tab) {
+        try { tab.opener = null; } catch (err) {}
+      }
+      return tab || null;
+    } catch (err) {
+      return null;
+    }
+  },
+  closeTab(tab) {
+    if (!tab) return;
+    try { tab.close(); } catch (err) {}
+  },
+  phoneShareSheet() {
+    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  },
+  async presentWhatsApp(text, reserved) {
+    const url = whatsAppLink(text);
+    if (reserved && !reserved.closed) {
+      try {
+        reserved.location.href = url;
+        return "tab";
+      } catch (err) {
+        this.closeTab(reserved);
+      }
+    } else {
+      this.closeTab(reserved);
+    }
+    let tab = null;
+    try { tab = window.open(url, "_blank"); } catch (err) { tab = null; }
+    if (tab) {
+      try { tab.opener = null; } catch (err) {}
+      return "tab";
+    }
+    if (this.phoneShareSheet() && typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({ text: text });
+        return "sheet";
+      } catch (err) {
+        if (err && err.name === "AbortError") return "sheet";
+      }
+    }
+    const copied = await this.writeClipboard(text);
+    return copied ? "copy" : "";
+  },
+  async shareOnWhatsApp() {
+    if (this.saving || this.sharingWhatsApp || !this.detailId || !this.detailShowPay) return;
+    this.sharingWhatsApp = true;
+    try {
+      let reserved = null;
+      const known = String(this.detailPayUrl || "").trim();
+      if (!known && !this.previewMode) reserved = this.openBlankTab();
+      if (!known && !this.previewMode) {
+        const linked = await this.requestPayLink(this.detailId);
+        if (!linked || linked.timedOut) {
+          this.closeTab(reserved);
+          this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
+          return;
+        }
+      }
+      const payUrl = String(this.detailPayUrl || "").trim();
+      if (!payUrl) {
+        this.closeTab(reserved);
+        this.setFeedback(this.previewMode ? "Preview has no pay link." : "No pay link on this invoice yet.", true);
+        return;
+      }
+      const row = (this.invoiceRows || []).find((item) => item.id === this.detailId) || {};
+      const text = whatsAppInvoiceText(this.detailCode || this.detailId, this.money(invoicePayable(row).payable), payUrl);
+      const how = await this.presentWhatsApp(text, reserved);
+      await this.downloadInvoicePdf();
+      const lead = how === "copy" ? "Copied the WhatsApp message." : how === "sheet" ? "Opened the share sheet." : how ? "Opened WhatsApp." : "";
+      const prior = (this.feedback && this.feedback.text) || "";
+      if (this.feedback && this.feedback.isError) {
+        if (lead) this.setFeedback(lead + " " + prior, true);
+        return;
+      }
+      const pdfNote = this.previewMode
+        ? (prior || "Preview cannot print the PDF.")
+        : ("PDF downloaded, attach it." + (/marked invoiced/i.test(prior) ? " Invoice marked invoiced." : ""));
+      if (!lead) {
+        this.setFeedback("Could not open WhatsApp. " + pdfNote, true);
+        return;
+      }
+      this.setFeedback(lead + " " + pdfNote, false);
+      this.startPayWatch();
+    } finally {
+      this.sharingWhatsApp = false;
+    }
   },
   async writeClipboard(text) {
     try {
