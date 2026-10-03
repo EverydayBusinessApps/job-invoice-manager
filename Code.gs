@@ -210,8 +210,8 @@ function invoiceLabel_(id, status, dateStr) {
 /**
  * InvoiceList column I (Invoice Status), in this order:
  * Draft, Invoiced, Paid, Written off.
- * Quote and Converted sit beside that order. A quote becomes an invoice
- * through convertQuoteToInvoice, which leaves the quote row Converted.
+ * An estimate is a row on the Estimate sheet, with status Estimate.
+ * convertQuoteToInvoice turns that row into one invoice and stores Converted.
  * A draft can only become Invoiced. Invoiced can become Paid or Written off.
  * Paid and Written off stay there until Undo puts that invoice back to Invoiced.
  * Older sheet values Unpaid and Bad debt are read as Invoiced and Written off.
@@ -223,6 +223,7 @@ function displayStatus_(status) {
   const key = value.toLowerCase();
   if (key === "draft") return "Draft";
   if (key === "quote") return "Quote";
+  if (key === "estimate") return "Estimate";
   if (key === "converted") return "Converted";
   if (key === "invoiced" || key === "unpaid") return "Invoiced";
   if (key === "paid") return "Paid";
@@ -414,21 +415,158 @@ function appendInvoiceListRow_(invoiceSheet, status, ss) {
   }
   invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
   invoiceSheet.getRange(nextInvListRow, 9).setValue(status || "Draft"); // Column I: Invoice Status
-  if (ss && displayStatus_(status) !== "Quote") stampNewInvoiceVat_(ss, invoiceSheet, nextInvListRow);
+  if (ss) stampNewInvoiceVat_(ss, invoiceSheet, nextInvListRow);
   if (ss && displayStatus_(status) === "Invoiced") stampInvoiceDueDate_(ss, invoiceSheet, nextInvListRow);
   return nextInvListRow;
 }
 
 function createDraftInvoice_(invoiceSheet, ss) {
-  const invoiceId = nextInvoiceInt_(invoiceSheet);
-  appendInvoiceListRow_(invoiceSheet, "Draft", ss);
+  const invoiceId = nextBookInt_(ss, invoiceSheet);
+  const row = appendInvoiceListRow_(invoiceSheet, "Draft", ss);
+  const idCell = invoiceSheet.getRange(row, 1);
+  const formula = idCell.getFormula ? String(idCell.getFormula() || "") : "";
+  if (!formula && String(idCell.getValue() || "") !== String(invoiceId)) idCell.setValue(invoiceId);
   return invoiceId;
 }
 
-function createQuote_(invoiceSheet, ss) {
-  const invoiceId = nextInvoiceInt_(invoiceSheet);
-  appendInvoiceListRow_(invoiceSheet, "Quote", ss);
-  return invoiceId;
+// Estimate sheet row 1, A through O. Values are written by name.
+var ESTIMATE_HEADERS_ = [
+  "Estimate code", "Client", "Job", "Job name", "Period",
+  "Hours", "Rate", "Total", "Date", "Status",
+  "Price mode", "Days", "Day length", "Job price", "Converted to"
+];
+
+function ensureEstimateSheet_(ss) {
+  if (!ss || !ss.getSheetByName) return null;
+  let sheet = ss.getSheetByName("Estimate");
+  if (!sheet && ss.insertSheet) sheet = ss.insertSheet("Estimate");
+  if (!sheet) return null;
+  for (let i = 0; i < ESTIMATE_HEADERS_.length; i++) {
+    const cell = sheet.getRange(1, i + 1);
+    if (!clientText_(cell.getValue())) cell.setValue(ESTIMATE_HEADERS_[i]);
+  }
+  return sheet;
+}
+
+function estimateHeaderMap_(sheet) {
+  const width = ESTIMATE_HEADERS_.length;
+  const headers = sheet.getRange(1, 1, 1, width).getValues()[0];
+  const map = {};
+  for (let i = 0; i < headers.length; i++) {
+    const name = clientText_(headers[i]).toLowerCase();
+    if (name && !map[name]) map[name] = i + 1;
+  }
+  return map;
+}
+
+function estimateColumn_(sheet, name) {
+  if (!sheet) return 0;
+  const map = estimateHeaderMap_(sheet);
+  return map[clientText_(name).toLowerCase()] || 0;
+}
+
+function estimateValue_(sheet, row, name) {
+  const col = estimateColumn_(sheet, name);
+  if (!col || !row) return "";
+  return sheet.getRange(row, col).getValue();
+}
+
+function writeEstimateCell_(sheet, row, name, value) {
+  if (value === "" || value == null || !sheet || !row) return;
+  const col = estimateColumn_(sheet, name);
+  if (!col) return;
+  const cell = sheet.getRange(row, col);
+  if (cell.getFormula && cell.getFormula()) return;
+  cell.setValue(value);
+}
+
+function findEstimateRow_(sheet, idOrCode) {
+  const col = estimateColumn_(sheet, "Estimate code");
+  if (!sheet || !col) return 0;
+  const wanted = clientText_(idOrCode);
+  if (!wanted) return 0;
+  const number = invoiceKeyNumber_(wanted);
+  const last = sheet.getLastRow();
+  if (last < 2) return 0;
+  const codes = sheet.getRange(2, col, last - 1, 1).getValues();
+  for (let i = 0; i < codes.length; i++) {
+    const code = clientText_(codes[i][0]);
+    if (!code) continue;
+    if (code === wanted || code.toLowerCase() === wanted.toLowerCase()) return i + 2;
+    if (number && invoiceKeyNumber_(code) === number) return i + 2;
+  }
+  return 0;
+}
+
+function nextBookInt_(ss, invoiceSheet) {
+  let next = invoiceSheet ? nextInvoiceInt_(invoiceSheet) : 1;
+  function note(raw) {
+    const n = Number(invoiceKeyNumber_(raw));
+    if (n >= next) next = n + 1;
+  }
+  if (invoiceSheet && invoiceSheet.getLastRow() >= 2) {
+    const ids = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) note(ids[i][0]);
+  }
+  const estimate = ss && ss.getSheetByName ? ss.getSheetByName("Estimate") : null;
+  if (!estimate || estimate.getLastRow() < 2) return next;
+  const col = estimateColumn_(estimate, "Estimate code");
+  if (!col) return next;
+  const codes = estimate.getRange(2, col, estimate.getLastRow() - 1, 1).getValues();
+  for (let i = 0; i < codes.length; i++) note(codes[i][0]);
+  return next;
+}
+
+function estimateHours_(payload, priced) {
+  if (priced && priced.mode === "daily") return priced.hours;
+  if (priced && priced.mode === "job") return null;
+  const start = clockParts_(payload && payload.start);
+  const finish = clockParts_(payload && payload.finish);
+  if (!start || !finish) return null;
+  let mins = (finish.hours * 60 + finish.minutes) - (start.hours * 60 + start.minutes);
+  if ((payload && payload.overnight) || mins <= 0) mins += 24 * 60;
+  const lunch = clientText_(payload && payload.lunch).toLowerCase();
+  const lunchMins = lunch === "half hour" ? 30 : lunch === "hour" ? 60 : lunch === "hour and half" ? 90 : lunch === "two hours" ? 120 : 0;
+  mins -= lunchMins;
+  if (mins < 0) mins = 0;
+  return roundMoney_(mins / 60);
+}
+
+function appendEstimate_(ss, payload, priced) {
+  const sheet = ensureEstimateSheet_(ss);
+  if (!sheet) return { ok: false, error: "The Estimate sheet is missing." };
+  const codeCol = estimateColumn_(sheet, "Estimate code");
+  if (!codeCol) return { ok: false, error: "The Estimate sheet is missing Estimate code." };
+  const last = Math.max(sheet.getLastRow(), 1);
+  const codes = last >= 2 ? sheet.getRange(2, codeCol, last - 1, 1).getValues() : [];
+  let row = 2;
+  for (let i = 0; i < codes.length; i++) {
+    if (clientText_(codes[i][0])) row = i + 3;
+  }
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  const id = nextBookInt_(ss, invoiceSheet);
+  const code = invoicePrintCode_(ss, id);
+  const hours = estimateHours_(payload, priced);
+  const rate = priced && priced.mode === "daily" ? priced.rate : numberOrNull_(payload && payload.rate);
+  let total = priced && (priced.mode === "daily" || priced.mode === "job") ? priced.total : null;
+  if (total == null && hours != null && rate != null) total = roundMoney_(hours * rate);
+  writeEstimateCell_(sheet, row, "Estimate code", code);
+  writeEstimateCell_(sheet, row, "Client", clientText_(payload && payload.clientName));
+  writeEstimateCell_(sheet, row, "Job", clientText_(payload && payload.jobDetails));
+  writeEstimateCell_(sheet, row, "Job name", jobNameText_(payload && payload.jobName));
+  writeEstimateCell_(sheet, row, "Period", clientText_(payload && payload.date));
+  writeEstimateCell_(sheet, row, "Hours", hours);
+  writeEstimateCell_(sheet, row, "Rate", rate);
+  writeEstimateCell_(sheet, row, "Total", total);
+  writeEstimateCell_(sheet, row, "Date", clientText_(payload && payload.date));
+  writeEstimateCell_(sheet, row, "Status", "Estimate");
+  writeEstimateCell_(sheet, row, "Price mode", priceModeLabel_(priced && priced.mode));
+  if (priced && priced.mode === "daily") {
+    writeEstimateCell_(sheet, row, "Days", priced.days);
+    writeEstimateCell_(sheet, row, "Day length", priced.dayLength);
+  }
+  if (priced && priced.mode === "job") writeEstimateCell_(sheet, row, "Job price", priced.total);
+  return { ok: true, id: id, code: code, row: row, total: total };
 }
 
 function isQuoteEntry_(payload) {
@@ -453,77 +591,124 @@ function replayForEntry_(ss, replay, quoting) {
   return replay;
 }
 
-/**
- * Column O remembers the invoice created from a quote.
- * A second convert reads that cell and keeps the same code.
- */
-function convertedInvoiceLink_(invoiceSheet, row) {
-  if (!invoiceSheet || !row) return "";
-  return clientText_(invoiceSheet.getRange(row, 15).getValue());
-}
-
-function rememberConvertedInvoice_(invoiceSheet, row, invoiceId) {
-  if (!invoiceSheet || !row) return;
-  if (!clientText_(invoiceSheet.getRange(1, 15).getValue())) {
-    invoiceSheet.getRange(1, 15).setValue("Converted to");
-  }
-  invoiceSheet.getRange(row, 15).setValue(String(invoiceId || ""));
-}
-
-function retargetTimeRows_(ss, fromId, toId) {
-  const sheet = ss.getSheetByName("Time&Attendance");
-  const last = sheet ? timeSheetLastRow_(sheet) : 0;
-  if (!sheet || last < 2) return 0;
-  const from = String(fromId || "").trim();
-  const to = String(toId || "").trim();
-  if (!from || !to || from === to) return 0;
-  const data = sheet.getRange(2, 3, last - 1, 1).getValues();
-  const numeric = Number(to);
-  const stored = String(numeric) === to ? numeric : to;
-  let moved = 0;
-  for (let i = 0; i < data.length; i++) {
-    if (String(data[i][0]).trim() !== from) continue;
-    sheet.getRange(i + 2, 3).setValue(stored);
-    moved++;
-  }
-  return moved;
-}
-
-function copyInvoiceFacts_(invoiceSheet, fromRow, toRow) {
-  if (!invoiceSheet || !fromRow || !toRow || fromRow === toRow) return;
-  const facts = invoiceSheet.getRange(fromRow, 2, 1, 6).getValues()[0];
-  for (let c = 0; c < facts.length; c++) {
-    const value = facts[c];
+function copyEstimateOntoInvoice_(invoiceSheet, invoiceRow, estimate, estimateRow) {
+  if (!invoiceSheet || !invoiceRow || !estimate || !estimateRow) return;
+  const fields = [
+    ["Client", 2],
+    ["Job", 3],
+    ["Period", 4],
+    ["Hours", 5],
+    ["Rate", 6],
+    ["Total", 7]
+  ];
+  for (let i = 0; i < fields.length; i++) {
+    const value = estimateValue_(estimate, estimateRow, fields[i][0]);
     if (value === "" || value == null) continue;
-    const cell = invoiceSheet.getRange(toRow, c + 2);
+    const cell = invoiceSheet.getRange(invoiceRow, fields[i][1]);
     if (cell.getFormula && cell.getFormula()) continue;
     cell.setValue(value);
   }
 }
 
-function quoteAlreadyConverted_(ss, invoiceSheet, located) {
-  const linked = convertedInvoiceLink_(invoiceSheet, located.row);
+function estimateRecord_(ss, idOrCode) {
+  const sheet = ss && ss.getSheetByName ? ss.getSheetByName("Estimate") : null;
+  if (!sheet) return null;
+  const row = findEstimateRow_(sheet, idOrCode);
+  if (!row) return null;
+  return {
+    sheet: sheet,
+    row: row,
+    status: displayStatus_(estimateValue_(sheet, row, "Status")),
+    code: clientText_(estimateValue_(sheet, row, "Estimate code"))
+  };
+}
+
+function appendOpenEstimates_(ss, invoices, clients, windows) {
+  const sheet = ss && ss.getSheetByName ? ss.getSheetByName("Estimate") : null;
+  if (!sheet || sheet.getLastRow() < 2) return;
+  const last = sheet.getLastRow();
+  for (let row = 2; row <= last; row++) {
+    const code = clientText_(estimateValue_(sheet, row, "Estimate code"));
+    if (!code) continue;
+    const status = displayStatus_(estimateValue_(sheet, row, "Status"));
+    if (status === "Converted") continue;
+    if (status !== "Estimate" && status !== "Quote") continue;
+    const client = clientText_(estimateValue_(sheet, row, "Client"));
+    const profile = clients[client] || { email: "", terms: 0, contact: "" };
+    const date = isoDate_(estimateValue_(sheet, row, "Date")) || clientText_(estimateValue_(sheet, row, "Date"));
+    const total = numberOrNull_(estimateValue_(sheet, row, "Total"));
+    const hours = numberOrNull_(estimateValue_(sheet, row, "Hours"));
+    const rate = numberOrNull_(estimateValue_(sheet, row, "Rate"));
+    const job = clientText_(estimateValue_(sheet, row, "Job"));
+    const invoice = {
+      id: code,
+      code: code,
+      clientName: client,
+      status: "Estimate",
+      kind: "quote",
+      date: date,
+      dueDate: "",
+      overdue: false,
+      daysOverdue: 0,
+      hours: hours == null ? 0 : roundMoney_(hours),
+      total: total == null ? 0 : roundMoney_(total),
+      vatApplied: "",
+      vatRate: null,
+      vat: null,
+      gross: null,
+      payable: total == null ? 0 : roundMoney_(total),
+      rate: rate == null ? 0 : roundMoney_(rate),
+      servicePeriod: clientText_(estimateValue_(sheet, row, "Period")),
+      jobDetails: job,
+      jobName: jobNameText_(estimateValue_(sheet, row, "Job name")),
+      email: profile.email,
+      contact: profile.contact || "",
+      terms: profile.terms,
+      inWeek: inIsoRange_(date, windows.week.start, windows.week.end),
+      inMonth: inIsoRange_(date, windows.month.start, windows.month.end),
+      inQuarter: inIsoRange_(date, windows.quarter.start, windows.quarter.end),
+      inYear: inIsoRange_(date, windows.year.start, windows.year.end),
+      lines: [{
+        date: date,
+        details: job,
+        start: "",
+        finish: "",
+        hours: hours == null ? 0 : roundMoney_(hours),
+        rate: rate == null ? 0 : roundMoney_(rate),
+        amount: total == null ? 0 : roundMoney_(total)
+      }]
+    };
+    stampLineProfit_(invoice);
+    invoices.push(invoice);
+  }
+}
+
+function estimateAlreadyConverted_(ss, estimate, row) {
+  const linked = clientText_(estimateValue_(estimate, row, "Converted to"));
+  const codeText = clientText_(estimateValue_(estimate, row, "Estimate code"));
   if (!linked) {
-    return { success: true, already: true, invoiceId: "", invoiceCode: "", status: "Converted", message: "This quote has an invoice." };
+    return { success: true, already: true, invoiceId: "", invoiceCode: "", status: "Converted", quoteCode: codeText, message: "This estimate has an invoice." };
   }
   const found = resolveInvoiceListRow_(ss, linked);
   const code = (found && found.code) || invoicePrintCode_(ss, linked);
-  const status = found && found.row ? displayStatus_(invoiceSheet.getRange(found.row, 9).getValue()) : "Draft";
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  const status = found && found.row && invoiceSheet ? displayStatus_(invoiceSheet.getRange(found.row, 9).getValue()) : "Draft";
   return attachSnapshot_(ss, {
     success: true,
     already: true,
     invoiceId: (found && found.id) || linked,
     invoiceCode: code,
-    quoteId: located.id,
+    quoteId: codeText,
+    quoteCode: codeText,
     status: status,
     message: "Invoice " + code + " is ready."
   });
 }
 
 /**
- * Turn a Quote row into one Draft invoice.
+ * Turn an Estimate row into one Draft invoice.
  * VAT is stamped from Config B22/B23 at this moment, the same way a new invoice is stamped.
- * The quote row becomes Converted and stays off the live invoice list.
+ * The estimate row becomes Converted. Column O stores the invoice code.
  */
 function convertQuoteToInvoice(payload) {
   const ss = workbook_();
@@ -537,28 +722,28 @@ function convertQuoteToInvoice(payload) {
     return { success: false, error: "The quote is busy. Try again in a moment." };
   }
   try {
-    const located = resolveInvoiceListRow_(ss, invoiceId);
-    if (!located.row) return { success: false, error: "That quote is not on InvoiceList." };
-    const status = displayStatus_(invoiceSheet.getRange(located.row, 9).getValue());
-    if (status === "Converted") return quoteAlreadyConverted_(ss, invoiceSheet, located);
-    if (status !== "Quote") return { success: false, error: "Open a quote to turn it into an invoice." };
+    const estimate = ensureEstimateSheet_(ss);
+    const row = estimate ? findEstimateRow_(estimate, invoiceId) : 0;
+    if (!row) return { success: false, error: "That estimate is not on the Estimate sheet." };
+    const status = displayStatus_(estimateValue_(estimate, row, "Status"));
+    if (status === "Converted") return estimateAlreadyConverted_(ss, estimate, row);
+    if (status !== "Estimate") return { success: false, error: "Open an estimate to turn it into an invoice." };
 
     const newId = createDraftInvoice_(invoiceSheet, ss);
     const created = resolveInvoiceListRow_(ss, newId);
     if (!created.row) return { success: false, error: "The invoice could not be opened." };
-    copyInvoiceFacts_(invoiceSheet, located.row, created.row);
-    stampInvoiceJobName_(ss, newId, invoiceSheet.getRange(located.row, INVOICE_JOB_NAME_COL_).getValue());
-    retargetTimeRows_(ss, located.id, newId);
+    copyEstimateOntoInvoice_(invoiceSheet, created.row, estimate, row);
+    stampInvoiceJobName_(ss, newId, estimateValue_(estimate, row, "Job name"));
     refreshStampedInvoiceVat_(ss, newId);
-    invoiceSheet.getRange(located.row, 9).setValue("Converted");
-    rememberConvertedInvoice_(invoiceSheet, located.row, newId);
     const code = invoicePrintCode_(ss, newId);
-    const quoteCode = invoiceShownCode_(invoiceId, located);
+    const quoteCode = clientText_(estimateValue_(estimate, row, "Estimate code")) || invoicePrintCode_(ss, invoiceId);
+    writeEstimateCell_(estimate, row, "Status", "Converted");
+    writeEstimateCell_(estimate, row, "Converted to", code);
     return attachSnapshot_(ss, {
       success: true,
       invoiceId: String(newId),
       invoiceCode: code,
-      quoteId: located.id,
+      quoteId: quoteCode,
       quoteCode: quoteCode,
       status: "Draft",
       message: "Quote " + quoteCode + " is now invoice " + code + "."
@@ -893,6 +1078,13 @@ function executeTimeLog(payload) {
   const mode = quoting ? "quote" : String(payload.invoiceMode || "new").toLowerCase();
   let invoiceId = "";
 
+  if (quoting) {
+    const saved = appendEstimate_(ss, payload, priced);
+    if (!saved.ok) return { success: false, error: saved.error };
+    const amount = saved.total != null ? saved.total : null;
+    return jobSavedResult_(ss, mode, saved.id, overnight, false, amount, true);
+  }
+
   // A repeat tap must not skip the draft rule. Check that first, then
   // treat an identical job from the last two minutes as the save that
   // already landed, before opening another draft.
@@ -906,14 +1098,12 @@ function executeTimeLog(payload) {
     return { success: false, error: "Missing InvoiceList tab." };
   }
 
-  const replay = replayForEntry_(ss, recentMatchingEntry_(timeSheet, payload), quoting);
+  const replay = replayForEntry_(ss, recentMatchingEntry_(timeSheet, payload), false);
   if (replay) {
-    return jobSavedResult_(ss, mode, replay.invoiceId, overnight, true, null, quoting);
+    return jobSavedResult_(ss, mode, replay.invoiceId, overnight, true, null, false);
   }
 
-  if (mode === "quote") {
-    invoiceId = createQuote_(invoiceSheet, ss);
-  } else if (mode !== "existing") {
+  if (mode !== "existing") {
     invoiceId = createDraftInvoice_(invoiceSheet, ss);
   }
 
@@ -1617,7 +1807,7 @@ function invoiceKind_(status) {
   if (label === "Paid") return "paid";
   if (label === "Written off") return "writtenoff";
   if (label === "Draft") return "draft";
-  if (label === "Quote") return "quote";
+  if (label === "Quote" || label === "Estimate") return "quote";
   if (label === "Converted") return "converted";
   return "due";
 }
@@ -2207,7 +2397,7 @@ function statusRank_(status) {
   if (label === "Paid") return 3;
   if (label === "Written off") return 2;
   if (label === "Invoiced") return 1;
-  if (label === "Quote" || label === "Converted") return -1;
+  if (label === "Quote" || label === "Estimate" || label === "Converted") return -1;
   return 0;
 }
 
@@ -2483,6 +2673,8 @@ function buildDashboardReport_(ss, asOfDate) {
     });
   });
 
+  appendOpenEstimates_(ss, invoices, clients, windows);
+
   invoices.sort(function (a, b) {
     if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
     const dueCmp = String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"));
@@ -2674,7 +2866,7 @@ function exportInvoicePdf(payload) {
   }
 
   const code = invoicePrintCode_(ss, invoiceId);
-  const quoting = invoiceListStatus_(ss, invoiceId) === "Quote";
+  const quoting = !!estimateRecord_(ss, invoiceId);
   if (quoting && mode === "email") {
     return { success: false, error: "Email is ready once this quote is an invoice." };
   }
@@ -2745,7 +2937,7 @@ function exportInvoicePdf(payload) {
       url = file.getUrl();
     }
 
-    let marked = { changed: false, status: quoting ? "Quote" : "" };
+    let marked = { changed: false, status: quoting ? "Estimate" : "" };
     if (mode === "email" || quoting) {
       const invoiceSheet = ss.getSheetByName("InvoiceList");
       if (invoiceSheet) {
@@ -3443,7 +3635,7 @@ function createPaymentLink(payload) {
 
 function ensureInvoicePaymentLink_(ss, invoiceId) {
   var status = invoiceListStatus_(ss, invoiceId);
-  if (status === "Quote" || status === "Converted") return { url: "" };
+  if (status === "Quote" || status === "Converted" || estimateRecord_(ss, invoiceId)) return { url: "" };
   return withPayLinkLock_(function () {
     var amount = invoicePayAmount_(ss, invoiceId);
     var links = readPayLinks_();
