@@ -2893,6 +2893,113 @@ test("turning a quote into an invoice stamps VAT once and keeps one code", funct
   assert(statusCell(workbook, 2) === "Converted", "the comparison job changed the quote");
 });
 
+test("a priced quote stores the job price or the daily total, then becomes one invoice", function (api, workbook) {
+  const config = seedVat(workbook, "Y", 23);
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const job = api.executeTimeLog(shift({
+    entry: "quote",
+    priceMode: "job",
+    jobPrice: 500,
+    jobDetails: "Kitchen fit",
+    clientName: "Acme"
+  }));
+  assert(job.success, job.error);
+  assert(job.amount === 500, "job quote amount " + job.amount);
+  const time = workbook.sheets["Time&Attendance"];
+  const invoices = workbook.sheets.InvoiceList;
+  const row = time.getLastRow();
+  assert(time.getRange(row, 20).getValue() === "Job price", time.getRange(row, 20).getValue());
+  assert(time.getRange(row, 24).getValue() === 500, "job price input " + time.getRange(row, 24).getValue());
+  assert(time.getRange(row, 25).getValue() === 500, "price total " + time.getRange(row, 25).getValue());
+  assert(time.getRange(row, 12).getValue() === 500, "billable " + time.getRange(row, 12).getValue());
+  assert(time.getRange(row, 12).getFormula() === "" && time.getRange(row, 25).getFormula() === "", "the quote total is a formula");
+  assert(time.getRange(row, 10).getValue() === "", "a job price stored hours");
+  const quoteRow = invoices.getLastRow();
+  assert(statusCell(workbook, quoteRow) === "Quote", statusCell(workbook, quoteRow));
+  assert(invoices.getRange(quoteRow, 7).getValue() === 500, "quote net " + invoices.getRange(quoteRow, 7).getValue());
+  assert(invoices.getRange(quoteRow, 10).getValue() === "", "the quote stamped VAT");
+  assert(invoices.getRange(quoteRow, 12).getValue() === "" && invoices.getRange(quoteRow, 13).getValue() === "", "the quote wrote VAT amounts");
+  assert(invoices.getRange(quoteRow, 14).getValue() === "", "the quote used the due date column");
+  const beforeLinks = api.fetches.length;
+  const linked = api.ensurePaymentLink({ invoiceId: job.invoiceId });
+  assert(linked.success && !linked.payUrl, JSON.stringify(linked));
+  assert(api.fetches.length === beforeLinks, "a quote created a pay link");
+
+  const daily = api.executeTimeLog(shift({
+    entry: "quote",
+    priceMode: "daily",
+    days: 2,
+    dayLength: 10,
+    rate: 40,
+    jobDetails: "Two day cover",
+    clientName: "Acme",
+    date: "2026-09-25"
+  }));
+  assert(daily.success, daily.error);
+  assert(daily.amount === 800, "daily quote amount " + daily.amount);
+  const row2 = time.getLastRow();
+  assert(time.getRange(row2, 20).getValue() === "Daily", time.getRange(row2, 20).getValue());
+  assert(time.getRange(row2, 21).getValue() === 2, "days " + time.getRange(row2, 21).getValue());
+  assert(time.getRange(row2, 22).getValue() === 10, "day length " + time.getRange(row2, 22).getValue());
+  assert(time.getRange(row2, 23).getValue() === 40, "rate " + time.getRange(row2, 23).getValue());
+  assert(time.getRange(row2, 10).getValue() === 20, "stored hours " + time.getRange(row2, 10).getValue());
+  assert(time.getRange(row2, 12).getValue() === 800 && time.getRange(row2, 25).getValue() === 800, "daily total " + time.getRange(row2, 12).getValue());
+  assert(time.getRange(row2, 12).getFormula() === "" && time.getRange(row2, 25).getFormula() === "", "the daily total is a formula");
+  const dailyRow = invoices.getLastRow();
+  assert(statusCell(workbook, dailyRow) === "Quote", statusCell(workbook, dailyRow));
+  assert(invoices.getRange(dailyRow, 7).getValue() === 800, "daily quote net " + invoices.getRange(dailyRow, 7).getValue());
+  assert(invoices.getRange(dailyRow, 10).getValue() === "", "the daily quote stamped VAT");
+  assert(invoices.getRange(dailyRow, 12).getValue() === "" && invoices.getRange(dailyRow, 13).getValue() === "", "the daily quote wrote VAT amounts");
+
+  const converted = api.convertQuoteToInvoice({ invoiceId: job.invoiceId });
+  assert(converted.success, converted.error);
+  assert(converted.invoiceCode === "INV-EB-003" && String(converted.invoiceId) === "3", converted.invoiceCode + " " + converted.invoiceId);
+  assert(statusCell(workbook, quoteRow) === "Converted", statusCell(workbook, quoteRow));
+  assert(invoices.getRange(quoteRow, 10).getValue() === "", "convert stamped VAT on the quote");
+  assert(invoices.getRange(quoteRow, 15).getValue() === "3", "converted link " + invoices.getRange(quoteRow, 15).getValue());
+  const liveRow = invoices.getLastRow();
+  assert(invoices.getRange(liveRow, 9).getValue() === "Draft", invoices.getRange(liveRow, 9).getValue());
+  assert(invoices.getRange(liveRow, 7).getValue() === 500, "invoice net " + invoices.getRange(liveRow, 7).getValue());
+  assert(invoices.getRange(liveRow, 10).getValue() === "Y", "VAT Applied " + invoices.getRange(liveRow, 10).getValue());
+  assert(invoices.getRange(liveRow, 11).getValue() === 23, "VAT Rate " + invoices.getRange(liveRow, 11).getValue());
+  assert(invoices.getRange(liveRow, 12).getValue() === 115, "VAT Amount " + invoices.getRange(liveRow, 12).getValue());
+  assert(invoices.getRange(liveRow, 13).getValue() === 615, "Gross Total " + invoices.getRange(liveRow, 13).getValue());
+  assert(invoices.getRange(liveRow, 14).getValue() === "", "convert used the due date column");
+  assert(String(time.getRange(row, 3).getValue()) === "3", "the job price row stayed on the quote");
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved");
+
+  const rowsBefore = invoices.getLastRow();
+  const again = api.convertQuoteToInvoice({ invoiceId: job.invoiceId });
+  assert(again.success && again.already, again.error || JSON.stringify(again));
+  assert(again.invoiceCode === "INV-EB-003" && String(again.invoiceId) === "3", again.invoiceCode + " " + again.invoiceId);
+  assert(invoices.getLastRow() === rowsBefore, "a second convert opened another invoice");
+  assert(invoices.getRange(liveRow, 10).getValue() === "Y" && invoices.getRange(liveRow, 12).getValue() === 115, "a second convert restamped VAT");
+
+  const report = api.fetchDashboard();
+  assert(report.success, report.error);
+  assert(report.invoices.filter(function (item) { return item.status === "Converted" || item.kind === "converted"; }).length === 0, report.invoices.map(function (item) { return item.code + " " + item.status; }).join(", "));
+  const liveBills = report.invoices.filter(function (item) { return item.kind !== "quote"; });
+  assert(liveBills.length === 1 && liveBills[0].code === "INV-EB-003" && liveBills[0].payable === 615, JSON.stringify(liveBills));
+  assert(liveBills[0].profit === 615, "profit counted the quote again " + liveBills[0].profit);
+  const stillQuote = report.invoices.filter(function (item) { return item.kind === "quote"; });
+  assert(stillQuote.length === 1 && stillQuote[0].code === "INV-EB-002" && stillQuote[0].total === 800, JSON.stringify(stillQuote));
+  assert(report.open.dueAmount === 0 && report.open.overdueAmount === 0, JSON.stringify(report.open));
+  assert(report.open.draftAmount === 615 && report.open.draftCount === 1, JSON.stringify(report.open));
+  assert(report.invoices.filter(function (item) { return item.overdue; }).length === 0, "a quote or its invoice is overdue");
+
+  const payBefore = api.fetches.length;
+  const quotePay = api.ensurePaymentLink({ invoiceId: job.invoiceId });
+  assert(quotePay.success && !quotePay.payUrl, JSON.stringify(quotePay));
+  assert(api.fetches.length === payBefore, "the converted quote created a pay link");
+  const invoicePay = api.ensurePaymentLink({ invoiceId: converted.invoiceId });
+  assert(invoicePay.success && invoicePay.payUrl === "https://buy.stripe.com/test_example", JSON.stringify(invoicePay));
+  const stripeCalls = api.fetches.filter(function (item) { return String(item.url).indexOf("api.stripe.com/v1/payment_links") !== -1; });
+  assert(stripeCalls.length === 1, "pay link calls " + stripeCalls.length);
+  assert(String(stripeCalls[0].options.payload).indexOf("unit_amount%5D=61500") !== -1, String(stripeCalls[0].options.payload));
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved after the pay link");
+  assert(statusCell(workbook, dailyRow) === "Quote", "the daily quote was converted with the job price");
+});
+
 test("hourly log keeps the clock formulas and hours times rate", function (api, workbook) {
   const logged = api.executeTimeLog(shift({ start: "09:00", finish: "13:00", lunch: "na" }));
   assert(logged.success, logged.error);

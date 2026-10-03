@@ -435,8 +435,39 @@ function whatsAppLink(text) {
   return "https://wa.me/?text=" + encodeURIComponent(String(text || ""));
 }
 
-function quoteShareText(code, amount) {
-  return whatsAppInvoiceText(code, amount, "");
+function quoteShareWork(row, fallback) {
+  const direct = String((row && row.jobDetails) || "").trim();
+  if (direct && direct !== "—") return direct;
+  const lines = row && Array.isArray(row.lines) ? row.lines : [];
+  for (let i = 0; i < lines.length; i++) {
+    const details = String((lines[i] && lines[i].details) || "").trim();
+    if (details && details !== "—") return details;
+  }
+  const extra = String(fallback || "").trim();
+  if (extra && extra !== "—") return extra;
+  return "";
+}
+
+function quoteShareWho(row, fallback) {
+  const name = String((row && row.clientName) || "").trim();
+  if (name && name !== "No client") return name;
+  const work = quoteShareWork(row, "");
+  if (work) return work;
+  const extra = String(fallback || "").trim();
+  if (extra && extra !== "No client" && extra !== "—") return extra;
+  return "Quote";
+}
+
+function quoteShareText(who, work, amount) {
+  const name = String(who || "").trim();
+  const job = String(work || "").trim();
+  const price = String(amount || "").trim();
+  const lead = name || (job && job !== "—" ? job : "") || "Quote";
+  const lines = [lead];
+  if (job && job !== "—" && job !== lead) lines.push(job);
+  if (price) lines.push(price);
+  lines.push("PDF downloaded, attach it");
+  return lines.join("\n");
 }
 
 function cloneInvoiceRow(row) {
@@ -478,7 +509,7 @@ function convertQuoteRows(rows, quoteId) {
   invoice.code = code;
   invoice.status = "Draft";
   invoice.kind = "draft";
-  invoice.payUrl = "";
+  invoice.payUrl = "https://example.com/pay/" + code;
   quote.status = "Converted";
   quote.kind = "converted";
   quote.convertedId = code;
@@ -571,6 +602,8 @@ function invoiceJobProfit(invoice) {
 function jobsByProfit(invoices) {
   const jobs = [];
   (Array.isArray(invoices) ? invoices : []).forEach((invoice) => {
+    const kind = invoice && (invoice.kind || kindForStatus(invoice.status));
+    if (kind === "converted") return;
     invoiceJobProfit(invoice).jobs.forEach((job) => jobs.push(job));
   });
   jobs.sort((a, b) => {
@@ -3013,7 +3046,7 @@ window.Alpine.data('appState', () => ({
       const row = (this.invoiceRows || []).find((item) => item.id === this.detailId) || {};
       const amount = this.money(invoicePayable(row).payable);
       const text = quoting
-        ? quoteShareText(this.detailCode || this.detailId, amount)
+        ? quoteShareText(quoteShareWho(row, this.detailClient), quoteShareWork(row, this.detailJob), amount)
         : whatsAppInvoiceText(this.detailCode || this.detailId, amount, payUrl, this.whatsAppOverdueLine);
       this.lastWhatsAppText = text;
       const how = await this.presentWhatsApp(text, reserved);
