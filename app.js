@@ -275,7 +275,8 @@ function sampleDashboard() {
       row({ id: "INV-EB-005", code: "INV-EB-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, payUrl: "https://example.com/pay/INV-EB-005", inWeek: true, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
       row({ id: "INV-EB-003", code: "INV-EB-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, payUrl: "https://example.com/pay/INV-EB-003", inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-EB-001", code: "INV-EB-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
-      row({ id: "INV-EB-004", code: "INV-EB-004", clientName: "Acme", contact: "Ann Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
+      row({ id: "INV-EB-004", code: "INV-EB-004", clientName: "Acme", contact: "Ann Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] }),
+      row({ id: "INV-EB-006", code: "INV-EB-006", clientName: "Acme", contact: "Ann Acme", status: "Quote", kind: "quote", date: "2026-09-18", hours: 3, rate: 50, total: 150, email: "acme@example.com", terms: 14, jobDetails: "Boiler service", servicePeriod: "2026-09-18", inMonth: true, lines: [{ date: "2026-09-18", details: "Boiler service", start: "09:00", finish: "12:00", hours: 3, rate: 50, amount: 150 }] })
     ],
     businessName: "Everyday Business",
     clients: [{ name: "Acme" }, { name: "Other Co" }],
@@ -329,6 +330,8 @@ function invoiceStatusRank(status) {
   if (label === "Paid") return 3;
   if (label === "Written off" || label === "Bad debt" || label === "Bad Debt") return 2;
   if (label === "Invoiced" || label === "Unpaid") return 1;
+  if (label === "Quote") return -1;
+  if (label === "Converted") return -2;
   return 0;
 }
 
@@ -349,6 +352,9 @@ function preferInvoiceLabel(current, candidate) {
 }
 
 function kindForStatus(status) {
+  const label = String(status || "").trim();
+  if (label === "Quote") return "quote";
+  if (label === "Converted") return "converted";
   const rank = invoiceStatusRank(status);
   if (rank === 3) return "paid";
   if (rank === 2) return "writtenoff";
@@ -427,6 +433,57 @@ function invoiceIsOverdue(row, asOf) {
 
 function whatsAppLink(text) {
   return "https://wa.me/?text=" + encodeURIComponent(String(text || ""));
+}
+
+function quoteShareText(code, amount) {
+  return whatsAppInvoiceText(code, amount, "");
+}
+
+function cloneInvoiceRow(row) {
+  const copy = Object.assign({}, row || {});
+  if (Array.isArray(row && row.lines)) copy.lines = row.lines.map((line) => Object.assign({}, line));
+  return copy;
+}
+
+function nextPreviewInvoiceCode(rows) {
+  let max = 0;
+  (rows || []).forEach((row) => {
+    const number = Number(invoiceNumberKey(row && row.id) || invoiceNumberKey(row && row.code) || 0);
+    if (number > max) max = number;
+  });
+  const next = max + 1;
+  return "INV-EB-" + String(next).padStart(3, "0");
+}
+
+function convertQuoteRows(rows, quoteId) {
+  const list = (Array.isArray(rows) ? rows : []).map(cloneInvoiceRow);
+  const wanted = String(quoteId || "").trim();
+  const quote = list.find((item) => {
+    if (!item) return false;
+    if (item.id !== wanted && item.code !== wanted) return false;
+    const status = String(item.status || "");
+    return status === "Quote" || status === "Converted" || item.kind === "quote" || item.kind === "converted";
+  });
+  if (!quote) {
+    return { rows: collapseInvoiceRows(list), stored: list, invoiceId: "", created: false };
+  }
+  if (quote.convertedId) {
+    quote.status = "Converted";
+    quote.kind = "converted";
+    return { rows: collapseInvoiceRows(list), stored: list, invoiceId: quote.convertedId, created: false };
+  }
+  const code = nextPreviewInvoiceCode(list);
+  const invoice = cloneInvoiceRow(quote);
+  invoice.id = code;
+  invoice.code = code;
+  invoice.status = "Draft";
+  invoice.kind = "draft";
+  invoice.payUrl = "";
+  quote.status = "Converted";
+  quote.kind = "converted";
+  quote.convertedId = code;
+  list.push(invoice);
+  return { rows: collapseInvoiceRows(list), stored: list, invoiceId: code, created: true };
 }
 
 function invoicePayable(row) {
@@ -545,7 +602,7 @@ function vatPercentText(value) {
 function collapseInvoiceRows(rows) {
   const merged = {};
   const order = [];
-  (Array.isArray(rows) ? rows : []).forEach((row) => {
+  (Array.isArray(rows) ? rows : []).filter((row) => kindForStatus(row && row.status) !== "converted").forEach((row) => {
     if (!row) return;
     const number = invoiceNumberKey(row.code) || invoiceNumberKey(row.id);
     const key = number || ("row:" + String(row.id || row.code || order.length));
@@ -716,6 +773,13 @@ window.Alpine.data('appState', () => ({
   downloadPdfLabel: "Download PDF",
   emailPdfLabel: "Send email",
   logButtonLabel: "Log a job",
+  logTitle: "Log a job",
+  viewLoggedLabel: "View invoice",
+  quoteMode: false,
+  showJobInvoice: true,
+  quoteHint: "",
+  quoteBookReady: false,
+  quoteBookRows: null,
   clientButtonLabel: "Save client",
   settingsButtonLabel: "Save settings",
   currentTab: 'dashboard',
@@ -766,6 +830,7 @@ window.Alpine.data('appState', () => ({
   listShowsSend: false,
   listShowsCollect: false,
   listShowsDone: false,
+  listShowsQuote: false,
   listEmpty: false,
   listEmptyLabel: "Nothing waiting here.",
   listShowsHint: false,
@@ -823,6 +888,8 @@ window.Alpine.data('appState', () => ({
   openCollectEmpty: true,
   openDoneAmount: "€0.00",
   openDoneCount: "0 invoices",
+  openQuoteAmount: "€0.00",
+  openQuoteCount: "0 quotes",
   openDoneHas: false,
   openDoneEmpty: true,
   openOverdueAmount: "€0.00",
@@ -874,6 +941,9 @@ window.Alpine.data('appState', () => ({
   emailOpen: false,
   emailToggleLabel: "Email",
   detailShowPay: false,
+  detailShowShare: false,
+  detailShowEmail: false,
+  detailIsQuote: false,
   detailOverdue: false,
   detailPayUrl: "",
   payCopied: false,
@@ -986,6 +1056,15 @@ window.Alpine.data('appState', () => ({
     this.syncInvoiceHint();
   },
   syncInvoiceHint() {
+    if (this.quoteMode) {
+      this.showExistingInvoices = false;
+      this.showJobInvoice = false;
+      this.invoiceHint = "";
+      this.quoteHint = "This starts a quote. A pay link is added when you turn it into an invoice.";
+      return;
+    }
+    this.quoteHint = "";
+    this.showJobInvoice = true;
     const existing = this.form.invoiceMode === 'existing';
     this.showExistingInvoices = existing;
     if (!existing) {
@@ -1017,8 +1096,15 @@ window.Alpine.data('appState', () => ({
     this.syncLogButton();
   },
   syncLogButton() {
+    this.syncInvoiceHint();
+    this.viewLoggedLabel = this.quoteMode ? "View quote" : "View invoice";
+    this.logTitle = this.quoteMode ? "Log a quote" : "Log a job";
     if (this.saving) {
       this.logButtonLabel = "Saving…";
+      return;
+    }
+    if (this.quoteMode) {
+      this.logButtonLabel = "Log a quote";
       return;
     }
     this.logButtonLabel = this.form.invoiceMode === "existing" ? "Add to invoice" : "Log a job";
@@ -1195,9 +1281,22 @@ window.Alpine.data('appState', () => ({
   },
   setTrackerTab() {
     this.stopPayWatch();
+    this.quoteMode = false;
     this.currentTab = "tracker";
     this.syncTabClasses();
     this.clearFeedback();
+    this.syncLogButton();
+    this.scrollPage();
+  },
+  setQuoteTab() {
+    this.stopPayWatch();
+    this.quoteMode = true;
+    this.currentTab = "tracker";
+    this.form.invoiceMode = "new";
+    this.form.invoiceId = "";
+    this.syncTabClasses();
+    this.clearFeedback();
+    this.syncLogButton();
     this.scrollPage();
   },
   setSummaryTab() {
@@ -1472,18 +1571,19 @@ window.Alpine.data('appState', () => ({
     }
   },
 
-  rememberLoggedJob(code, rawId) {
+  rememberLoggedJob(code, rawId, status) {
     const id = String(code || rawId || "").trim();
     if (!id) return;
     const raw = String(rawId || "").trim();
     if (this.invoices.some((inv) => inv.id === id || (raw && inv.id === raw))) return;
     const parts = this.jobDateParts(this.form.date);
+    const labelStatus = status || "Draft";
     this.invoices = this.invoices.concat([{
       id: id,
       clientName: this.form.clientName,
-      status: "Draft",
+      status: labelStatus,
       date: parts ? parts.iso : this.form.date,
-      label: "Invoice " + id + " · Draft"
+      label: (labelStatus === "Quote" ? "Quote " : "Invoice ") + id + " · " + labelStatus
     }]);
     this.refreshClientInvoices();
   },
@@ -1519,6 +1619,7 @@ window.Alpine.data('appState', () => ({
       finish: this.form.finish,
       hours: this.jobHours(),
       amount: amount,
+      rate: record && record.rate !== "" && record.rate != null ? Number(record.rate) : 0,
       email: record && record.email ? record.email : "",
       materials: extra.materials || 0,
       hired: extra.hired || 0,
@@ -1529,17 +1630,19 @@ window.Alpine.data('appState', () => ({
   },
   showLoggedJob(code, rawId, amount) {
     const label = String(code || rawId || "").trim();
+    const lead = this.quoteMode ? "Quote logged" : "Job logged";
     this.jobLogged = {
-      text: "Job logged · " + label + " · " + this.money(amount),
+      text: lead + " · " + label + " · " + this.money(amount),
       id: String(rawId || code || "").trim(),
       code: label
     };
   },
-  placeLoggedDraft(code, rawId, snapshot) {
+  placeLoggedDraft(code, rawId, snapshot, status) {
     const label = String(code || rawId || "").trim();
     const id = String(rawId || code || "").trim();
     if (!label) return;
-    const rows = (this.invoiceRows || []).slice();
+    const labelStatus = status || "Draft";
+    const rows = (this.previewMode && Array.isArray(this.quoteBookRows) ? this.quoteBookRows : (this.invoiceRows || [])).slice();
     let row = rows.find((item) => sameInvoiceNumber(item, id, label));
     const line = {
       date: snapshot.iso,
@@ -1559,12 +1662,13 @@ window.Alpine.data('appState', () => ({
         id: id,
         code: label,
         clientName: snapshot.client,
-        status: "Draft",
-        kind: "draft",
+        status: labelStatus,
+        kind: kindForStatus(labelStatus),
         date: snapshot.iso,
         dueDate: "",
         hours: snapshot.hours,
         total: snapshot.amount,
+        rate: snapshot.rate || 0,
         jobDetails: snapshot.jobDetails || "",
         servicePeriod: snapshot.iso,
         email: snapshot.email || "",
@@ -1575,7 +1679,13 @@ window.Alpine.data('appState', () => ({
       row.hours = row.lines.reduce((sum, item) => sum + (Number(item.hours) || 0), 0);
       row.total = row.lines.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
     }
-    this.invoiceRows = rows;
+    if (this.previewMode) {
+      this.quoteBookRows = rows;
+      this.quoteBookReady = true;
+      this.invoiceRows = collapseInvoiceRows(rows);
+    } else {
+      this.invoiceRows = rows;
+    }
     this.recomputeOpenPiles();
   },
   resetJobForm() {
@@ -1608,25 +1718,26 @@ window.Alpine.data('appState', () => ({
   async submitForm() {
     if (this.saving) return;
     this.clearFeedback();
+    const noun = this.quoteMode ? "quote" : "job";
     if (!this.form.clientName) {
-      this.setFeedback("Could not log the job. Choose a client.", true);
+      this.setFeedback("Could not log the " + noun + ". Choose a client.", true);
       return;
     }
     const jobDate = this.jobDateParts(this.form.date);
     if (!jobDate) {
-      this.setFeedback("Could not log the job. Enter the date as day/month/year, for example 30/09/2026.", true);
+      this.setFeedback("Could not log the " + noun + ". Enter the date as day/month/year, for example 30/09/2026.", true);
       return;
     }
     this.form.date = jobDate.label;
     if (this.timeToMinutes(this.form.start) == null || this.timeToMinutes(this.form.finish) == null) {
-      this.setFeedback("Could not log the job. Choose a start and finish time.", true);
+      this.setFeedback("Could not log the " + noun + ". Choose a start and finish time.", true);
       return;
     }
-    if (this.form.invoiceMode === 'existing' && !this.form.invoiceId) {
+    if (!this.quoteMode && this.form.invoiceMode === 'existing' && !this.form.invoiceId) {
       this.setFeedback("Could not log the job. Choose a draft invoice, or start a new one.", true);
       return;
     }
-    if (this.form.invoiceMode === 'existing') {
+    if (!this.quoteMode && this.form.invoiceMode === 'existing') {
       const chosen = (this.invoices || []).find((inv) => inv.id === String(this.form.invoiceId));
       if (chosen && !this.isDraftStatus(chosen.status)) {
         this.setFeedback("Could not log the job. Time can't be added once an invoice leaves Draft. Invoice " + chosen.id + " is " + chosen.status + ".", true);
@@ -1643,23 +1754,23 @@ window.Alpine.data('appState', () => ({
     this.syncOvernight();
     this.saving = true;
     this.loading = true;
-    this.loadingLabel = "Saving the job…";
+    this.loadingLabel = this.quoteMode ? "Saving the quote…" : "Saving the job…";
     this.syncLogButton();
-    const adding = this.form.invoiceMode === "existing";
+    const adding = !this.quoteMode && this.form.invoiceMode === "existing";
     const chosenId = this.form.invoiceId;
     try {
       const estimate = this.jobCharge();
       const snapshot = this.loggedJobSnapshot(estimate, { materials: materials, hired: hired, mileageKm: mileageKm });
       if (this.previewMode) {
         await this.wait(800);
-        const code = adding && chosenId ? chosenId : "INV-EB-018";
-        this.rememberLoggedJob(code);
+        const code = this.quoteMode ? "INV-EB-019" : (adding && chosenId ? chosenId : "INV-EB-018");
+        this.rememberLoggedJob(code, code, this.quoteMode ? "Quote" : "Draft");
         this.showLoggedJob(code, code, estimate);
-        this.placeLoggedDraft(code, code, snapshot);
+        this.placeLoggedDraft(code, code, snapshot, this.quoteMode ? "Quote" : "Draft");
         this.resetJobForm();
         return;
       }
-      const result = await this.api('logTimeEntry', {
+      const entry = {
         clientName: this.form.clientName,
         date: jobDate.iso,
         jobDetails: this.form.jobDetails,
@@ -1667,26 +1778,28 @@ window.Alpine.data('appState', () => ({
         lunch: this.form.lunch,
         finish: this.form.finish,
         overnight: this.overnight,
-        invoiceMode: this.form.invoiceMode,
-        invoiceId: this.form.invoiceId,
+        invoiceMode: this.quoteMode ? "quote" : this.form.invoiceMode,
+        invoiceId: this.quoteMode ? "" : this.form.invoiceId,
         materials: materials,
         hired: hired,
         mileageKm: mileageKm
-      }, { write: true });
+      };
+      if (this.quoteMode) entry.entry = "quote";
+      const result = await this.api('logTimeEntry', entry, { write: true });
       if (result && result.success) {
         const amount = result.amount != null && isFinite(Number(result.amount)) ? Number(result.amount) : estimate;
         const code = result.invoiceCode || result.invoiceId;
         const rawId = result.invoiceId || code;
         snapshot.amount = amount;
-        this.rememberLoggedJob(code, rawId);
+        this.rememberLoggedJob(code, rawId, this.quoteMode ? "Quote" : "Draft");
         this.showLoggedJob(code, rawId, amount);
         this.resetJobForm();
         await this.refreshSnapshot({ quiet: true, announce: false, resync: true });
         const found = (this.invoiceRows || []).some((item) => sameInvoiceNumber(item, rawId, code));
-        if (!found) this.placeLoggedDraft(code, rawId, snapshot);
+        if (!found) this.placeLoggedDraft(code, rawId, snapshot, this.quoteMode ? "Quote" : "Draft");
         return;
       }
-      this.setFeedback(this.failMessage(result, "Could not log the job for " + this.form.clientName + " on " + jobDate.label + ". " + this.unreachableMessage(true)), true);
+      this.setFeedback(this.failMessage(result, "Could not log the " + noun + " for " + this.form.clientName + " on " + jobDate.label + ". " + this.unreachableMessage(true)), true);
     } finally {
       this.saving = false;
       this.loading = false;
@@ -1792,10 +1905,12 @@ window.Alpine.data('appState', () => ({
     else if (filter === "overdue") rows = rows.filter((row) => invoiceIsOverdue(row, this.asOf));
     else if (filter === "send" || filter === "draft") rows = rows.filter((row) => row.kind === "draft");
     else if (filter === "done") rows = rows.filter((row) => row.kind === "paid" || row.kind === "writtenoff");
-    const showStatus = filter === "send" || filter === "draft" || filter === "done";
+    else if (filter === "quote") rows = rows.filter((row) => row.kind === "quote" || row.status === "Quote");
+    const showStatus = filter === "send" || filter === "draft" || filter === "done" || filter === "quote";
     this.listShowsSend = filter === "send" || filter === "draft";
     this.listShowsCollect = filter === "due" || filter === "overdue";
     this.listShowsDone = filter === "done";
+    this.listShowsQuote = filter === "quote";
     this.visibleInvoices = rows.map((row) => {
       const code = row.code || row.id;
       const status = row.status || "Draft";
@@ -1821,7 +1936,13 @@ window.Alpine.data('appState', () => ({
     if (res.businessName) this.businessName = res.businessName;
     this.asOf = res.asOf || "";
     this.periodData = res.periods || {};
-    this.invoiceRows = collapseInvoiceRows(Array.isArray(res.invoices) ? res.invoices : []);
+    const incoming = Array.isArray(res.invoices) ? res.invoices : [];
+    if (this.previewMode && !this.quoteBookReady) {
+      this.quoteBookRows = incoming.map(cloneInvoiceRow);
+      this.quoteBookReady = true;
+    }
+    const source = this.previewMode && Array.isArray(this.quoteBookRows) ? this.quoteBookRows : incoming;
+    this.invoiceRows = collapseInvoiceRows(source);
     const open = res.open || {};
     this.openSendAmount = this.money(open.draftAmount);
     this.openSendCount = this.countLabel(open.draftCount, "invoice", "invoices");
@@ -2011,7 +2132,8 @@ window.Alpine.data('appState', () => ({
       overdue: "Overdue",
       send: "Invoices to send",
       draft: "Invoices to send",
-      done: "Finished invoices"
+      done: "Finished invoices",
+      quote: "Quotes"
     };
     this.listTitle = (titles[kind] || "Invoices") + (periodScoped && this.activeLabel ? " · " + this.activeLabel : "");
     const hints = {
@@ -2019,7 +2141,8 @@ window.Alpine.data('appState', () => ({
       overdue: "These invoices are past the due date. Open one to remind the client.",
       send: "Tap an invoice to check it, then mark it invoiced.",
       draft: "Tap an invoice to check it, then mark it invoiced.",
-      done: "Tap an invoice to check it. Undo puts it back to collect."
+      done: "Tap an invoice to check it. Undo puts it back to collect.",
+      quote: "Open a quote, then turn it into an invoice."
     };
     this.listHint = hints[kind] || "";
     this.dashView = "list";
@@ -2133,6 +2256,10 @@ window.Alpine.data('appState', () => ({
     if (res && res.markedInvoiced) this.setDetailPhase("Invoiced");
   },
   previewIssue() {
+    if (this.detailIsQuote) {
+      this.setFeedback("Preview cannot print the PDF.", false);
+      return;
+    }
     const wasDraft = this.detailIsDraft;
     if (wasDraft) this.restampInvoice(this.detailId, "Invoiced");
     this.setFeedback(wasDraft
@@ -2207,6 +2334,9 @@ window.Alpine.data('appState', () => ({
     const overdueSum = overdueRows.reduce((total, row) => total + invoicePayable(row).payable, 0);
     this.openOverdueAmount = this.money(overdueSum);
     this.openOverdueCount = this.countLabel(overdue, "invoice", "invoices");
+    const quotes = ofKind("quote");
+    this.openQuoteAmount = this.money(quotes.reduce((total, row) => total + invoicePayable(row).payable, 0));
+    this.openQuoteCount = this.countLabel(quotes.length, "quote", "quotes");
     const paid = ofKind("paid");
     const written = ofKind("writtenoff");
     const doneBits = [];
@@ -2272,7 +2402,7 @@ window.Alpine.data('appState', () => ({
       this.emailOpen = false;
     }
     this.syncEmailToggle();
-    if (row.kind === "paid" || row.kind === "writtenoff") {
+    if (row.kind === "paid" || row.kind === "writtenoff" || row.kind === "quote") {
       this.detailPayUrl = "";
       this.payCopied = false;
     } else if (!sameInvoice && row.payUrl) {
@@ -2280,11 +2410,7 @@ window.Alpine.data('appState', () => ({
     }
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
-    this.detailIsDraft = row.kind === "draft";
-    this.detailCanSavePdf = row.kind !== "draft";
-    this.detailCanFinish = row.kind === "due";
-    this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
-    this.detailShowPay = row.kind === "draft" || row.kind === "due";
+    this.syncDetailChrome(row.status || "Draft");
     this.detailOverdue = invoiceIsOverdue(row, this.asOf);
     if (!sameInvoice || this.detailMessage === this.detailMessageAuto) {
       this.detailMessage = drafted;
@@ -2708,13 +2834,13 @@ window.Alpine.data('appState', () => ({
     }, 60);
   },
   async handInvoiceToWhatsApp() {
-    if (this.saving || this.sharingWhatsApp || !this.detailId || !this.detailShowPay) return;
+    if (this.saving || this.sharingWhatsApp || !this.detailId || !this.detailShowShare) return;
     this.sharingWhatsApp = true;
     try {
+      const quoting = !!this.detailIsQuote;
       let reserved = null;
-      const known = String(this.detailPayUrl || "").trim();
-      if (!known && !this.previewMode) reserved = this.openBlankTab();
-      if (!known && !this.previewMode) {
+      if (!quoting && !String(this.detailPayUrl || "").trim() && !this.previewMode) reserved = this.openBlankTab();
+      if (!quoting && !String(this.detailPayUrl || "").trim() && !this.previewMode) {
         const linked = await this.requestPayLink(this.detailId);
         if (!linked || linked.timedOut) {
           this.closeTab(reserved);
@@ -2722,14 +2848,18 @@ window.Alpine.data('appState', () => ({
           return;
         }
       }
-      const payUrl = String(this.detailPayUrl || "").trim();
-      if (!payUrl) {
+      const payUrl = quoting ? "" : String(this.detailPayUrl || "").trim();
+      if (!quoting && !payUrl) {
         this.closeTab(reserved);
         this.setFeedback(this.previewMode ? "Preview has no pay link." : "No pay link on this invoice yet.", true);
         return;
       }
       const row = (this.invoiceRows || []).find((item) => item.id === this.detailId) || {};
-      const text = whatsAppInvoiceText(this.detailCode || this.detailId, this.money(invoicePayable(row).payable), payUrl, this.whatsAppOverdueLine);
+      const amount = this.money(invoicePayable(row).payable);
+      const text = quoting
+        ? quoteShareText(this.detailCode || this.detailId, amount)
+        : whatsAppInvoiceText(this.detailCode || this.detailId, amount, payUrl, this.whatsAppOverdueLine);
+      this.lastWhatsAppText = text;
       const how = await this.presentWhatsApp(text, reserved);
       await this.downloadInvoicePdf();
       const lead = how === "copy" ? "Copied the WhatsApp message." : how === "sheet" ? "Opened the share sheet." : how ? "Opened WhatsApp." : "";
@@ -2746,7 +2876,7 @@ window.Alpine.data('appState', () => ({
         return;
       }
       this.setFeedback(lead + " " + pdfNote, false);
-      this.startPayWatch();
+      if (!quoting) this.startPayWatch();
     } finally {
       this.sharingWhatsApp = false;
     }
@@ -2830,6 +2960,48 @@ window.Alpine.data('appState', () => ({
       this.loadingLabel = "Updating…";
     }
   },
+  async convertQuote() {
+    if (this.saving || !this.detailId || !this.detailIsQuote) return;
+    this.saving = true;
+    this.loading = true;
+    this.loadingLabel = "Turning the quote into an invoice…";
+    this.clearFeedback();
+    const quoteId = this.detailId;
+    try {
+      if (this.previewMode) {
+        await this.wait(400);
+        const source = Array.isArray(this.quoteBookRows) ? this.quoteBookRows : (this.invoiceRows || []);
+        const result = convertQuoteRows(source, quoteId);
+        this.quoteBookRows = result.stored;
+        this.quoteBookReady = true;
+        this.invoiceRows = result.rows;
+        this.recomputeOpenPiles();
+        this.syncVisibleInvoices();
+        const invoice = (this.invoiceRows || []).find((item) => item.id === result.invoiceId || item.code === result.invoiceId);
+        if (invoice) this.fillDetail(invoice, invoice.lines || []);
+        const code = invoice ? (invoice.code || invoice.id) : result.invoiceId;
+        this.setFeedback(code ? ("Quote turned into invoice " + code + ".") : "The invoice is ready.", false);
+        return;
+      }
+      const res = await this.api("convertQuote", { invoiceId: quoteId }, { write: true });
+      if (res && /Invalid API action/.test(String(res.error || ""))) {
+        this.setFeedback("Turn into invoice is ready after you paste Code.gs and deploy a new version.", true);
+        return;
+      }
+      if (res && res.success) {
+        this.adoptWrite(res);
+        const row = (this.invoiceRows || []).find((item) => sameInvoiceNumber(item, res.invoiceId, res.invoiceCode));
+        if (row) this.fillDetail(row, row.lines || []);
+        this.setFeedback(res.message || ("Quote turned into invoice " + (res.invoiceCode || res.invoiceId) + "."), false);
+        return;
+      }
+      this.setFeedback(this.failMessage(res, "Could not turn the quote into an invoice."), true);
+    } finally {
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+    }
+  },
   async compileOpenInvoice() {
     if (this.saving || !this.detailId) return;
     if (this.previewMode) {
@@ -2875,19 +3047,29 @@ window.Alpine.data('appState', () => ({
     if (this.saving || !this.focusInvoice(id)) return;
     return this.markDetailStatus("Undo");
   },
-  setDetailPhase(status) {
-    this.detailStatus = status;
-    this.detailIsDraft = status === "Draft";
-    this.detailCanSavePdf = status !== "Draft";
-    this.detailCanFinish = status === "Invoiced";
-    this.detailCanUndo = status === "Paid" || status === "Written off";
-    this.detailShowPay = this.detailIsDraft || this.detailCanFinish;
-    const openRow = (this.invoiceRows || []).find((item) => item.id === this.detailId);
-    this.detailOverdue = status === "Invoiced" && invoiceIsOverdue(openRow, this.asOf);
+  syncDetailChrome(status) {
+    const label = String(status || "").trim();
+    const kind = kindForStatus(label);
+    this.detailStatus = label || "Draft";
+    this.detailIsQuote = kind === "quote";
+    this.detailIsDraft = kind === "draft";
+    this.detailCanSavePdf = kind === "due" || kind === "paid" || kind === "writtenoff";
+    this.detailCanFinish = kind === "due";
+    this.detailCanUndo = kind === "paid" || kind === "writtenoff";
+    this.detailShowPay = kind === "draft" || kind === "due";
+    this.detailShowShare = this.detailShowPay || kind === "quote";
+    this.detailShowEmail = kind !== "quote" && kind !== "converted";
     if (!this.detailShowPay) {
       this.detailPayUrl = "";
       this.payCopied = false;
     }
+    if (!this.detailShowEmail) this.emailOpen = false;
+    this.syncEmailToggle();
+  },
+  setDetailPhase(status) {
+    this.syncDetailChrome(status);
+    const openRow = (this.invoiceRows || []).find((item) => item.id === this.detailId);
+    this.detailOverdue = status === "Invoiced" && invoiceIsOverdue(openRow, this.asOf);
   },
   async markDetailStatus(status) {
     if (this.saving || !this.detailId) return;

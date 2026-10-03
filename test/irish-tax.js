@@ -236,5 +236,34 @@ const oddGross = context.invoiceJobProfit({
   lines: [{ amount: 200, hours: 4, materials: 0, hired: 0, mileageKm: 0, mileageRate: 0, loadedHourly: 0 }]
 });
 assert(oddGross.due === 250 && oddGross.jobs[0].due === 250 && oddGross.profit === 250, JSON.stringify(oddGross));
+const sampleQuote = context.sampleDashboard().invoices.filter(function (row) { return row.id === "INV-EB-006"; })[0];
+assert(sampleQuote && sampleQuote.status === "Quote" && sampleQuote.kind === "quote", JSON.stringify(sampleQuote && sampleQuote.status));
+assert(!sampleQuote.payUrl, "the sample quote included a pay link");
+assert(context.invoicePayable(sampleQuote).payable === 150, context.invoicePayable(sampleQuote).payable);
+assert(context.invoiceIsOverdue(sampleQuote, "2026-09-22") === false, "a quote was overdue");
+const quoteText = context.quoteShareText("INV-EB-006", "€150.00");
+assert(quoteText.indexOf("Invoice INV-EB-006") === 0, quoteText);
+assert(quoteText.indexOf("Amount due €150.00") !== -1, quoteText);
+assert(quoteText.indexOf("PDF downloaded, attach it") !== -1, quoteText);
+assert(quoteText.indexOf("http") === -1, quoteText);
+const firstConvert = context.convertQuoteRows(context.sampleDashboard().invoices, "INV-EB-006");
+assert(firstConvert.created === true && firstConvert.invoiceId === "INV-EB-007", JSON.stringify(firstConvert));
+assert(firstConvert.rows.filter(function (row) { return row.status === "Quote" || row.kind === "quote"; }).length === 0, "the quote stayed on the live list");
+assert(firstConvert.rows.filter(function (row) { return row.id === "INV-EB-007"; }).length === 1, "convert minted more than one invoice");
+assert(!firstConvert.rows.filter(function (row) { return row.id === "INV-EB-007"; })[0].payUrl, "preview convert added a pay link");
+const secondConvert = context.convertQuoteRows(firstConvert.stored, "INV-EB-006");
+assert(secondConvert.created === false && secondConvert.invoiceId === "INV-EB-007", secondConvert.invoiceId + " " + secondConvert.created);
+assert(secondConvert.rows.filter(function (row) { return row.id === "INV-EB-007"; }).length === 1, "a second convert changed the live list");
+assert(detailHtml.indexOf("Log a quote") !== -1, "the quote path is missing");
+assert(detailHtml.indexOf('id="turn-into-invoice"') !== -1, "Turn into invoice is missing");
+assert(detailHtml.indexOf("Turn into invoice") !== -1, "the convert label is missing");
+assert(detailHtml.indexOf('x-show="detailIsQuote"') !== -1, "quote actions are always visible");
+assert(detailHtml.indexOf('x-show="detailShowShare"') !== -1, "quote WhatsApp is hidden");
+assert(detailHtml.indexOf('x-show="detailShowPay"') !== -1, "pay link visibility changed");
+const chrome = appSource.slice(appSource.indexOf("syncDetailChrome(status)"), appSource.indexOf("syncDetailChrome(status)") + 800);
+assert(chrome.indexOf('this.detailShowPay = kind === "draft" || kind === "due"') !== -1, chrome);
+assert(chrome.indexOf('kind === "quote"') !== -1, chrome);
+const issue = appSource.slice(appSource.indexOf("previewIssue()"), appSource.indexOf("previewIssue()") + 360);
+assert(issue.indexOf("detailIsQuote") !== -1, "quote PDF preview marks the quote invoiced");
 
 console.log("Irish sole trader indication passed.");

@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=29">
+  <link rel="stylesheet" href="style.css?v=30">
   <script src="config.js?v=1"></script>
   <script defer src="app.js?v=44"></script>
 </head>
@@ -38,10 +38,22 @@
       <!-- VIEW: DASHBOARD -->
       <div x-show="currentTab === 'dashboard'">
         <div x-show="dashView === 'home'" class="home-board">
-          <button type="button" data-action="setTrackerTab">Log a job</button>
+          <div class="home-pair">
+            <button type="button" data-action="setTrackerTab">Log a job</button>
+            <button type="button" data-action="setQuoteTab">Log a quote</button>
+          </div>
           <button type="button" class="btn-line" data-action="openProfitList">Jobs by profit</button>
           <h2 class="home-heading">Invoices</h2>
           <div class="pile-list">
+            <button type="button" class="pile" data-action="openList" data-id="quote">
+              <span class="pile-copy">
+                <span class="metric-title">Quotes</span>
+                <span class="metric-value" x-text="openQuoteAmount"></span>
+                <span class="metric-sub" x-text="openQuoteCount"></span>
+                <span class="pile-hint">Open a quote and turn it into an invoice</span>
+              </span>
+              <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
+            </button>
             <button type="button" class="pile" data-action="openList" data-id="send">
               <span class="pile-copy">
                 <span class="metric-title">Invoices to send</span>
@@ -112,6 +124,7 @@
                 <div class="inv-actions">
                   <button type="button" x-show="listShowsSend" data-action="markListInvoiced" :data-id="inv.id" data-disable-when="saving">Mark invoiced</button>
                   <button type="button" class="btn-line" x-show="listShowsSend" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Open invoice</button>
+                  <button type="button" class="btn-line" x-show="listShowsQuote" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">Open quote</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="openInvoice" :data-id="inv.id" data-disable-when="saving">View</button>
                   <button type="button" x-show="listShowsCollect" data-action="markListPaid" :data-id="inv.id" data-disable-when="saving">Mark paid</button>
                   <button type="button" class="btn-line" x-show="listShowsCollect" data-action="markListWrittenOff" :data-id="inv.id" data-disable-when="saving">Write off</button>
@@ -230,6 +243,7 @@
             </div>
           </article>
           <p class="page-lead" x-show="detailIsDraft">Check this invoice, then mark it invoiced.</p>
+          <p class="page-lead" x-show="detailIsQuote">Turn this quote into an invoice when the client is ready.</p>
           <div class="send-dock">
             <div class="send-dock-inner">
               <div x-show="detailOverdue">
@@ -239,10 +253,11 @@
                 </div>
               </div>
               <button type="button" id="mark-invoiced" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
+              <button type="button" id="turn-into-invoice" x-show="detailIsQuote" data-action="convertQuote" data-disable-when="saving">Turn into invoice</button>
               <div class="inv-actions">
                 <button type="button" x-show="detailShowPay" data-action="copyPayLink" data-disable-when="saving" :class="detailCanFinish ? '' : 'btn-line'">Copy pay link</button>
                 <button type="button" data-action="downloadInvoicePdf" data-disable-when="saving" x-text="downloadPdfLabel" :class="detailCanFinish ? '' : 'btn-line'"></button>
-                <button type="button" id="share-whatsapp" class="share-whatsapp" x-show="detailShowPay" data-action="shareOnWhatsApp" data-disable-when="saving" :class="detailCanFinish ? '' : 'btn-line'">Share on WhatsApp</button>
+                <button type="button" id="share-whatsapp" class="share-whatsapp" x-show="detailShowShare" data-action="shareOnWhatsApp" data-disable-when="saving" :class="detailCanFinish ? '' : 'btn-line'">Share on WhatsApp</button>
               </div>
               <p class="pay-copied" x-show="payCopied">Copied</p>
               <div x-show="detailPayUrl">
@@ -250,7 +265,9 @@
                   <a class="pay-open" data-pay-link target="_blank" rel="noopener noreferrer" x-text="detailPayUrl"></a>
                 </div>
               </div>
-              <button type="button" class="btn-line" data-action="toggleEmail" data-disable-when="saving" x-text="emailToggleLabel"></button>
+              <div x-show="detailShowEmail">
+                <button type="button" class="btn-line" data-action="toggleEmail" data-disable-when="saving" x-text="emailToggleLabel"></button>
+              </div>
               <div id="email-sheet" class="email-sheet" x-show="emailOpen">
                 <div class="form-group">
                   <label class="to-label">To</label>
@@ -287,10 +304,10 @@
           <div class="alert alert-success" x-show="jobLogged.text">
             <p class="job-logged-line">
               <span x-text="jobLogged.text"></span>
-              <button type="button" class="text-btn" data-action="viewLoggedInvoice" data-disable-when="saving">View invoice</button>
+              <button type="button" class="text-btn" data-action="viewLoggedInvoice" data-disable-when="saving" x-text="viewLoggedLabel"></button>
             </p>
           </div>
-          <div class="card-title">Log a job</div>
+          <div class="card-title" x-text="logTitle"></div>
           
           <div class="form-group">
             <label>Client</label>
@@ -302,23 +319,26 @@
             </select>
           </div>
 
-          <div class="form-group">
-            <label>Invoice</label>
-            <select x-model="form.invoiceMode" @change="onInvoiceModeChange">
-              <option value="new">New invoice</option>
-              <option value="existing">Add to invoice</option>
-            </select>
+          <div x-show="showJobInvoice">
+            <div class="form-group">
+              <label>Invoice</label>
+              <select x-model="form.invoiceMode" @change="onInvoiceModeChange">
+                <option value="new">New invoice</option>
+                <option value="existing">Add to invoice</option>
+              </select>
+            </div>
+            <div class="form-group" x-show="showExistingInvoices">
+              <label>Existing invoice</label>
+              <select x-model="form.invoiceId" @change="syncInvoiceHint">
+                <option value="">-- Choose invoice --</option>
+                <template x-for="inv in clientInvoices">
+                  <option :value="inv.id" x-text="inv.label"></option>
+                </template>
+              </select>
+            </div>
+            <p class="shift-note" x-show="invoiceHint" x-text="invoiceHint"></p>
           </div>
-          <div class="form-group" x-show="showExistingInvoices">
-            <label>Existing invoice</label>
-            <select x-model="form.invoiceId" @change="syncInvoiceHint">
-              <option value="">-- Choose invoice --</option>
-              <template x-for="inv in clientInvoices">
-                <option :value="inv.id" x-text="inv.label"></option>
-              </template>
-            </select>
-          </div>
-          <p class="shift-note" x-show="invoiceHint" x-text="invoiceHint"></p>
+          <p class="shift-note" x-show="quoteHint" x-text="quoteHint"></p>
 
           <div class="form-group">
             <label>Date</label>
