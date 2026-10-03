@@ -26,11 +26,31 @@ function createSheet(name) {
   const hiddenRows = {};
   const hiddenCols = {};
   let gridHidden = false;
+  let statusRule = null;
   function key(row, col) { return row + ":" + col; }
+  function statusChoices_() {
+    if (!statusRule || statusRule.allowInvalid !== false || !statusRule.range || !statusRule.range.getValues) return null;
+    const values = statusRule.range.getValues();
+    const list = [];
+    for (let r = 0; r < values.length; r++) {
+      for (let c = 0; c < values[r].length; c++) {
+        const text = String(values[r][c] == null ? "" : values[r][c]).trim();
+        if (text) list.push(text);
+      }
+    }
+    return list;
+  }
   function get(row, col) {
     return Object.prototype.hasOwnProperty.call(cells, key(row, col)) ? cells[key(row, col)] : "";
   }
   function set(row, col, value) {
+    if (name === "InvoiceList" && col === 9 && row >= 2) {
+      const choices = statusChoices_();
+      const text = value == null ? "" : String(value);
+      if (choices && text !== "" && choices.indexOf(text) === -1) {
+        throw new Error("Exception: The data you entered in cell I" + row + " violates the data validation rules set on this cell.");
+      }
+    }
     cells[key(row, col)] = value;
     if (name === "InvoiceList" && row >= 2 && col === 8 && get(row, 1) === "" && value !== "") {
       cells[key(row, 1)] = row - 1;
@@ -162,6 +182,15 @@ function parseA1(a1) {
           if (!time) return;
           const serial = (Number(time[1]) * 60 + Number(time[2]) + Number(time[3]) / 60) / 1440;
           set(startRow, startCol, serial);
+        },
+        setDataValidation: function (rule) {
+          const width = cols || 1;
+          if (name === "InvoiceList" && startCol <= 9 && startCol + width > 9) statusRule = rule;
+        },
+        getDataValidation: function () {
+          const width = cols || 1;
+          if (name === "InvoiceList" && startCol <= 9 && startCol + width > 9) return statusRule;
+          return null;
         }
       };
     },
@@ -242,7 +271,22 @@ function loadApi(workbook) {
         return workbook;
       },
       flush: function () {},
-      Direction: { UP: "up" }
+      Direction: { UP: "up" },
+      newDataValidation: function () {
+        const spec = { allowInvalid: true, range: null };
+        const builder = {
+          requireValueInRange: function (range) {
+            spec.range = range;
+            return builder;
+          },
+          setAllowInvalid: function (flag) {
+            spec.allowInvalid = flag === false ? false : true;
+            return builder;
+          },
+          build: function () { return spec; }
+        };
+        return builder;
+      }
     },
     LockService: {
       getDocumentLock: function () {
@@ -2841,6 +2885,62 @@ test("a quote has no pay link and its PDF stays a quote", function (api, workboo
   assert(!mailed.success, "a quote email was sent");
   assert(!api.lastEmail, "quote email left the account");
   assert(statusCell(workbook, 2) === "Quote", statusCell(workbook, 2));
+});
+
+function statusListValues(rule) {
+  if (!rule || !rule.range) return [];
+  return rule.range.getValues().reduce(function (list, row) {
+    row.forEach(function (value) {
+      const text = String(value == null ? "" : value).trim();
+      if (text) list.push(text);
+    });
+    return list;
+  }, []);
+}
+
+test("logging an estimate writes a dropdown status into InvoiceList I34", function (api, workbook) {
+  const config = seedVat(workbook, "Y", 23);
+  config.getRange(26, 1).setValue("Invoice status");
+  config.getRange(27, 1).setValue("Draft");
+  config.getRange(28, 1).setValue("Invoiced");
+  config.getRange(29, 1).setValue("Written Off");
+  config.getRange(30, 1).setValue("Paid");
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 9, 43, 1).setDataValidation({
+    allowInvalid: false,
+    range: config.getRange(27, 1, 4, 1)
+  });
+  for (let row = 2; row <= 33; row++) invoices.getRange(row, 8).setValue(new Date(2026, 8, 1));
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+
+  const created = api.executeTimeLog(shift({ entry: "quote", jobDetails: "Boiler service" }));
+  assert(created.success, created.error);
+  const allowed = statusListValues(invoices.getRange(34, 9).getDataValidation());
+  const written = invoices.getRange(34, 9).getValue();
+  assert(allowed.indexOf("Draft") !== -1 && allowed.indexOf("Invoiced") !== -1, allowed.join(", "));
+  assert(allowed.indexOf("Written Off") !== -1 && allowed.indexOf("Paid") !== -1, allowed.join(", "));
+  assert(allowed.indexOf(written) !== -1, written + " is outside " + allowed.join(", "));
+  assert(written === "Quote", written);
+  assert(invoices.getRange(34, 9).getFormula() === "", invoices.getRange(34, 9).getFormula());
+  assert(invoices.getRange(34, 10).getValue() === "", "the estimate stamped VAT");
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved");
+  const before = api.fetches.length;
+  const linked = api.ensurePaymentLink({ invoiceId: created.invoiceId });
+  assert(linked.success && !linked.payUrl, JSON.stringify(linked));
+  assert(api.fetches.length === before, "an estimate created a pay link");
+
+  const converted = api.convertQuoteToInvoice({ invoiceId: created.invoiceId });
+  assert(converted.success, converted.error);
+  const after = statusListValues(invoices.getRange(34, 9).getDataValidation());
+  const quoteStatus = invoices.getRange(34, 9).getValue();
+  assert(after.indexOf(quoteStatus) !== -1, quoteStatus + " is outside " + after.join(", "));
+  assert(quoteStatus === "Converted", quoteStatus);
+  assert(invoices.getRange(34, 9).getFormula() === "", "Converted is a formula");
+  const draftRow = invoices.getLastRow();
+  assert(draftRow !== 34, "convert reused the estimate row");
+  assert(invoices.getRange(draftRow, 9).getValue() === "Draft", invoices.getRange(draftRow, 9).getValue());
+  assert(invoices.getRange(draftRow, 9).getFormula() === "", "the invoice status is a formula");
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved on convert");
 });
 
 test("turning a quote into an invoice stamps VAT once and keeps one code", function (api, workbook) {

@@ -406,6 +406,68 @@ function nextInvoiceInt_(invoiceSheet) {
   return nextInvoiceInt;
 }
 
+/**
+ * InvoiceList column I takes its list from the Config status block
+ * (Draft, Invoiced, Written Off, Paid on the live sheet).
+ * Quote and Converted are stored in that same cell. They are added to the
+ * block, and the existing list rule is pointed at the longer block, before
+ * the status is written. A blank formula is left in the cell.
+ */
+function invoiceStatusBlock_(config) {
+  if (!config) return null;
+  const header = findConfigLabelRow_(config, /^invoice status$/i);
+  const start = header ? header + 1 : findConfigLabelRow_(config, /^draft$/i);
+  if (!start) return null;
+  const height = Math.max(config.getLastRow(), start) - start + 8;
+  const values = config.getRange(start, 1, height, 1).getValues();
+  const labels = [];
+  let end = start - 1;
+  for (let i = 0; i < values.length; i++) {
+    const label = clientText_(values[i][0]);
+    if (!label) break;
+    labels.push(label);
+    end = start + i;
+  }
+  if (!labels.length) return null;
+  return { start: start, end: end, labels: labels };
+}
+
+function applyInvoiceStatusValidation_(invoiceSheet, config, block, row) {
+  if (!invoiceSheet || !config || !block) return;
+  if (typeof SpreadsheetApp === "undefined" || !SpreadsheetApp.newDataValidation) return;
+  if (!invoiceSheet.getRange(2, 9).setDataValidation) return;
+  const source = config.getRange(block.start, 1, block.end - block.start + 1, 1);
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(source, true)
+    .setAllowInvalid(false)
+    .build();
+  const count = Math.max(43, (row || 2) - 1);
+  invoiceSheet.getRange(2, 9, count, 1).setDataValidation(rule);
+}
+
+function invoiceStatusToken_(ss, invoiceSheet, status, row) {
+  const word = clientText_(status) || "Draft";
+  const config = ss && ss.getSheetByName ? ss.getSheetByName("Config") : null;
+  const block = invoiceStatusBlock_(config);
+  if (!block) return word;
+  const key = word.toLowerCase();
+  for (let i = 0; i < block.labels.length; i++) {
+    if (block.labels[i].toLowerCase() === key) return block.labels[i];
+  }
+  if (word !== "Quote" && word !== "Converted") return word;
+  const next = block.end + 1;
+  config.getRange(next, 1).setValue(word);
+  block.labels.push(word);
+  block.end = next;
+  applyInvoiceStatusValidation_(invoiceSheet, config, block, row);
+  return word;
+}
+
+function writeInvoiceStatus_(ss, invoiceSheet, row, status) {
+  const token = invoiceStatusToken_(ss, invoiceSheet, status, row);
+  invoiceSheet.getRange(row, 9).setValue(token);
+}
+
 function appendInvoiceListRow_(invoiceSheet, status, ss) {
   const invLastValues = invoiceSheet.getRange("H1:H").getValues();
   let nextInvListRow = 1;
@@ -413,7 +475,7 @@ function appendInvoiceListRow_(invoiceSheet, status, ss) {
     nextInvListRow++;
   }
   invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
-  invoiceSheet.getRange(nextInvListRow, 9).setValue(status || "Draft"); // Column I: Invoice Status
+  writeInvoiceStatus_(ss, invoiceSheet, nextInvListRow, status || "Draft"); // Column I: Invoice Status
   if (ss && displayStatus_(status) !== "Quote") stampNewInvoiceVat_(ss, invoiceSheet, nextInvListRow);
   if (ss && displayStatus_(status) === "Invoiced") stampInvoiceDueDate_(ss, invoiceSheet, nextInvListRow);
   return nextInvListRow;
@@ -550,7 +612,7 @@ function convertQuoteToInvoice(payload) {
     stampInvoiceJobName_(ss, newId, invoiceSheet.getRange(located.row, INVOICE_JOB_NAME_COL_).getValue());
     retargetTimeRows_(ss, located.id, newId);
     refreshStampedInvoiceVat_(ss, newId);
-    invoiceSheet.getRange(located.row, 9).setValue("Converted");
+    writeInvoiceStatus_(ss, invoiceSheet, located.row, "Converted");
     rememberConvertedInvoice_(invoiceSheet, located.row, newId);
     const code = invoicePrintCode_(ss, newId);
     const quoteCode = invoiceShownCode_(invoiceId, located);
