@@ -3104,14 +3104,14 @@ test("two job names share a row value and a different name stays on its own invo
     priceMode: "job",
     jobPrice: 500,
     jobDetails: "Deposit",
-    jobName: "Cathedral View"
+    jobName: "North Wing"
   }));
   assert(deposit.success, deposit.error);
   const balance = api.executeTimeLog(shift({
     priceMode: "job",
     jobPrice: 700,
     jobDetails: "Balance",
-    jobName: " cathedral view ",
+    jobName: " north wing ",
     date: "2026-09-23"
   }));
   assert(balance.success, balance.error);
@@ -3155,12 +3155,12 @@ test("two job names share a row value and a different name stays on its own invo
   const blankRow = invoiceRow(blank.invoiceId);
   const unnamedRow = invoiceRow(unnamed.invoiceId);
   assert(depositRow && balanceRow && otherRow && blankRow && unnamedRow, "a job missed its invoice row");
-  assert(invoices.getRange(depositRow, 16).getValue() === "Cathedral View", invoices.getRange(depositRow, 16).getValue());
-  assert(invoices.getRange(balanceRow, 16).getValue() === "cathedral view", invoices.getRange(balanceRow, 16).getValue());
-  assert(api.jobNameKey_(invoices.getRange(depositRow, 16).getValue()) === api.jobNameKey_(invoices.getRange(balanceRow, 16).getValue()), "Cathedral View and cathedral view produced different keys");
-  assert(api.jobNameKey_("Cathedral View") === "cathedral view", api.jobNameKey_("Cathedral View"));
+  assert(invoices.getRange(depositRow, 16).getValue() === "North Wing", invoices.getRange(depositRow, 16).getValue());
+  assert(invoices.getRange(balanceRow, 16).getValue() === "north wing", invoices.getRange(balanceRow, 16).getValue());
+  assert(api.jobNameKey_(invoices.getRange(depositRow, 16).getValue()) === api.jobNameKey_(invoices.getRange(balanceRow, 16).getValue()), "North Wing and north wing produced different keys");
+  assert(api.jobNameKey_("North Wing") === "north wing", api.jobNameKey_("North Wing"));
   assert(invoices.getRange(otherRow, 16).getValue() === "Other Site", invoices.getRange(otherRow, 16).getValue());
-  assert(api.jobNameKey_(invoices.getRange(otherRow, 16).getValue()) !== api.jobNameKey_("Cathedral View"), "Other Site shared Cathedral View");
+  assert(api.jobNameKey_(invoices.getRange(otherRow, 16).getValue()) !== api.jobNameKey_("North Wing"), "Other Site shared North Wing");
   assert(invoices.getRange(blankRow, 16).getValue() === "", "a blank job name was stamped");
   assert(invoices.getRange(unnamedRow, 16).getValue() === "", "a missing job name was stamped");
   assert(api.jobNameKey_("") === "" && api.jobNameKey_("   ") === "", "a blank name produced a match key");
@@ -3176,8 +3176,8 @@ test("two job names share a row value and a different name stays on its own invo
   assert(invoices.getRange(balanceRow, 12).getValue() === 161 && invoices.getRange(balanceRow, 13).getValue() === 861, "balance VAT " + invoices.getRange(balanceRow, 12).getValue());
   assert(invoices.getRange(depositRow, 14).getValue() === "" && invoices.getRange(balanceRow, 14).getValue() === "", "due date column was used for the job name");
   assert(invoices.getRange(depositRow, 15).getValue() === "" && invoices.getRange(balanceRow, 15).getValue() === "", "converted column was used for the job name");
-  assert(time.getRange(2, 26).getValue() === "Cathedral View" && time.getRange(2, 26).getFormula() === "", "time row job name " + time.getRange(2, 26).getValue());
-  assert(time.getRange(3, 26).getValue() === "cathedral view", time.getRange(3, 26).getValue());
+  assert(time.getRange(2, 26).getValue() === "North Wing" && time.getRange(2, 26).getFormula() === "", "time row job name " + time.getRange(2, 26).getValue());
+  assert(time.getRange(3, 26).getValue() === "north wing", time.getRange(3, 26).getValue());
   assert(time.getRange(4, 26).getValue() === "Other Site", time.getRange(4, 26).getValue());
   assert(time.getRange(5, 26).getValue() === "" && time.getRange(6, 26).getValue() === "", "a blank name landed on the time row");
   assert(time.getRange(1, 26).getValue() === "Job name", time.getRange(1, 26).getValue());
@@ -3190,26 +3190,26 @@ test("two job names share a row value and a different name stays on its own invo
     entry: "quote",
     priceMode: "job",
     jobPrice: 80,
-    jobDetails: "Quote for the nave",
-    jobName: "Cathedral View",
+    jobDetails: "Quote for the fit-out",
+    jobName: "North Wing",
     date: "2026-09-27"
   }));
   assert(quote.success, quote.error);
   const quoteSheetRow = invoiceRow(quote.invoiceId);
-  assert(invoices.getRange(quoteSheetRow, 16).getValue() === "Cathedral View", "the quote missed the job name");
+  assert(invoices.getRange(quoteSheetRow, 16).getValue() === "North Wing", "the quote missed the job name");
   const turned = api.convertQuoteToInvoice({ invoiceId: quote.invoiceId });
   assert(turned.success, turned.error);
   const turnedRow = invoiceRow(turned.invoiceId);
   assert(turnedRow !== quoteSheetRow, "convert reused the quote row");
-  assert(invoices.getRange(turnedRow, 16).getValue() === "Cathedral View", "the invoice missed the quote job name");
+  assert(invoices.getRange(turnedRow, 16).getValue() === "North Wing", "the invoice missed the quote job name");
   assert(invoices.getRange(turnedRow, 16).getFormula() === "", "converted job name is a formula");
   assert(statusCell(workbook, quoteSheetRow) === "Converted", statusCell(workbook, quoteSheetRow));
   const live = api.fetchDashboard().invoices.filter(function (item) {
-    return api.jobNameKey_(item.jobName) === "cathedral view";
+    return api.jobNameKey_(item.jobName) === "north wing";
   });
   const liveCodes = live.map(function (item) { return item.code; });
   assert(liveCodes.indexOf(deposit.invoiceCode) !== -1 && liveCodes.indexOf(balance.invoiceCode) !== -1, liveCodes.join(", "));
-  assert(liveCodes.indexOf(other.invoiceCode) === -1, "Other Site joined Cathedral View");
+  assert(liveCodes.indexOf(other.invoiceCode) === -1, "Other Site joined North Wing");
   assert(live.every(function (item) { return item.status !== "Converted" && item.status !== "Quote"; }), live.map(function (item) { return item.status; }).join(", "));
   assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved after convert");
 });
