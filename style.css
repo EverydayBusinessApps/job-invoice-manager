@@ -88,6 +88,9 @@ textarea.email-preview { min-height: 4.25rem; line-height: 1.4; white-space: pre
 .invoice-meta dt { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8; }
 .invoice-meta dd { margin: 0.12rem 0 0; font-size: 0.92rem; font-weight: 600; color: #1e293b; overflow-wrap: anywhere; }
 .invoice-lines { margin-top: 0.85rem; border-top: 1px solid #e6eaee; }
+.related-invoices { margin-top: 0.85rem; }
+.related-invoices .page-lead { margin-bottom: 0.45rem; }
+.related-invoices .inv-row + .inv-row { margin-top: 0.45rem; }
 .invoice-line { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; padding: 0.7rem 0; border-bottom: 1px solid #f1f5f9; }
 .invoice-line-main { min-width: 0; }
 .invoice-line-title { display: block; font-weight: 700; color: #00263B; overflow-wrap: anywhere; }

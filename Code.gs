@@ -547,6 +547,7 @@ function convertQuoteToInvoice(payload) {
     const created = resolveInvoiceListRow_(ss, newId);
     if (!created.row) return { success: false, error: "The invoice could not be opened." };
     copyInvoiceFacts_(invoiceSheet, located.row, created.row);
+    stampInvoiceJobName_(ss, newId, invoiceSheet.getRange(located.row, INVOICE_JOB_NAME_COL_).getValue());
     retargetTimeRows_(ss, located.id, newId);
     refreshStampedInvoiceVat_(ss, newId);
     invoiceSheet.getRange(located.row, 9).setValue("Converted");
@@ -694,6 +695,45 @@ var PRICE_LENGTH_COL_ = 22;
 var PRICE_RATE_COL_ = 23;
 var PRICE_JOB_COL_ = 24;
 var PRICE_TOTAL_COL_ = 25;
+// Time&Attendance column Z, after Price Total. InvoiceList column P, after Converted to.
+// A shared job is the trimmed name, compared without case. A blank name matches nothing.
+var TIME_JOB_NAME_COL_ = 26;
+var INVOICE_JOB_NAME_COL_ = 16;
+
+function jobNameText_(raw) {
+  return clientText_(raw);
+}
+
+function jobNameKey_(raw) {
+  return jobNameText_(raw).toLowerCase();
+}
+
+function ensureJobNameHeader_(sheet, column) {
+  if (!sheet || !column) return;
+  if (!clientText_(sheet.getRange(1, column).getValue())) {
+    sheet.getRange(1, column).setValue("Job name");
+  }
+}
+
+function stampJobNameValue_(sheet, row, column, name) {
+  const text = jobNameText_(name);
+  if (!sheet || !row || !column || !text) return "";
+  ensureJobNameHeader_(sheet, column);
+  writePlainNumber_(sheet.getRange(row, column), text);
+  return text;
+}
+
+function stampInvoiceJobName_(ss, invoiceId, name) {
+  const text = jobNameText_(name);
+  if (!ss || !text) return "";
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return "";
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  if (!located.row) return "";
+  const existing = jobNameText_(invoiceSheet.getRange(located.row, INVOICE_JOB_NAME_COL_).getValue());
+  if (existing) return existing;
+  return stampJobNameValue_(invoiceSheet, located.row, INVOICE_JOB_NAME_COL_, text);
+}
 
 function priceModeKey_(raw) {
   const text = clientText_(raw).toLowerCase().replace(/\s+/g, "");
@@ -893,6 +933,8 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
   writeJobCosts_(timeSheet, nextRow, costs, ss);
   applyShiftPrice_(timeSheet, nextRow, priced);
+  stampJobNameValue_(timeSheet, nextRow, TIME_JOB_NAME_COL_, payload.jobName);
+  stampInvoiceJobName_(ss, invoiceId, payload.jobName);
   if (priced.mode !== "hourly") addPricedInvoiceNet_(ss, invoiceId, priced.total);
 
   const amount = priced.mode === "hourly" ? loggedShiftAmount_(timeSheet, nextRow) : priced.total;
@@ -2101,7 +2143,7 @@ function readTimeRows_(ss, timezone) {
   const sheet = ss.getSheetByName("Time&Attendance");
   const last = sheet ? timeSheetLastRow_(sheet) : 0;
   if (!sheet || last < 2) return [];
-  const data = sheet.getRange(2, 1, last - 1, PRICE_TOTAL_COL_).getValues();
+  const data = sheet.getRange(2, 1, last - 1, TIME_JOB_NAME_COL_).getValues();
   const rows = [];
   for (let i = 0; i < data.length; i++) {
     const client = String(data[i][3] || "").trim();
@@ -2144,7 +2186,8 @@ function readTimeRows_(ss, timezone) {
       mileageRate: costOrZero_(data[i][17]),
       loadedHourly: costOrZero_(data[i][18]),
       priceMode: mode,
-      priceLabel: priceLabel
+      priceLabel: priceLabel,
+      jobName: jobNameText_(data[i][TIME_JOB_NAME_COL_ - 1])
     });
   }
   return rows;
@@ -2248,7 +2291,7 @@ function buildDashboardReport_(ss, asOfDate) {
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   normalizeInvoiceStatuses_(invoiceSheet);
   if (invoiceSheet && invoiceSheet.getLastRow() >= 2) {
-    const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 14).getValues();
+    const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, INVOICE_JOB_NAME_COL_).getValues();
     for (let i = 0; i < data.length; i++) {
       const listId = String(data[i][0] || "").trim();
       if (!listId) continue;
@@ -2269,7 +2312,8 @@ function buildDashboardReport_(ss, asOfDate) {
         vatRate: appliedText ? numberOrNull_(data[i][10]) : null,
         vat: appliedText && vatAppliedYes_(appliedText) ? numberOrNull_(data[i][11]) : null,
         gross: appliedText && vatAppliedYes_(appliedText) ? numberOrNull_(data[i][12]) : null,
-        dueOnSheet: isoDate_(data[i][13], timezone)
+        dueOnSheet: isoDate_(data[i][13], timezone),
+        jobName: jobNameText_(data[i][INVOICE_JOB_NAME_COL_ - 1])
       };
       group.list = preferInvoiceList_(group.list, nextList);
     }
@@ -2378,6 +2422,7 @@ function buildDashboardReport_(ss, asOfDate) {
       rate: list && list.rate != null ? roundMoney_(list.rate) : 0,
       servicePeriod: service,
       jobDetails: job,
+      jobName: (list && list.jobName) || "",
       email: profile.email,
       contact: profile.contact || "",
       terms: profile.terms,

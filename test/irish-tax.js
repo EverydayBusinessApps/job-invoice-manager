@@ -331,4 +331,48 @@ const hourlyPreview = context.priceJobPreview({ priceMode: "hourly", start: "09:
 assert(hourlyPreview.ok && hourlyPreview.hours === 4 && hourlyPreview.total === 160, JSON.stringify(hourlyPreview));
 assert(context.estimateSoleTraderTax(60000).total === 15052.82, "tax total changed");
 
+const books = context.sampleDashboard();
+const deposit = books.invoices.filter((row) => row.id === "INV-EB-DEP")[0];
+const balance = books.invoices.filter((row) => row.id === "INV-EB-BAL")[0];
+const otherSite = books.invoices.filter((row) => row.id === "INV-EB-OS")[0];
+const depositRelated = context.relatedInvoices(books.invoices, deposit);
+assert(depositRelated.length === 1 && depositRelated[0].code === "INV-EB-BAL", JSON.stringify(depositRelated));
+assert(depositRelated[0].status === "Draft" && depositRelated[0].payWord === "Not sent", JSON.stringify(depositRelated[0]));
+assert(depositRelated[0].amount === 750, "balance amount " + depositRelated[0].amount);
+assert(depositRelated[0].payUrl === "https://example.com/pay/INV-EB-BAL", depositRelated[0].payUrl);
+assert(depositRelated[0].payUrl !== deposit.payUrl, "the balance reused the deposit pay link");
+const balanceRelated = context.relatedInvoices(books.invoices, balance);
+assert(balanceRelated.length === 1 && balanceRelated[0].code === "INV-EB-DEP", JSON.stringify(balanceRelated));
+assert(balanceRelated[0].status === "Invoiced" && balanceRelated[0].payWord === "Unpaid", JSON.stringify(balanceRelated[0]));
+assert(balanceRelated[0].amount === 500, "deposit amount " + balanceRelated[0].amount);
+assert(balanceRelated[0].payUrl === "https://example.com/pay/INV-EB-DEP", balanceRelated[0].payUrl);
+assert(context.relatedInvoices(books.invoices, otherSite).length === 0, "Other Site listed Cathedral View");
+const plainAcme = books.invoices.filter((row) => row.id === "INV-EB-002")[0];
+assert(context.relatedInvoices(books.invoices, plainAcme).length === 0, "a blank job name linked other Acme invoices");
+assert(context.jobNameKey("Cathedral View") === context.jobNameKey(" cathedral view "), context.jobNameKey("Cathedral View") + " / " + context.jobNameKey(" cathedral view "));
+const lower = Object.assign({}, balance, { id: "INV-EB-LOW", code: "INV-EB-LOW", jobName: "cathedral view", payUrl: "https://example.com/pay/INV-EB-LOW" });
+const mixed = context.relatedInvoices([deposit, lower, otherSite], deposit);
+assert(mixed.some((row) => row.code === "INV-EB-LOW") && !mixed.some((row) => row.code === "INV-EB-OS"), JSON.stringify(mixed));
+const blanks = [
+  { id: "A", code: "A", status: "Invoiced", kind: "due", jobName: "", total: 10, payUrl: "https://example.com/pay/A" },
+  { id: "B", code: "B", status: "Draft", kind: "draft", jobName: "   ", total: 20, payUrl: "https://example.com/pay/B" }
+];
+assert(context.relatedInvoices(blanks, blanks[0]).length === 0, "blank names matched each other");
+const quoteRow = { id: "Q", code: "Q", status: "Quote", kind: "quote", jobName: "Cathedral View", total: 80, payUrl: "https://example.com/pay/Q" };
+const convertedRow = { id: "C", code: "C", status: "Converted", kind: "converted", jobName: "Cathedral View", total: 80, payUrl: "https://example.com/pay/C" };
+const writtenRow = { id: "W", code: "W", status: "Written off", kind: "writtenoff", jobName: "Cathedral View", total: 40, payUrl: "" };
+const grossRow = { id: "G", code: "G", status: "Invoiced", kind: "due", jobName: "Cathedral View", total: 500, vatApplied: "Y", vatRate: 23, vat: 115, gross: 615, payUrl: "https://example.com/pay/G" };
+const widened = context.relatedInvoices([deposit, balance, quoteRow, convertedRow, writtenRow, grossRow, otherSite], deposit);
+const widenedCodes = widened.map((row) => row.code);
+assert(widenedCodes.indexOf("INV-EB-BAL") !== -1, widenedCodes.join(","));
+assert(widenedCodes.indexOf("Q") === -1 && widenedCodes.indexOf("C") === -1, "a quote joined the live bills");
+assert(widened.filter((row) => row.code === "W")[0].payWord === "Written off", "written off word");
+assert(widened.filter((row) => row.code === "G")[0].amount === 615, "gross amount " + widened.filter((row) => row.code === "G")[0].amount);
+assert(widened.filter((row) => row.code === "G")[0].payUrl === "https://example.com/pay/G", "gross row pay link");
+assert(context.relatedInvoices(books.invoices, quoteRow).length === 0, "a quote listed live invoices as its own bills");
+const relatedHtml = detailHtml.slice(detailHtml.indexOf('id="related-invoices"'), detailHtml.indexOf('id="related-invoices"') + 800);
+assert(relatedHtml.indexOf('x-show="detailHasRelated"') !== -1, "the related list is always open");
+assert(relatedHtml.indexOf("x-show=\"inv") === -1, "a loop row hides itself with x-show");
+assert(detailHtml.indexOf('id="job-name"') !== -1, "the job name field is missing");
+
 console.log("Irish sole trader indication passed.");
