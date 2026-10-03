@@ -356,6 +356,53 @@ function kindForStatus(status) {
   return "draft";
 }
 
+function vatOnInvoiced(rows) {
+  let total = 0;
+  (rows || []).forEach((row) => {
+    if (!row || row.inYear === false) return;
+    const kind = row.kind || kindForStatus(row.status);
+    if (kind !== "due" && kind !== "paid") return;
+    if (String(row.vatApplied || "").trim().toUpperCase() !== "Y") return;
+    const amount = Number(row.vat);
+    if (!isFinite(amount)) return;
+    total += amount;
+  });
+  return Math.round(total * 100) / 100;
+}
+
+function csvField(value) {
+  const text = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
+  return text;
+}
+
+function accountantCsvFromRows(rows) {
+  const headers = ["Invoice", "Client", "Job", "Period", "Hours", "Rate", "Total Due", "Invoice Date", "Invoice Status", "VAT Applied", "VAT Rate", "VAT Amount", "Gross Total"];
+  const lines = [headers.join(",")];
+  (rows || []).forEach((row) => {
+    if (!row) return;
+    const id = row.code || row.id;
+    if (!id) return;
+    const cells = [
+      id,
+      row.clientName || "",
+      row.jobDetails && row.jobDetails !== "—" ? row.jobDetails : "",
+      row.servicePeriod && row.servicePeriod !== "—" ? row.servicePeriod : "",
+      row.hours == null ? "" : row.hours,
+      row.rate == null ? "" : row.rate,
+      row.total == null ? "" : row.total,
+      row.date || "",
+      row.status || "",
+      row.vatApplied || "",
+      row.vatRate == null ? "" : row.vatRate,
+      row.vat == null ? "" : row.vat,
+      row.gross == null ? "" : row.gross
+    ];
+    lines.push(cells.map(csvField).join(","));
+  });
+  return lines.join("\n") + "\n";
+}
+
 function invoicePayable(row) {
   const net = Number(row && row.total);
   const netMoney = isFinite(net) ? net : 0;
@@ -634,6 +681,7 @@ window.Alpine.data('appState', () => ({
   summaryPaid: "€0.00",
   summaryDue: "€0.00",
   summaryWrittenOff: "€0.00",
+  summaryVat: "€0.00",
   summaryProfit: "€0.00",
   summaryIncomeTax: "€0.00",
   summaryUsc: "€0.00",
@@ -1567,6 +1615,7 @@ window.Alpine.data('appState', () => ({
     this.summaryPaid = this.money(year.paid);
     this.summaryDue = this.money(year.due);
     this.summaryWrittenOff = this.money(writtenOff);
+    this.summaryVat = this.money(vatOnInvoiced(this.invoiceRows));
     this.summaryExpenseNote = expenses == null ? "Enter expenses as a number, for example 1500." : "";
     this.summaryProfit = profit == null ? "—" : this.money(profit);
     this.summaryIncomeTax = this.money(tax.incomeTax);
@@ -2433,6 +2482,48 @@ window.Alpine.data('appState', () => ({
   },
   openDriveLink() {
     if (this.driveUrl) window.open(this.driveUrl, "_blank", "noopener");
+  },
+  downloadTextFile(fileName, text) {
+    const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName || "InvoiceList.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
+  async exportAccountantCsv() {
+    if (this.saving) return;
+    if (this.previewMode) {
+      this.downloadTextFile("InvoiceList.csv", "\uFEFF" + accountantCsvFromRows(this.invoiceRows));
+      this.setFeedback("Downloaded InvoiceList.csv.", false);
+      return;
+    }
+    this.clearFeedback();
+    this.saving = true;
+    this.loading = true;
+    this.loadingLabel = "Preparing the CSV…";
+    try {
+      const res = await this.api("exportAccountantCsv", {}, { quiet: true, timeoutMs: 30000 });
+      if (res && /Invalid API action/.test(String(res.error || ""))) {
+        this.setFeedback("Could not export the invoice list. Open the EverydayWork spreadsheet, Extensions, Apps Script, and replace Code.gs. Run authorizeEverydayWork and choose Allow. Open Deploy, Manage deployments, edit this web app, set Version to New version, and Deploy.", true);
+        return;
+      }
+      if (res && res.success && res.csv) {
+        this.downloadTextFile(res.fileName || "InvoiceList.csv", "\uFEFF" + res.csv);
+        this.setFeedback("Downloaded " + (res.fileName || "InvoiceList.csv") + ".", false);
+        return;
+      }
+      this.setFeedback(this.failMessage(res, "Could not export the invoice list."), true);
+    } catch (err) {
+      this.setFeedback("Could not export the invoice list.", true);
+    } finally {
+      this.saving = false;
+      this.loading = false;
+      this.loadingLabel = "Updating…";
+    }
   },
   async compileOpenInvoice() {
     if (this.saving || !this.detailId) return;

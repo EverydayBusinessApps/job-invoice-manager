@@ -57,6 +57,24 @@ assert(context.vatRateLabel(23) === "VAT 23%", context.vatRateLabel(23));
 assert(context.vatPercentText(0.23) === "23", context.vatPercentText(0.23));
 assert(context.vatPercentText("13.5") === "13.5", context.vatPercentText("13.5"));
 
+const vatRows = [
+  { id: "A", status: "Invoiced", kind: "due", inYear: true, vatApplied: "Y", vatRate: 99, vat: 46, gross: 246, total: 200, clientName: "Acme, Ltd" },
+  { id: "B", status: "Paid", kind: "paid", inYear: true, vatApplied: "Y", vatRate: 23, vat: 23, gross: 123, total: 100 },
+  { id: "C", status: "Draft", kind: "draft", inYear: true, vatApplied: "Y", vatRate: 23, vat: 11.5, gross: 61.5, total: 50 },
+  { id: "D", status: "Written off", kind: "writtenoff", inYear: true, vatApplied: "Y", vat: 18.4, gross: 98.4, total: 80 },
+  { id: "E", status: "Invoiced", kind: "due", inYear: true, vatApplied: "N", vat: 9, gross: 49, total: 40 },
+  { id: "F", status: "Invoiced", kind: "due", inYear: false, vatApplied: "Y", vat: 5, gross: 25, total: 20 }
+];
+assert(context.vatOnInvoiced(vatRows) === 69, "VAT on invoiced " + context.vatOnInvoiced(vatRows));
+assert(context.vatOnInvoiced([]) === 0, "an empty list hid the zero");
+assert(context.vatOnInvoiced(context.sampleDashboard().invoices) === 46, "sample VAT");
+const csv = context.accountantCsvFromRows(vatRows);
+assert(csv.indexOf("VAT Amount") !== -1 && csv.indexOf("Gross Total") !== -1, csv.split("\n")[0]);
+assert(csv.indexOf('"Acme, Ltd"') !== -1, csv);
+assert(csv.indexOf(",99,46,246") !== -1, "stored VAT was recomputed " + csv);
+assert(csv.indexOf(",11.5,") !== -1, "the draft row was left out of the CSV");
+assert(csv.indexOf(",18.4,") !== -1, "the written-off row was left out of the CSV");
+
 const sample = context.sampleDashboard();
 const draft = sample.invoices.filter((row) => row.id === "INV-EB-003")[0];
 const draftFacts = context.invoiceCardFacts(draft);
