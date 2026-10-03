@@ -686,8 +686,144 @@ function isOvernightTime(start, finish) {
   return finishMins <= startMins;
 }
 
+// Columns after the job-cost block (O–S). Blank Price Mode means Hourly and those rows stay as they are.
+// T Price Mode, U Days, V Day Length, W Hourly Rate, X Job Price, Y Price Total.
+var PRICE_MODE_COL_ = 20;
+var PRICE_DAYS_COL_ = 21;
+var PRICE_LENGTH_COL_ = 22;
+var PRICE_RATE_COL_ = 23;
+var PRICE_JOB_COL_ = 24;
+var PRICE_TOTAL_COL_ = 25;
+
+function priceModeKey_(raw) {
+  const text = clientText_(raw).toLowerCase().replace(/\s+/g, "");
+  if (text === "daily") return "daily";
+  if (text === "job" || text === "jobprice") return "job";
+  if (text === "hourly") return "hourly";
+  return "";
+}
+
+function activePriceMode_(raw) {
+  return priceModeKey_(raw) || "hourly";
+}
+
+function priceModeLabel_(mode) {
+  if (mode === "daily") return "Daily";
+  if (mode === "job") return "Job price";
+  return "Hourly";
+}
+
+function priceCountText_(value) {
+  const n = Math.round(Number(value) * 100) / 100;
+  if (Math.abs(n - Math.round(n)) < 0.001) return String(Math.round(n));
+  return String(n);
+}
+
+function priceRateText_(value) {
+  const n = Math.round(Number(value) * 100) / 100;
+  if (Math.abs(n - Math.round(n)) < 0.001) return "€" + Math.round(n);
+  return "€" + n.toFixed(2);
+}
+
+function priceDailyLabel_(days, length, rate) {
+  const dayLabel = priceCountText_(days) + (Number(days) === 1 ? " day" : " days");
+  return dayLabel + " × " + priceCountText_(length) + " h × " + priceRateText_(rate);
+}
+
+function priceFromPayload_(payload) {
+  const source = payload || {};
+  const mode = activePriceMode_(source.priceMode);
+  if (mode === "daily") {
+    const days = numberOrNull_(source.days);
+    const length = numberOrNull_(source.dayLength);
+    const rate = numberOrNull_(source.rate);
+    if (days == null || days <= 0) return { ok: false, error: "Enter the number of days." };
+    if (length !== 8 && length !== 10 && length !== 12) return { ok: false, error: "Choose a day length of 8, 10, or 12 hours." };
+    if (rate == null || rate < 0) return { ok: false, error: "Enter the hourly rate." };
+    const hours = roundMoney_(days * length);
+    const total = roundMoney_(days * length * rate);
+    return {
+      ok: true,
+      mode: "daily",
+      days: days,
+      dayLength: length,
+      rate: rate,
+      hours: hours,
+      total: total,
+      label: priceDailyLabel_(days, length, rate)
+    };
+  }
+  if (mode === "job") {
+    const rawAmount = source.jobPrice != null && source.jobPrice !== "" ? source.jobPrice : source.amount;
+    const amount = numberOrNull_(rawAmount);
+    if (amount == null || amount < 0) return { ok: false, error: "Enter the job price." };
+    return { ok: true, mode: "job", total: roundMoney_(amount), hours: null, rate: null, label: "Job price" };
+  }
+  return { ok: true, mode: "hourly" };
+}
+
+function ensurePriceHeaders_(sheet) {
+  if (!sheet) return;
+  const headers = ["Price Mode", "Days", "Day Length", "Hourly Rate", "Job Price", "Price Total"];
+  for (let i = 0; i < headers.length; i++) {
+    const cell = sheet.getRange(1, PRICE_MODE_COL_ + i);
+    if (!clientText_(cell.getValue())) cell.setValue(headers[i]);
+  }
+}
+
+function writePlainNumber_(cell, value) {
+  if (!cell) return false;
+  const formula = cell.getFormula ? String(cell.getFormula() || "") : "";
+  if (/ARRAYFORMULA/i.test(formula)) return false;
+  try {
+    if (cell.setFormula) cell.setFormula("");
+    if (typeof value === "number" && cell.setNumberFormat) cell.setNumberFormat("0.00");
+    cell.setValue(value);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function sameMoney_(left, right) {
+  const a = numberOrNull_(left);
+  const b = numberOrNull_(right);
+  if (a == null || b == null) return false;
+  return Math.abs(roundMoney_(a) - roundMoney_(b)) < 0.001;
+}
+
+function addPricedInvoiceNet_(ss, invoiceId, amount) {
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return;
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  if (!located.row) return;
+  const cell = invoiceSheet.getRange(located.row, 7);
+  const formula = cell.getFormula ? String(cell.getFormula() || "") : "";
+  if (formula) return;
+  const current = numberOrNull_(cell.getValue());
+  cell.setValue(roundMoney_((current == null ? 0 : current) + (Number(amount) || 0)));
+}
+
+function applyShiftPrice_(sheet, row, priced) {
+  ensurePriceHeaders_(sheet);
+  sheet.getRange(row, PRICE_MODE_COL_).setValue(priceModeLabel_(priced.mode));
+  if (priced.mode === "hourly") return;
+  if (priced.mode === "daily") {
+    writePlainNumber_(sheet.getRange(row, PRICE_DAYS_COL_), priced.days);
+    writePlainNumber_(sheet.getRange(row, PRICE_LENGTH_COL_), priced.dayLength);
+    writePlainNumber_(sheet.getRange(row, PRICE_RATE_COL_), priced.rate);
+    writePlainNumber_(sheet.getRange(row, 10), priced.hours);
+  } else {
+    writePlainNumber_(sheet.getRange(row, PRICE_JOB_COL_), priced.total);
+    writePlainNumber_(sheet.getRange(row, 10), "");
+  }
+  writePlainNumber_(sheet.getRange(row, 12), priced.total);
+  writePlainNumber_(sheet.getRange(row, PRICE_TOTAL_COL_), priced.total);
+}
+
 /**
- * 2. Commit Service Inputs (Inserts only to inputs, letting ARRAYFORMULAs compute the rest)
+ * Hourly keeps the clock formulas, so the sheet's hours × rate total stays in place.
+ * Daily and job price write the hours, the inputs, and the total as values.
  */
 function executeTimeLog(payload) {
   const ss = workbook_();
@@ -703,13 +839,15 @@ function executeTimeLog(payload) {
     nextRow++;
   }
 
-  if (!clockParts_(payload.start) || !clockParts_(payload.finish)) {
+  const priced = priceFromPayload_(payload);
+  if (!priced.ok) return { success: false, error: priced.error };
+  if (priced.mode === "hourly" && (!clockParts_(payload.start) || !clockParts_(payload.finish))) {
     return { success: false, error: "Choose a start and finish time." };
   }
   const costs = checkedJobCosts_(payload);
   if (!costs.ok) return { success: false, error: costs.error };
 
-  const overnight = payload.overnight === true || isOvernightTime(payload.start, payload.finish);
+  const overnight = priced.mode === "hourly" && (payload.overnight === true || isOvernightTime(payload.start, payload.finish));
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   const quoting = isQuoteEntry_(payload);
   const mode = quoting ? "quote" : String(payload.invoiceMode || "new").toLowerCase();
@@ -744,16 +882,20 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 4).setValue(payload.clientName); // Col D: ClientID
   timeSheet.getRange(nextRow, 5).setValue(payload.date);       // Col E: Date (shift start date)
   timeSheet.getRange(nextRow, 6).setValue(payload.jobDetails); // Col F: Job Details
-  const startCell = timeSheet.getRange(nextRow, 7);
-  const finishCell = timeSheet.getRange(nextRow, 9);
-  if (!writeClockTime_(startCell, payload.start) || !writeClockTime_(finishCell, payload.finish)) {
-    return { success: false, error: "Choose a start and finish time." };
+  if (priced.mode === "hourly") {
+    const startCell = timeSheet.getRange(nextRow, 7);
+    const finishCell = timeSheet.getRange(nextRow, 9);
+    if (!writeClockTime_(startCell, payload.start) || !writeClockTime_(finishCell, payload.finish)) {
+      return { success: false, error: "Choose a start and finish time." };
+    }
+    timeSheet.getRange(nextRow, 8).setValue(payload.lunch);    // Col H: Lunch (String matching lookup e.g. 'half hour')
   }
-  timeSheet.getRange(nextRow, 8).setValue(payload.lunch);      // Col H: Lunch (String matching lookup e.g. 'half hour')
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
   writeJobCosts_(timeSheet, nextRow, costs, ss);
+  applyShiftPrice_(timeSheet, nextRow, priced);
+  if (priced.mode !== "hourly") addPricedInvoiceNet_(ss, invoiceId, priced.total);
 
-  const amount = loggedShiftAmount_(timeSheet, nextRow);
+  const amount = priced.mode === "hourly" ? loggedShiftAmount_(timeSheet, nextRow) : priced.total;
   if (!quoting) refreshStampedInvoiceVat_(ss, invoiceId);
   return jobSavedResult_(ss, mode, invoiceId, overnight, false, amount, quoting);
 }
@@ -824,8 +966,23 @@ function recentMatchingEntry_(sheet, payload) {
     const updated = data[i][10];
     if (!isDateValue_(updated) || Math.abs(now - updated.getTime()) > 2 * 60 * 1000) return null;
     if (clientText_(data[i][3]) !== wantJob) return null;
-    if (clientText_(data[i][5] || "na") !== wantLunch) return null;
     if (isoDate_(data[i][2]) !== wantDate) return null;
+    const rowNumber = i + 2;
+    const rowMode = activePriceMode_(sheet.getRange(rowNumber, PRICE_MODE_COL_).getValue());
+    const wantMode = activePriceMode_(payload.priceMode);
+    if (rowMode !== wantMode) return null;
+    if (wantMode === "daily") {
+      if (!sameMoney_(sheet.getRange(rowNumber, PRICE_DAYS_COL_).getValue(), payload.days)) return null;
+      if (!sameMoney_(sheet.getRange(rowNumber, PRICE_LENGTH_COL_).getValue(), payload.dayLength)) return null;
+      if (!sameMoney_(sheet.getRange(rowNumber, PRICE_RATE_COL_).getValue(), payload.rate)) return null;
+      return { invoiceId: data[i][0] };
+    }
+    if (wantMode === "job") {
+      const wantAmount = payload.jobPrice != null && payload.jobPrice !== "" ? payload.jobPrice : payload.amount;
+      if (!sameMoney_(sheet.getRange(rowNumber, PRICE_JOB_COL_).getValue(), wantAmount)) return null;
+      return { invoiceId: data[i][0] };
+    }
+    if (clientText_(data[i][5] || "na") !== wantLunch) return null;
     if (!sameClock_(data[i][4], payload.start) || !sameClock_(data[i][6], payload.finish)) return null;
     return { invoiceId: data[i][0] };
   }
@@ -857,13 +1014,25 @@ function fetchUnbilledSummary(payload) {
   let totalAmount = 0;
 
   if (lastRow >= 2) {
-    const data = timeSheet.getRange(2, 1, lastRow - 1, 12).getValues();
+    const data = timeSheet.getRange(2, 1, lastRow - 1, PRICE_TOTAL_COL_).getValues();
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
       const invoiceInt = String(row[2]).trim(); // Column C: InvoiceInt
       const rowClient = String(row[3]).trim();  // Column D: ClientID
-      const hours = Number(row[9]) || 0;         // Column J: Hours (calculated by your formula)
-      const charge = Number(row[11]) || 0;       // Column L: Billable Charge (calculated by your formula)
+      const mode = priceModeKey_(row[PRICE_MODE_COL_ - 1]);
+      let hours = Number(row[9]) || 0;           // Column J: Hours
+      let charge = Number(row[11]) || 0;         // Column L: Billable Charge
+      if (mode === "daily") {
+        const days = numberOrNull_(row[PRICE_DAYS_COL_ - 1]);
+        const length = numberOrNull_(row[PRICE_LENGTH_COL_ - 1]);
+        if (days != null && length != null) hours = roundMoney_(days * length);
+      } else if (mode === "job") {
+        hours = 0;
+      }
+      if (mode === "daily" || mode === "job") {
+        const storedTotal = numberOrNull_(row[PRICE_TOTAL_COL_ - 1]);
+        if (storedTotal != null) charge = storedTotal;
+      }
       if (rowClient !== clientName) continue;
 
       // Still open: legacy rows with no invoice, or time sitting on a Draft invoice.
@@ -1932,15 +2101,31 @@ function readTimeRows_(ss, timezone) {
   const sheet = ss.getSheetByName("Time&Attendance");
   const last = sheet ? timeSheetLastRow_(sheet) : 0;
   if (!sheet || last < 2) return [];
-  const data = sheet.getRange(2, 1, last - 1, 19).getValues();
+  const data = sheet.getRange(2, 1, last - 1, PRICE_TOTAL_COL_).getValues();
   const rows = [];
   for (let i = 0; i < data.length; i++) {
     const client = String(data[i][3] || "").trim();
     const date = isoDate_(data[i][4], timezone);
     if (!client && !date) continue;
-    const hours = numberOrNull_(data[i][9]) || 0;
-    const rate = numberOrNull_(data[i][10]);
+    const mode = priceModeKey_(data[i][PRICE_MODE_COL_ - 1]);
+    let hours = numberOrNull_(data[i][9]) || 0;
+    let rate = numberOrNull_(data[i][10]);
     let charge = numberOrNull_(data[i][11]);
+    let priceLabel = "";
+    if (mode === "daily") {
+      const days = numberOrNull_(data[i][PRICE_DAYS_COL_ - 1]);
+      const length = numberOrNull_(data[i][PRICE_LENGTH_COL_ - 1]);
+      const pricedRate = numberOrNull_(data[i][PRICE_RATE_COL_ - 1]);
+      if (days != null && length != null) hours = roundMoney_(days * length);
+      if (pricedRate != null) rate = pricedRate;
+      if (days != null && length != null && pricedRate != null) priceLabel = priceDailyLabel_(days, length, pricedRate);
+    } else if (mode === "job") {
+      hours = 0;
+      rate = null;
+      priceLabel = "Job price";
+    }
+    const storedTotal = numberOrNull_(data[i][PRICE_TOTAL_COL_ - 1]);
+    if ((mode === "daily" || mode === "job") && storedTotal != null) charge = storedTotal;
     if (charge == null) charge = rate != null ? hours * rate : 0;
     rows.push({
       code: String(data[i][1] || "").trim(),
@@ -1957,7 +2142,9 @@ function readTimeRows_(ss, timezone) {
       hired: costOrZero_(data[i][15]),
       mileageKm: costOrZero_(data[i][16]),
       mileageRate: costOrZero_(data[i][17]),
-      loadedHourly: costOrZero_(data[i][18])
+      loadedHourly: costOrZero_(data[i][18]),
+      priceMode: mode,
+      priceLabel: priceLabel
     });
   }
   return rows;
@@ -2372,7 +2559,9 @@ function linesFromGroup_(shiftRows, timezone) {
       hired: costOrZero_(shift.hired),
       mileageKm: costOrZero_(shift.mileageKm),
       mileageRate: costOrZero_(shift.mileageRate),
-      loadedHourly: costOrZero_(shift.loadedHourly)
+      loadedHourly: costOrZero_(shift.loadedHourly),
+      priceMode: shift.priceMode || "",
+      priceLabel: shift.priceLabel || ""
     };
   });
 }
@@ -2400,7 +2589,9 @@ function readInvoiceLines_(ss, invoice) {
       hired: costOrZero_(shift.hired),
       mileageKm: costOrZero_(shift.mileageKm),
       mileageRate: costOrZero_(shift.mileageRate),
-      loadedHourly: costOrZero_(shift.loadedHourly)
+      loadedHourly: costOrZero_(shift.loadedHourly),
+      priceMode: shift.priceMode || "",
+      priceLabel: shift.priceLabel || ""
     };
   });
 }

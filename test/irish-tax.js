@@ -266,4 +266,13 @@ assert(chrome.indexOf('kind === "quote"') !== -1, chrome);
 const issue = appSource.slice(appSource.indexOf("previewIssue()"), appSource.indexOf("previewIssue()") + 360);
 assert(issue.indexOf("detailIsQuote") !== -1, "quote PDF preview marks the quote invoiced");
 
+const dailyPreview = context.priceJobPreview({ priceMode: "daily", days: 2, dayLength: 10, rate: 40 });
+assert(dailyPreview.ok && dailyPreview.total === 800 && dailyPreview.hours === 20, JSON.stringify(dailyPreview));
+assert(dailyPreview.label === "2 days × 10 h × €40", dailyPreview.label);
+const jobPreview = context.priceJobPreview({ priceMode: "job", jobPrice: 500 });
+assert(jobPreview.ok && jobPreview.total === 500 && jobPreview.hours === 0, JSON.stringify(jobPreview));
+const hourlyPreview = context.priceJobPreview({ priceMode: "hourly", start: "09:00", finish: "13:00", lunch: "na", rate: 40 });
+assert(hourlyPreview.ok && hourlyPreview.hours === 4 && hourlyPreview.total === 160, JSON.stringify(hourlyPreview));
+assert(context.estimateSoleTraderTax(60000).total === 15052.82, "tax total changed");
+
 console.log("Irish sole trader indication passed.");

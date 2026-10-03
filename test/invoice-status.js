@@ -2893,6 +2893,104 @@ test("turning a quote into an invoice stamps VAT once and keeps one code", funct
   assert(statusCell(workbook, 2) === "Converted", "the comparison job changed the quote");
 });
 
+test("hourly log keeps the clock formulas and hours times rate", function (api, workbook) {
+  const logged = api.executeTimeLog(shift({ start: "09:00", finish: "13:00", lunch: "na" }));
+  assert(logged.success, logged.error);
+  const time = workbook.sheets["Time&Attendance"];
+  const row = time.getLastRow();
+  assert(time.getRange(row, 7).getFormula() === "=TIME(9,0,0)", time.getRange(row, 7).getFormula());
+  assert(time.getRange(row, 9).getFormula() === "=TIME(13,0,0)", time.getRange(row, 9).getFormula());
+  assert(time.getRange(row, 12).getFormula() === "", "hourly total became a different formula");
+  assert(time.getRange(row, 12).getValue() === "", "hourly total was written over the sheet formula");
+  assert(time.getRange(row, 20).getValue() === "Hourly", time.getRange(row, 20).getValue());
+  assert(time.getRange(row, 15).getValue() === 0, "materials column " + time.getRange(row, 15).getValue());
+  assert(time.getRange(row, 14).getValue() === "", "billed rate column moved");
+  time.getRange(row, 10).setValue(4);
+  time.getRange(row, 11).setValue(40);
+  assert(api.loggedShiftAmount_(time, row) === 160, "hours × rate " + api.loggedShiftAmount_(time, row));
+});
+
+test("daily and job price write the total as a value and VAT stamps that net", function (api, workbook) {
+  const config = seedVat(workbook, "Y", 23);
+  const daily = api.executeTimeLog(shift({
+    priceMode: "daily",
+    days: 2,
+    dayLength: 10,
+    rate: 40,
+    jobDetails: "Locum"
+  }));
+  assert(daily.success, daily.error);
+  assert(daily.amount === 800, "daily amount " + daily.amount);
+  const time = workbook.sheets["Time&Attendance"];
+  const invoices = workbook.sheets.InvoiceList;
+  const row = time.getLastRow();
+  assert(time.getRange(row, 21).getValue() === 2, "days " + time.getRange(row, 21).getValue());
+  assert(time.getRange(row, 22).getValue() === 10, "day length " + time.getRange(row, 22).getValue());
+  assert(time.getRange(row, 23).getValue() === 40, "rate " + time.getRange(row, 23).getValue());
+  assert(time.getRange(row, 10).getValue() === 20, "stored hours " + time.getRange(row, 10).getValue());
+  assert(time.getRange(row, 12).getValue() === 800, "billable " + time.getRange(row, 12).getValue());
+  assert(time.getRange(row, 25).getValue() === 800, "price total " + time.getRange(row, 25).getValue());
+  assert(time.getRange(row, 12).getFormula() === "", time.getRange(row, 12).getFormula());
+  assert(time.getRange(row, 25).getFormula() === "", time.getRange(row, 25).getFormula());
+  assert(time.getRange(row, 7).getFormula() === "" && time.getRange(row, 9).getFormula() === "", "daily wrote clock formulas");
+  const invRow = invoices.getLastRow();
+  assert(invoices.getRange(invRow, 7).getValue() === 800, "invoice net " + invoices.getRange(invRow, 7).getValue());
+  assert(invoices.getRange(invRow, 7).getFormula() === "", "invoice total is a formula");
+  assert(invoices.getRange(invRow, 12).getValue() === 184, "VAT amount " + invoices.getRange(invRow, 12).getValue());
+  assert(invoices.getRange(invRow, 13).getValue() === 984, "gross " + invoices.getRange(invRow, 13).getValue());
+  assert(invoices.getRange(invRow, 14).getValue() === "", "due date column was used for the price");
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved");
+
+  const job = api.executeTimeLog(shift({ priceMode: "job", jobPrice: 500, jobDetails: "Balance" }));
+  assert(job.success, job.error);
+  assert(job.amount === 500, "job amount " + job.amount);
+  const row2 = time.getLastRow();
+  assert(time.getRange(row2, 12).getValue() === 500, "job billable " + time.getRange(row2, 12).getValue());
+  assert(time.getRange(row2, 25).getValue() === 500, "job price total " + time.getRange(row2, 25).getValue());
+  assert(time.getRange(row2, 12).getFormula() === "", time.getRange(row2, 12).getFormula());
+  assert(time.getRange(row2, 24).getValue() === 500, "job price input " + time.getRange(row2, 24).getValue());
+  assert(time.getRange(row2, 10).getValue() === "", "job price stored hours");
+  assert(time.getRange(row2, 7).getFormula() === "" && time.getRange(row2, 9).getValue() === "", "job price used the clock");
+  const inv2 = invoices.getLastRow();
+  assert(invoices.getRange(inv2, 7).getValue() === 500, "job net " + invoices.getRange(inv2, 7).getValue());
+  assert(invoices.getRange(inv2, 12).getValue() === 115, "job VAT " + invoices.getRange(inv2, 12).getValue());
+  assert(invoices.getRange(inv2, 13).getValue() === 615, "job gross " + invoices.getRange(inv2, 13).getValue());
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved after the job price");
+  assert(time.getRange(1, 14).getValue() === "" && time.getRange(1, 15).getValue() === "Materials" && time.getRange(1, 20).getValue() === "Price Mode", "price columns shifted the cost columns");
+});
+
+test("a blank price mode stays hourly when settings and a later job are saved", function (api, workbook) {
+  const time = workbook.sheets["Time&Attendance"];
+  time.getRange(2, 4).setValue("Acme");
+  time.getRange(2, 5).setValue("2026-08-01");
+  time.getRange(2, 7).setFormula("=TIME(8,0,0)");
+  time.getRange(2, 9).setFormula("=TIME(16,0,0)");
+  time.getRange(2, 10).setValue(8);
+  time.getRange(2, 11).setValue(50);
+  time.getRange(2, 12).setFormula("=J2*K2");
+  time.getRange(2, 12).setValue(400);
+  const config = seedConfig(workbook);
+  config.getRange(22, 1).setValue("vatApplied");
+  config.getRange(22, 2).setValue("Y");
+  config.getRange(23, 1).setValue("vatRate");
+  config.getRange(23, 2).setValue(23);
+  const saved = api.saveSettings_({
+    settings: [{ row: 2, label: "Default Hourly Rate", value: "70" }]
+  });
+  assert(saved.success, saved.error);
+  const later = api.executeTimeLog(shift({ priceMode: "job", jobPrice: 500, jobDetails: "Balance", date: "2026-09-24" }));
+  assert(later.success, later.error);
+  assert(time.getRange(2, 7).getFormula() === "=TIME(8,0,0)", time.getRange(2, 7).getFormula());
+  assert(time.getRange(2, 9).getFormula() === "=TIME(16,0,0)", time.getRange(2, 9).getFormula());
+  assert(time.getRange(2, 10).getValue() === 8, "hours changed");
+  assert(time.getRange(2, 11).getValue() === 50, "rate changed");
+  assert(time.getRange(2, 12).getValue() === 400, "total changed");
+  assert(time.getRange(2, 12).getFormula() === "=J2*K2", time.getRange(2, 12).getFormula());
+  assert(time.getRange(2, 15).getValue() === "" && time.getRange(2, 19).getValue() === "" && time.getRange(2, 20).getValue() === "", "blank mode was filled in");
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved");
+  assert(config.getRange(2, 2).getValue() === 70, "the settings save was skipped");
+});
+
 async function runHomeFeedbackTests() {
   const cold = loadHomeApp();
   let step = 0;

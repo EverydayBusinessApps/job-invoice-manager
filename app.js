@@ -722,6 +722,74 @@ function roundCents(value) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+function priceNumber_(value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const n = Number(text.replace(/[^0-9.-]/g, ""));
+  return isFinite(n) ? n : null;
+}
+
+function priceClockMinutes_(value) {
+  if (value == null || value === "") return null;
+  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  return (Number(match[1]) * 60) + Number(match[2]);
+}
+
+function priceCountText_(value) {
+  const n = Math.round(Number(value) * 100) / 100;
+  if (Math.abs(n - Math.round(n)) < 0.001) return String(Math.round(n));
+  return String(n);
+}
+
+function priceRateText_(value) {
+  const n = Math.round(Number(value) * 100) / 100;
+  if (Math.abs(n - Math.round(n)) < 0.001) return "€" + Math.round(n);
+  return "€" + n.toFixed(2);
+}
+
+function priceDailyLabel_(days, length, rate) {
+  const dayLabel = priceCountText_(days) + (Number(days) === 1 ? " day" : " days");
+  return dayLabel + " × " + priceCountText_(length) + " h × " + priceRateText_(rate);
+}
+
+function priceJobPreview(input) {
+  const source = input || {};
+  const mode = String(source.priceMode || "hourly").trim().toLowerCase();
+  if (mode === "daily") {
+    const days = priceNumber_(source.days);
+    const length = priceNumber_(source.dayLength);
+    const rate = priceNumber_(source.rate);
+    if (days == null || days <= 0) return { ok: false, mode: "daily", total: 0, hours: 0, label: "", error: "Enter the number of days." };
+    if (length !== 8 && length !== 10 && length !== 12) return { ok: false, mode: "daily", total: 0, hours: 0, label: "", error: "Choose a day length of 8, 10, or 12 hours." };
+    if (rate == null || rate < 0) return { ok: false, mode: "daily", total: 0, hours: 0, label: "", error: "Enter the hourly rate." };
+    const hours = Math.round(days * length * 100) / 100;
+    const total = Math.round(hours * rate * 100) / 100;
+    return { ok: true, mode: "daily", total: total, hours: hours, rate: rate, label: priceDailyLabel_(days, length, rate), error: "" };
+  }
+  if (mode === "job" || mode === "job price" || mode === "jobprice") {
+    const raw = source.jobPrice != null && String(source.jobPrice).trim() !== "" ? source.jobPrice : source.amount;
+    const amount = priceNumber_(raw);
+    if (amount == null || amount < 0) return { ok: false, mode: "job", total: 0, hours: 0, label: "", error: "Enter the job price." };
+    const total = Math.round(amount * 100) / 100;
+    return { ok: true, mode: "job", total: total, hours: 0, rate: 0, label: "Job price", error: "" };
+  }
+  const start = priceClockMinutes_(source.start);
+  const finish = priceClockMinutes_(source.finish);
+  let hours = 0;
+  if (start != null && finish != null) {
+    let minutes = finish - start;
+    if (minutes <= 0) minutes += 24 * 60;
+    const breaks = { na: 0, "half hour": 30, hour: 60, "hour and half": 90, "two hours": 120 };
+    const lunch = breaks[source.lunch] || 0;
+    hours = Math.max(0, Math.round((minutes - lunch) / 6) / 10);
+  }
+  const rate = priceNumber_(source.rate);
+  const total = rate == null ? 0 : Math.round(hours * rate * 100) / 100;
+  return { ok: true, mode: "hourly", total: total, hours: hours, rate: rate || 0, label: "", error: "" };
+}
+
 function estimateSoleTraderTax(profit) {
   const income = Math.max(0, roundCents(profit));
   const standard = Math.min(income, 44000);
@@ -970,12 +1038,22 @@ window.Alpine.data('appState', () => ({
   profitJobsEmpty: true,
   driveUrl: "",
   jobLogged: { text: "", id: "", code: "" },
+  showHourlyFields: true,
+  showDailyFields: false,
+  showJobFields: false,
+  priceHourlyOn: true,
+  priceDailyOn: false,
+  priceJobOn: false,
+  showPricePreview: false,
+  pricePreviewLabel: "",
+  pricePreviewAmount: "",
+  priceSummary: "Pricing",
   form: { clientName: '', date: (() => {
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     return dd + '/' + mm + '/' + now.getFullYear();
-  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '', materials: '', hired: '', mileageKm: '' },
+  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '', materials: '', hired: '', mileageKm: '', priceMode: 'hourly', days: '', dayLength: '8', dailyRate: '', jobPrice: '' },
 
   timeToMinutes(value) {
     if (value == null || value === '') return null;
@@ -1089,6 +1167,39 @@ window.Alpine.data('appState', () => ({
   onClientChange() {
     this.form.invoiceId = '';
     this.refreshClientInvoices();
+    if (this.form.priceMode === "daily" && !String(this.form.dailyRate || "").trim()) this.fillDailyRate();
+  },
+  fillDailyRate() {
+    const record = this.clientRecordFor(this.form.clientName);
+    if (!record || record.rate === "" || record.rate == null) return;
+    this.form.dailyRate = String(record.rate);
+    this.syncPricePreview();
+  },
+  setPriceMode(id) {
+    const mode = id === "daily" || id === "job" ? id : "hourly";
+    this.form.priceMode = mode;
+    this.showHourlyFields = mode === "hourly";
+    this.showDailyFields = mode === "daily";
+    this.showJobFields = mode === "job";
+    this.priceHourlyOn = mode === "hourly";
+    this.priceDailyOn = mode === "daily";
+    this.priceJobOn = mode === "job";
+    this.priceSummary = mode === "daily" ? "Pricing · Daily" : mode === "job" ? "Pricing · Job price" : "Pricing";
+    if (mode === "daily" && !String(this.form.dailyRate || "").trim()) this.fillDailyRate();
+    this.syncPricePreview();
+  },
+  syncPricePreview() {
+    const priced = priceJobPreview({
+      priceMode: this.form.priceMode,
+      days: this.form.days,
+      dayLength: this.form.dayLength,
+      rate: this.form.dailyRate,
+      jobPrice: this.form.jobPrice
+    });
+    const active = this.form.priceMode === "daily" || this.form.priceMode === "job";
+    this.showPricePreview = active && priced.ok;
+    this.pricePreviewLabel = priced.ok ? priced.label : "";
+    this.pricePreviewAmount = priced.ok ? this.money(priced.total) : "";
   },
   onInvoiceModeChange() {
     if (this.form.invoiceMode !== 'existing') this.form.invoiceId = '';
@@ -1650,7 +1761,9 @@ window.Alpine.data('appState', () => ({
       start: snapshot.start,
       finish: snapshot.finish,
       hours: snapshot.hours,
+      rate: snapshot.rate,
       amount: snapshot.amount,
+      priceLabel: snapshot.priceLabel || "",
       materials: snapshot.materials || 0,
       hired: snapshot.hired || 0,
       mileageKm: snapshot.mileageKm || 0,
@@ -1701,6 +1814,11 @@ window.Alpine.data('appState', () => ({
     this.form.mileageKm = "";
     this.form.invoiceMode = "new";
     this.form.invoiceId = "";
+    this.form.days = "";
+    this.form.dayLength = "8";
+    this.form.dailyRate = "";
+    this.form.jobPrice = "";
+    this.setPriceMode("hourly");
     this.syncOvernight();
     this.refreshClientInvoices();
     this.syncLogButton();
@@ -1729,8 +1847,24 @@ window.Alpine.data('appState', () => ({
       return;
     }
     this.form.date = jobDate.label;
-    if (this.timeToMinutes(this.form.start) == null || this.timeToMinutes(this.form.finish) == null) {
-      this.setFeedback("Could not log the " + noun + ". Choose a start and finish time.", true);
+    const priceMode = this.form.priceMode || "hourly";
+    const priced = priceJobPreview({
+      priceMode: priceMode,
+      days: this.form.days,
+      dayLength: this.form.dayLength,
+      rate: this.form.dailyRate,
+      jobPrice: this.form.jobPrice,
+      start: this.form.start,
+      finish: this.form.finish,
+      lunch: this.form.lunch
+    });
+    if (priceMode === "hourly") {
+      if (this.timeToMinutes(this.form.start) == null || this.timeToMinutes(this.form.finish) == null) {
+        this.setFeedback("Could not log the " + noun + ". Choose a start and finish time.", true);
+        return;
+      }
+    } else if (!priced.ok) {
+      this.setFeedback("Could not log the " + noun + ". " + priced.error, true);
       return;
     }
     if (!this.quoteMode && this.form.invoiceMode === 'existing' && !this.form.invoiceId) {
@@ -1759,8 +1893,22 @@ window.Alpine.data('appState', () => ({
     const adding = !this.quoteMode && this.form.invoiceMode === "existing";
     const chosenId = this.form.invoiceId;
     try {
-      const estimate = this.jobCharge();
+      const estimate = priceMode === "hourly" ? this.jobCharge() : priced.total;
       const snapshot = this.loggedJobSnapshot(estimate, { materials: materials, hired: hired, mileageKm: mileageKm });
+      if (priceMode === "daily") {
+        snapshot.hours = priced.hours;
+        snapshot.rate = priced.rate;
+        snapshot.priceLabel = priced.label;
+        snapshot.start = "";
+        snapshot.finish = "";
+      }
+      if (priceMode === "job") {
+        snapshot.hours = 0;
+        snapshot.rate = 0;
+        snapshot.priceLabel = "Job price";
+        snapshot.start = "";
+        snapshot.finish = "";
+      }
       if (this.previewMode) {
         await this.wait(800);
         const code = this.quoteMode ? "INV-EB-019" : (adding && chosenId ? chosenId : "INV-EB-018");
@@ -1782,7 +1930,12 @@ window.Alpine.data('appState', () => ({
         invoiceId: this.quoteMode ? "" : this.form.invoiceId,
         materials: materials,
         hired: hired,
-        mileageKm: mileageKm
+        mileageKm: mileageKm,
+        priceMode: priceMode,
+        days: this.form.days,
+        dayLength: this.form.dayLength,
+        rate: this.form.dailyRate,
+        jobPrice: this.form.jobPrice
       };
       if (this.quoteMode) entry.entry = "quote";
       const result = await this.api('logTimeEntry', entry, { write: true });
@@ -2422,7 +2575,10 @@ window.Alpine.data('appState', () => ({
       details: line.details || "—",
       span: [line.start, line.finish].filter(Boolean).join("–"),
       hours: this.hoursText(line.hours) + " h",
-      meta: [this.prettyDate(line.date), [line.start, line.finish].filter(Boolean).join("–"), this.hoursText(line.hours) + " h", line.rate ? (this.money(line.rate) + "/h") : ""].filter((part) => part && part !== "—").join(" · "),
+      meta: (line.priceLabel
+        ? [this.prettyDate(line.date), line.priceLabel]
+        : [this.prettyDate(line.date), [line.start, line.finish].filter(Boolean).join("–"), this.hoursText(line.hours) + " h", line.rate ? (this.money(line.rate) + "/h") : ""]
+      ).filter((part) => part && part !== "—").join(" · "),
       amount: this.money(line.amount)
     }));
     this.detailLinesEmpty = this.detailLines.length === 0;
