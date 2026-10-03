@@ -334,7 +334,7 @@ function invoiceStatusRank(status) {
   if (label === "Paid") return 3;
   if (label === "Written off" || label === "Bad debt" || label === "Bad Debt") return 2;
   if (label === "Invoiced" || label === "Unpaid") return 1;
-  if (label === "Quote") return -1;
+  if (label === "Quote" || label === "Estimate") return -1;
   if (label === "Converted") return -2;
   return 0;
 }
@@ -357,7 +357,7 @@ function preferInvoiceLabel(current, candidate) {
 
 function kindForStatus(status) {
   const label = String(status || "").trim();
-  if (label === "Quote") return "quote";
+  if (label === "Quote" || label === "Estimate") return "quote";
   if (label === "Converted") return "converted";
   const rank = invoiceStatusRank(status);
   if (rank === 3) return "paid";
@@ -522,7 +522,7 @@ function convertQuoteRows(rows, quoteId) {
     if (!item) return false;
     if (item.id !== wanted && item.code !== wanted) return false;
     const status = String(item.status || "");
-    return status === "Quote" || status === "Converted" || item.kind === "quote" || item.kind === "converted";
+    return status === "Quote" || status === "Estimate" || status === "Converted" || item.kind === "quote" || item.kind === "converted";
   });
   if (!quote) {
     return { rows: collapseInvoiceRows(list), stored: list, invoiceId: "", created: false };
@@ -1806,7 +1806,7 @@ window.Alpine.data('appState', () => ({
       clientName: this.form.clientName,
       status: labelStatus,
       date: parts ? parts.iso : this.form.date,
-      label: (labelStatus === "Quote" ? "Quote " : "Invoice ") + id + " · " + labelStatus
+      label: (labelStatus === "Quote" || labelStatus === "Estimate" ? "Quote " : "Invoice ") + id + " · " + labelStatus
     }]);
     this.refreshClientInvoices();
   },
@@ -2176,7 +2176,7 @@ window.Alpine.data('appState', () => ({
     else if (filter === "week") rows = rows.filter((row) => invoiceIsDueThisWeek(row, this.asOf));
     else if (filter === "send" || filter === "draft") rows = rows.filter((row) => row.kind === "draft");
     else if (filter === "done") rows = rows.filter((row) => row.kind === "paid" || row.kind === "writtenoff");
-    else if (filter === "quote") rows = rows.filter((row) => row.kind === "quote" || row.status === "Quote");
+    else if (filter === "quote") rows = rows.filter((row) => row.kind === "quote" || row.status === "Quote" || row.status === "Estimate");
     const showStatus = filter === "send" || filter === "draft" || filter === "done" || filter === "quote";
     this.listShowsSend = filter === "send" || filter === "draft";
     this.listShowsCollect = filter === "due" || filter === "overdue" || filter === "week";
