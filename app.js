@@ -271,9 +271,9 @@ function sampleDashboard() {
       year: { label: "1 Nov 2025 – 31 Oct 2026", hours: 12, shifts: 5, clients: 2, billable: 470, avgRate: 39.17, topClient: "Acme", topClientHours: 9, paid: 100, paidCount: 1, sent: 420, sentCount: 4, due: 240, dueCount: 2, draft: 50, draftCount: 1, overdue: 200, overdueCount: 1, badDebt: 80, badDebtCount: 1 }
     },
     invoices: [
-      row({ id: "INV-EB-002", code: "INV-EB-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, vatApplied: "Y", vatRate: 23, vat: 46, gross: 246, email: "acme@example.com", terms: 14, jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
-      row({ id: "INV-EB-005", code: "INV-EB-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, inWeek: true, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
-      row({ id: "INV-EB-003", code: "INV-EB-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
+      row({ id: "INV-EB-002", code: "INV-EB-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, vatApplied: "Y", vatRate: 23, vat: 46, gross: 246, email: "acme@example.com", terms: 14, payUrl: "https://example.com/pay/INV-EB-002", jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200 }] }),
+      row({ id: "INV-EB-005", code: "INV-EB-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, payUrl: "https://example.com/pay/INV-EB-005", inWeek: true, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
+      row({ id: "INV-EB-003", code: "INV-EB-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, payUrl: "https://example.com/pay/INV-EB-003", inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-EB-001", code: "INV-EB-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
       row({ id: "INV-EB-004", code: "INV-EB-004", clientName: "Acme", contact: "Ann Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] })
     ],
@@ -401,6 +401,21 @@ function accountantCsvFromRows(rows) {
     lines.push(cells.map(csvField).join(","));
   });
   return lines.join("\n") + "\n";
+}
+
+function whatsAppInvoiceText(code, amount, payUrl) {
+  const lines = [
+    "Invoice " + String(code || "invoice").trim(),
+    "Amount due " + String(amount || "").trim()
+  ];
+  const link = String(payUrl || "").trim();
+  if (link) lines.push(link);
+  lines.push("PDF downloaded, attach it");
+  return lines.join("\n");
+}
+
+function whatsAppLink(text) {
+  return "https://wa.me/?text=" + encodeURIComponent(String(text || ""));
 }
 
 function invoicePayable(row) {
@@ -605,6 +620,7 @@ window.Alpine.data('appState', () => ({
   loading: false,
   loadingLabel: "Updating…",
   saving: false,
+  sharingWhatsApp: false,
   savePdfLabel: "Save in Drive",
   downloadPdfLabel: "Download PDF",
   emailPdfLabel: "Send email",
@@ -2087,6 +2103,8 @@ window.Alpine.data('appState', () => ({
     if (row.kind === "paid" || row.kind === "writtenoff") {
       this.detailPayUrl = "";
       this.payCopied = false;
+    } else if (!sameInvoice && row.payUrl) {
+      this.detailPayUrl = String(row.payUrl).trim();
     }
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
@@ -2445,6 +2463,98 @@ window.Alpine.data('appState', () => ({
     this.startPayWatch();
     const self = this;
     setTimeout(function () { self.payCopied = false; }, 1600);
+  },
+  openBlankTab() {
+    try {
+      const tab = window.open("about:blank", "_blank");
+      if (tab) {
+        try { tab.opener = null; } catch (err) {}
+      }
+      return tab || null;
+    } catch (err) {
+      return null;
+    }
+  },
+  closeTab(tab) {
+    if (!tab) return;
+    try { tab.close(); } catch (err) {}
+  },
+  phoneShareSheet() {
+    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  },
+  async presentWhatsApp(text, reserved) {
+    const url = whatsAppLink(text);
+    if (reserved && !reserved.closed) {
+      try {
+        reserved.location.href = url;
+        return "tab";
+      } catch (err) {
+        this.closeTab(reserved);
+      }
+    } else {
+      this.closeTab(reserved);
+    }
+    let tab = null;
+    try { tab = window.open(url, "_blank"); } catch (err) { tab = null; }
+    if (tab) {
+      try { tab.opener = null; } catch (err) {}
+      return "tab";
+    }
+    if (this.phoneShareSheet() && typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({ text: text });
+        return "sheet";
+      } catch (err) {
+        if (err && err.name === "AbortError") return "sheet";
+      }
+    }
+    const copied = await this.writeClipboard(text);
+    return copied ? "copy" : "";
+  },
+  async shareOnWhatsApp() {
+    if (this.saving || this.sharingWhatsApp || !this.detailId || !this.detailShowPay) return;
+    this.sharingWhatsApp = true;
+    try {
+      let reserved = null;
+      const known = String(this.detailPayUrl || "").trim();
+      if (!known && !this.previewMode) reserved = this.openBlankTab();
+      if (!known && !this.previewMode) {
+        const linked = await this.requestPayLink(this.detailId);
+        if (!linked || linked.timedOut) {
+          this.closeTab(reserved);
+          this.setFeedback("That took too long, so it was stopped. Check the invoice before you try again.", true);
+          return;
+        }
+      }
+      const payUrl = String(this.detailPayUrl || "").trim();
+      if (!payUrl) {
+        this.closeTab(reserved);
+        this.setFeedback(this.previewMode ? "Preview has no pay link." : "No pay link on this invoice yet.", true);
+        return;
+      }
+      const row = (this.invoiceRows || []).find((item) => item.id === this.detailId) || {};
+      const text = whatsAppInvoiceText(this.detailCode || this.detailId, this.money(invoicePayable(row).payable), payUrl);
+      const how = await this.presentWhatsApp(text, reserved);
+      await this.downloadInvoicePdf();
+      const lead = how === "copy" ? "Copied the WhatsApp message." : how === "sheet" ? "Opened the share sheet." : how ? "Opened WhatsApp." : "";
+      const prior = (this.feedback && this.feedback.text) || "";
+      if (this.feedback && this.feedback.isError) {
+        if (lead) this.setFeedback(lead + " " + prior, true);
+        return;
+      }
+      const pdfNote = this.previewMode
+        ? (prior || "Preview cannot print the PDF.")
+        : ("PDF downloaded, attach it." + (/marked invoiced/i.test(prior) ? " Invoice marked invoiced." : ""));
+      if (!lead) {
+        this.setFeedback("Could not open WhatsApp. " + pdfNote, true);
+        return;
+      }
+      this.setFeedback(lead + " " + pdfNote, false);
+      this.startPayWatch();
+    } finally {
+      this.sharingWhatsApp = false;
+    }
   },
   async writeClipboard(text) {
     try {

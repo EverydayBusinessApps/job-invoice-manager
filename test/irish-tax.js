@@ -75,6 +75,28 @@ assert(csv.indexOf(",99,46,246") !== -1, "stored VAT was recomputed " + csv);
 assert(csv.indexOf(",11.5,") !== -1, "the draft row was left out of the CSV");
 assert(csv.indexOf(",18.4,") !== -1, "the written-off row was left out of the CSV");
 
+const vatRow = { total: 200, vatApplied: "Y", vatRate: 99, vat: 46, gross: 246 };
+const netRow = { total: 40, vatApplied: "N", vat: 9, gross: 49 };
+assert(context.invoicePayable(vatRow).payable === 246, "stored gross " + context.invoicePayable(vatRow).payable);
+assert(context.invoicePayable(netRow).payable === 40, "stored total due " + context.invoicePayable(netRow).payable);
+const waText = context.whatsAppInvoiceText("INV-EB-002", "€246.00", "https://pay.example/inv");
+assert(waText.indexOf("Invoice INV-EB-002") === 0, waText);
+assert(waText.indexOf("Amount due €246.00") !== -1, waText);
+assert(waText.indexOf("https://pay.example/inv") !== -1, waText);
+assert(waText.indexOf("PDF downloaded, attach it") !== -1, waText);
+assert(waText.indexOf("99") === -1, "the WhatsApp message recomputed VAT");
+const waUrl = context.whatsAppLink(waText);
+assert(waUrl.indexOf("https://wa.me/?text=") === 0, waUrl);
+assert(decodeURIComponent(waUrl.slice("https://wa.me/?text=".length)) === waText, waUrl);
+const shareStart = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8").indexOf("async shareOnWhatsApp()");
+const shareBody = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8").slice(shareStart, shareStart + 2200);
+assert(shareBody.indexOf("downloadInvoicePdf") !== -1, "WhatsApp share skipped the PDF download");
+assert(shareBody.indexOf("invoicePayable") !== -1, "WhatsApp share skipped the stored amount");
+assert(shareBody.indexOf("emailOpen") === -1, "WhatsApp share opened the email sheet");
+const detailHtml = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+assert(detailHtml.indexOf('id="share-whatsapp"') !== -1, "the share button is missing");
+assert(detailHtml.indexOf("Share on WhatsApp") !== -1, "the share label is missing");
+
 const sample = context.sampleDashboard();
 const draft = sample.invoices.filter((row) => row.id === "INV-EB-003")[0];
 const draftFacts = context.invoiceCardFacts(draft);
