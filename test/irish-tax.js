@@ -346,11 +346,11 @@ assert(balanceRelated.length === 1 && balanceRelated[0].code === "INV-EB-DEP", J
 assert(balanceRelated[0].status === "Invoiced" && balanceRelated[0].payWord === "Unpaid", JSON.stringify(balanceRelated[0]));
 assert(balanceRelated[0].amount === 500, "deposit amount " + balanceRelated[0].amount);
 assert(balanceRelated[0].payUrl === "https://example.com/pay/INV-EB-DEP", balanceRelated[0].payUrl);
-assert(context.relatedInvoices(books.invoices, otherSite).length === 0, "Other Site listed Cathedral View");
+assert(context.relatedInvoices(books.invoices, otherSite).length === 0, "Other Site listed North Wing");
 const plainAcme = books.invoices.filter((row) => row.id === "INV-EB-002")[0];
 assert(context.relatedInvoices(books.invoices, plainAcme).length === 0, "a blank job name linked other Acme invoices");
-assert(context.jobNameKey("Cathedral View") === context.jobNameKey(" cathedral view "), context.jobNameKey("Cathedral View") + " / " + context.jobNameKey(" cathedral view "));
-const lower = Object.assign({}, balance, { id: "INV-EB-LOW", code: "INV-EB-LOW", jobName: "cathedral view", payUrl: "https://example.com/pay/INV-EB-LOW" });
+assert(context.jobNameKey("North Wing") === context.jobNameKey(" north wing "), context.jobNameKey("North Wing") + " / " + context.jobNameKey(" north wing "));
+const lower = Object.assign({}, balance, { id: "INV-EB-LOW", code: "INV-EB-LOW", jobName: "north wing", payUrl: "https://example.com/pay/INV-EB-LOW" });
 const mixed = context.relatedInvoices([deposit, lower, otherSite], deposit);
 assert(mixed.some((row) => row.code === "INV-EB-LOW") && !mixed.some((row) => row.code === "INV-EB-OS"), JSON.stringify(mixed));
 const blanks = [
@@ -358,10 +358,10 @@ const blanks = [
   { id: "B", code: "B", status: "Draft", kind: "draft", jobName: "   ", total: 20, payUrl: "https://example.com/pay/B" }
 ];
 assert(context.relatedInvoices(blanks, blanks[0]).length === 0, "blank names matched each other");
-const quoteRow = { id: "Q", code: "Q", status: "Quote", kind: "quote", jobName: "Cathedral View", total: 80, payUrl: "https://example.com/pay/Q" };
-const convertedRow = { id: "C", code: "C", status: "Converted", kind: "converted", jobName: "Cathedral View", total: 80, payUrl: "https://example.com/pay/C" };
-const writtenRow = { id: "W", code: "W", status: "Written off", kind: "writtenoff", jobName: "Cathedral View", total: 40, payUrl: "" };
-const grossRow = { id: "G", code: "G", status: "Invoiced", kind: "due", jobName: "Cathedral View", total: 500, vatApplied: "Y", vatRate: 23, vat: 115, gross: 615, payUrl: "https://example.com/pay/G" };
+const quoteRow = { id: "Q", code: "Q", status: "Quote", kind: "quote", jobName: "North Wing", total: 80, payUrl: "https://example.com/pay/Q" };
+const convertedRow = { id: "C", code: "C", status: "Converted", kind: "converted", jobName: "North Wing", total: 80, payUrl: "https://example.com/pay/C" };
+const writtenRow = { id: "W", code: "W", status: "Written off", kind: "writtenoff", jobName: "North Wing", total: 40, payUrl: "" };
+const grossRow = { id: "G", code: "G", status: "Invoiced", kind: "due", jobName: "North Wing", total: 500, vatApplied: "Y", vatRate: 23, vat: 115, gross: 615, payUrl: "https://example.com/pay/G" };
 const widened = context.relatedInvoices([deposit, balance, quoteRow, convertedRow, writtenRow, grossRow, otherSite], deposit);
 const widenedCodes = widened.map((row) => row.code);
 assert(widenedCodes.indexOf("INV-EB-BAL") !== -1, widenedCodes.join(","));
