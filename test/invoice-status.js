@@ -1334,7 +1334,11 @@ test("settings read the Config sheet and leave status rows alone", function (api
   const config = seedConfig(workbook);
   const read = api.fetchSettings();
   assert(read.success, read.error);
-  assert(read.settings.length === 10, JSON.stringify(read.settings));
+  assert(read.settings.length === 11, JSON.stringify(read.settings));
+  const termsRow = read.settings.filter(function (item) { return item.label === "paymentTerms"; })[0];
+  assert(termsRow && termsRow.value === "14" && termsRow.row === 24, JSON.stringify(termsRow));
+  assert(config.getRange(26, 1).getValue() === "Invoice status", "payment terms shifted the status rows");
+  assert(config.getRange(22, 2).getValue() === "", "payment terms wrote over the VAT row");
   assert(read.settings[0].label === "Default Hourly Rate" && read.settings[0].value === "65", read.settings[0].value);
   assert(read.settings[1].label === "Financial Year End" && read.settings[1].value === "31st October" && read.settings[1].row === 3, JSON.stringify(read.settings[1]));
   assert(read.settings[3].label === "Business Name" && read.settings[3].row === 5, JSON.stringify(read.settings[3]));
@@ -1389,6 +1393,67 @@ test("settings read the Config sheet and leave status rows alone", function (api
   const yearEnd = api.saveSettings_({ settings: [{ row: 3, label: "Financial Year End", value: "31st October" }] });
   assert(yearEnd.success, yearEnd.error);
   assert(config.getRange(3, 2).getValue() === "31st October", config.getRange(3, 2).getValue());
+});
+
+test("marking an invoice invoiced writes the due date, and paid or draft rows stay off the overdue list", function (api, workbook) {
+  seedConfig(workbook);
+  const config = workbook.sheets.Config;
+  config.getRange(24, 1).setValue("paymentTerms");
+  config.getRange(24, 2).setValue(21);
+  const clients = workbook.sheets.ClientRecords;
+  clients.getRange(2, 1).setValue("Acme");
+  clients.getRange(3, 1).setValue("Other Co");
+  clients.getRange(3, 10).setValue(10);
+  const invoices = workbook.sheets.InvoiceList;
+  invoices.getRange(2, 1).setValue("INV-EB-010");
+  invoices.getRange(2, 2).setValue("Acme");
+  invoices.getRange(2, 7).setValue(80);
+  invoices.getRange(2, 8).setValue(atNoon(2026, 9, 1));
+  invoices.getRange(2, 9).setValue("Draft");
+  invoices.getRange(3, 1).setValue("INV-EB-011");
+  invoices.getRange(3, 2).setValue("Other Co");
+  invoices.getRange(3, 7).setValue(40);
+  invoices.getRange(3, 8).setValue(atNoon(2026, 9, 1));
+  invoices.getRange(3, 9).setValue("Draft");
+  invoices.getRange(4, 1).setValue("INV-EB-012");
+  invoices.getRange(4, 2).setValue("Acme");
+  invoices.getRange(4, 7).setValue(100);
+  invoices.getRange(4, 8).setValue(atNoon(2026, 8, 1));
+  invoices.getRange(4, 9).setValue("Paid");
+  invoices.getRange(4, 14).setValue(atNoon(2026, 8, 15));
+  invoices.getRange(5, 1).setValue("INV-EB-013");
+  invoices.getRange(5, 2).setValue("Acme");
+  invoices.getRange(5, 7).setValue(50);
+  invoices.getRange(5, 8).setValue(atNoon(2026, 8, 1));
+  invoices.getRange(5, 9).setValue("Draft");
+  invoices.getRange(5, 14).setValue(atNoon(2026, 8, 10));
+
+  const marked = api.compileSingleInvoice({ invoiceId: "INV-EB-010" });
+  assert(marked.success, marked.error);
+  assert(invoices.getRange(1, 14).getValue() === "Due Date", "due date header");
+  assert(invoices.getRange(2, 14).getFormula() === "", "due date was a formula");
+  const stamped = api.isoDate_(invoices.getRange(2, 14).getValue(), "UTC");
+  assert(stamped === "2026-09-22", stamped);
+  config.getRange(24, 2).setValue(7);
+  const again = api.compileSingleInvoice({ invoiceId: "INV-EB-010" });
+  assert(!again.success, "a second mark rewrote the invoice");
+  assert(api.isoDate_(invoices.getRange(2, 14).getValue(), "UTC") === "2026-09-22", "a later terms change moved the due date");
+
+  const clientTerms = api.compileSingleInvoice({ invoiceId: "INV-EB-011" });
+  assert(clientTerms.success, clientTerms.error);
+  assert(api.isoDate_(invoices.getRange(3, 14).getValue(), "UTC") === "2026-09-11", "client terms were ignored");
+
+  const report = api.buildDashboardReport_(workbook, atNoon(2026, 9, 22));
+  const acme = findInvoice(report, "INV-EB-010");
+  const other = findInvoice(report, "INV-EB-011");
+  const paid = findInvoice(report, "INV-EB-012");
+  const draft = findInvoice(report, "INV-EB-013");
+  assert(acme.dueDate === "2026-09-22" && acme.overdue === false && acme.kind === "due", JSON.stringify(acme));
+  assert(other.dueDate === "2026-09-11" && other.overdue === true && other.kind === "due", JSON.stringify(other));
+  assert(paid.kind === "paid" && paid.overdue === false, JSON.stringify(paid));
+  assert(draft.kind === "draft" && draft.overdue === false, JSON.stringify(draft));
+  const overdue = report.invoices.filter(function (row) { return row.overdue; });
+  assert(overdue.length === 1 && overdue[0].id === "INV-EB-011", overdue.map(function (row) { return row.id; }).join(","));
 });
 
 test("week and financial year windows follow the day and the Config year end", function (api, workbook) {

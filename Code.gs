@@ -409,6 +409,7 @@ function appendInvoiceListRow_(invoiceSheet, status, ss) {
   invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
   invoiceSheet.getRange(nextInvListRow, 9).setValue(status || "Draft"); // Column I: Invoice Status
   if (ss) stampNewInvoiceVat_(ss, invoiceSheet, nextInvListRow);
+  if (ss && displayStatus_(status) === "Invoiced") stampInvoiceDueDate_(ss, invoiceSheet, nextInvListRow);
   return nextInvListRow;
 }
 
@@ -751,6 +752,7 @@ function processAccountInvoice(payload) {
     const row = findInvoiceListRow_(invoiceSheet, inv.id);
     if (!row) continue;
     invoiceSheet.getRange(row, 9).setValue("Invoiced"); // Column I: Invoice Status
+    stampInvoiceDueDate_(ss, invoiceSheet, row);
     marked.push(String(inv.id));
   }
 
@@ -868,6 +870,7 @@ function compileSingleInvoice(payload) {
 
   invoiceSheet.getRange(row, 9).setValue("Invoiced");
   if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
+  stampInvoiceDueDate_(ss, invoiceSheet, row);
   lockBilledTimeRates_(ss, { invoiceIds: [invoiceId, located.id, located.code] });
 
   const code = invoiceShownCode_(invoiceId, located);
@@ -940,6 +943,81 @@ function addDaysIso_(iso, days) {
   const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
   const d = String(dt.getUTCDate()).padStart(2, "0");
   return y + "-" + m + "-" + d;
+}
+
+function paymentTermsDays_(ss, clientTerms) {
+  const client = Number(clientTerms);
+  if (isFinite(client) && client > 0) return Math.round(client);
+  const config = ss && ss.getSheetByName ? ss.getSheetByName("Config") : null;
+  if (config && config.getLastRow() >= 1) {
+    const rows = config.getRange(1, 1, config.getLastRow(), 2).getValues();
+    for (let i = 0; i < rows.length; i++) {
+      if (!/^payment\s*terms$/i.test(clientText_(rows[i][0]))) continue;
+      const days = Number(rows[i][1]);
+      if (isFinite(days) && days >= 0) return Math.round(days);
+    }
+  }
+  return 14;
+}
+
+function ensurePaymentTermsRow_(config) {
+  if (!config) return 0;
+  const last = Math.max(config.getLastRow(), 1);
+  const labels = config.getRange(1, 1, last, 1).getValues();
+  let statusRow = 0;
+  for (let i = 0; i < labels.length; i++) {
+    const label = clientText_(labels[i][0]);
+    if (/^payment\s*terms$/i.test(label)) {
+      const cell = config.getRange(i + 1, 2);
+      if (cell.getValue() === "" || cell.getValue() == null) cell.setValue(14);
+      return i + 1;
+    }
+    if (!statusRow && /^(invoice status|draft|invoiced|paid|written off)$/i.test(label)) statusRow = i + 1;
+  }
+  let target = 0;
+  const limit = statusRow ? statusRow - 1 : last;
+  for (let row = 24; row <= limit; row++) {
+    if (!clientText_(config.getRange(row, 1).getValue())) {
+      target = row;
+      break;
+    }
+  }
+  if (!target) target = Math.max(last, 23) + 1;
+  config.getRange(target, 1).setValue("paymentTerms");
+  config.getRange(target, 2).setValue(14);
+  return target;
+}
+
+function clientTermsForName_(ss, clientName) {
+  const wanted = clientText_(clientName).toLowerCase();
+  if (!wanted) return 0;
+  const rows = readClientRows_(ss);
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].name.toLowerCase() === wanted) return Number(rows[i].terms) || 0;
+  }
+  return 0;
+}
+
+function stampInvoiceDueDate_(ss, invoiceSheet, row) {
+  if (!ss || !invoiceSheet || !row) return "";
+  const timezone = (ss.getSpreadsheetTimeZone && ss.getSpreadsheetTimeZone()) || "UTC";
+  const existing = isoDate_(invoiceSheet.getRange(row, 14).getValue(), timezone);
+  if (existing) return existing;
+  if (!clientText_(invoiceSheet.getRange(1, 14).getValue())) {
+    invoiceSheet.getRange(1, 14).setValue("Due Date");
+  }
+  let rawDate = invoiceSheet.getRange(row, 8).getValue();
+  if (!rawDate) {
+    rawDate = new Date();
+    invoiceSheet.getRange(row, 8).setValue(rawDate);
+  }
+  const invoiceIso = isoDate_(rawDate, timezone);
+  const days = paymentTermsDays_(ss, clientTermsForName_(ss, invoiceSheet.getRange(row, 2).getValue()));
+  const dueIso = addDaysIso_(invoiceIso, days);
+  if (!dueIso) return "";
+  const parts = dueIso.split("-").map(Number);
+  invoiceSheet.getRange(row, 14).setValue(new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12)));
+  return dueIso;
 }
 
 function daysBetweenIso_(startIso, endIso) {
@@ -1606,7 +1684,7 @@ function buildDashboardReport_(ss, asOfDate) {
   const invoiceSheet = ss.getSheetByName("InvoiceList");
   normalizeInvoiceStatuses_(invoiceSheet);
   if (invoiceSheet && invoiceSheet.getLastRow() >= 2) {
-    const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 13).getValues();
+    const data = invoiceSheet.getRange(2, 1, invoiceSheet.getLastRow() - 1, 14).getValues();
     for (let i = 0; i < data.length; i++) {
       const listId = String(data[i][0] || "").trim();
       if (!listId) continue;
@@ -1626,7 +1704,8 @@ function buildDashboardReport_(ss, asOfDate) {
         vatApplied: appliedText ? (vatAppliedYes_(appliedText) ? "Y" : "N") : "",
         vatRate: appliedText ? numberOrNull_(data[i][10]) : null,
         vat: appliedText && vatAppliedYes_(appliedText) ? numberOrNull_(data[i][11]) : null,
-        gross: appliedText && vatAppliedYes_(appliedText) ? numberOrNull_(data[i][12]) : null
+        gross: appliedText && vatAppliedYes_(appliedText) ? numberOrNull_(data[i][12]) : null,
+        dueOnSheet: isoDate_(data[i][13], timezone)
       };
       group.list = preferInvoiceList_(group.list, nextList);
     }
@@ -1705,7 +1784,7 @@ function buildDashboardReport_(ss, asOfDate) {
     const date = (list && list.date) || (dates.length ? dates[dates.length - 1] : "");
     const service = (list && list.service) || (dates.length ? (dates[0] === dates[dates.length - 1] ? dates[0] : dates[0] + " - " + dates[dates.length - 1]) : "");
     const anchor = date || serviceEndIso_(service) || (dates.length ? dates[dates.length - 1] : "");
-    const dueDate = date && profile.terms ? addDaysIso_(date, profile.terms) : "";
+    const dueDate = (list && list.dueOnSheet) || (date ? addDaysIso_(date, paymentTermsDays_(ss, profile.terms)) : "");
     const overdue = kind === "due" && !!dueDate && dueDate < today;
     const total = list && list.total != null ? roundMoney_(list.total) : roundMoney_(shiftCharge);
     const vatApplied = list && list.vatApplied ? list.vatApplied : "";
@@ -2121,6 +2200,7 @@ function fetchSettings(payload) {
 function readConfigSheet_(ss) {
   const config = ss.getSheetByName("Config");
   if (!config) return { success: false, error: "Settings are missing." };
+  ensurePaymentTermsRow_(config);
   const last = Math.max(config.getLastRow(), 1);
   const rows = config.getRange(1, 1, last, 2).getValues();
   const settings = [];
@@ -2199,6 +2279,14 @@ function checkedConfigValue_(label, raw, isBreak) {
     if (!mark) return { ok: false, error: "VAT applied needs to be Y or N." };
     return { ok: true, write: function (cell) { cell.setValue(mark); } };
   }
+  if (/^payment\s*terms$/i.test(label)) {
+    if (!text) return { ok: true, write: function (cell) { cell.setValue(14); } };
+    const n = Number(String(text).replace(/[^0-9.-]/g, ""));
+    if (!isFinite(n) || n < 0 || Math.round(n) !== n) {
+      return { ok: false, error: "Payment terms need a whole number of days, for example 14." };
+    }
+    return { ok: true, write: function (cell) { cell.setValue(n); } };
+  }
   if (/^vatrate$/i.test(label)) {
     if (!text) return { ok: true, write: function (cell) { cell.setValue(""); } };
     const n = vatNumber_(text);
@@ -2230,6 +2318,12 @@ function saveSettings_(payload) {
   }
   const plan = [];
   const items = settings.concat(breaks);
+  items.forEach(function (item) {
+    if (!item || Number(item.row) || !/^payment\s*terms$/i.test(clientText_(item.label))) return;
+    const row = ensurePaymentTermsRow_(config);
+    item.row = row;
+    item.label = clientText_(config.getRange(row, 1).getValue()) || "paymentTerms";
+  });
   for (let i = 0; i < items.length; i++) {
     const item = items[i] || {};
     const row = Number(item.row);
@@ -2972,6 +3066,7 @@ function markDraftInvoiced_(ss, invoiceId) {
   if (status !== "Draft") return { changed: false, status: status };
   invoiceSheet.getRange(row, 9).setValue("Invoiced");
   if (!invoiceSheet.getRange(row, 8).getValue()) invoiceSheet.getRange(row, 8).setValue(new Date());
+  stampInvoiceDueDate_(ss, invoiceSheet, row);
   lockBilledTimeRates_(ss, { invoiceIds: [invoiceId, code] });
   return { changed: true, status: "Invoiced" };
 }

@@ -8,7 +8,7 @@
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=29">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=42"></script>
+  <script defer src="app.js?v=43"></script>
 </head>
 <body>
 
@@ -56,6 +56,15 @@
                 <span class="metric-value" x-text="openCollectAmount"></span>
                 <span class="metric-sub" x-text="openCollectCount"></span>
                 <span class="pile-hint">Record a payment or write one off</span>
+              </span>
+              <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
+            </button>
+            <button type="button" class="pile" data-action="openList" data-id="overdue">
+              <span class="pile-copy">
+                <span class="metric-title">Overdue</span>
+                <span class="metric-value" x-text="openOverdueAmount"></span>
+                <span class="metric-sub" x-text="openOverdueCount"></span>
+                <span class="pile-hint">Invoiced and past the due date</span>
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
@@ -177,6 +186,12 @@
           <p class="page-lead" x-show="detailIsDraft">Check this invoice, then mark it invoiced.</p>
           <div class="send-dock">
             <div class="send-dock-inner">
+              <div x-show="detailOverdue">
+                <div class="inv-actions">
+                  <button type="button" id="remind-whatsapp" data-action="remindOnWhatsApp" data-disable-when="saving">Remind</button>
+                  <button type="button" id="email-reminder" class="btn-line" data-action="openEmailReminder" data-disable-when="saving">Email reminder</button>
+                </div>
+              </div>
               <button type="button" id="mark-invoiced" x-show="detailIsDraft" data-action="compileOpenInvoice" data-disable-when="saving">Mark invoiced</button>
               <div class="inv-actions">
                 <button type="button" x-show="detailShowPay" data-action="copyPayLink" data-disable-when="saving" :class="detailCanFinish ? '' : 'btn-line'">Copy pay link</button>
@@ -517,6 +532,11 @@
           <div class="form-group" x-show="settingsShow.iban">
             <label>IBAN</label>
             <input type="text" x-model="settingsForm.iban" data-disable-when="saving">
+          </div>
+          <div class="form-group" x-show="settingsShow.paymentTerms">
+            <label>Payment terms</label>
+            <input type="text" inputmode="numeric" x-model="settingsForm.paymentTerms" data-disable-when="saving">
+            <p class="vat-note">Days after the invoice date. A client with their own terms uses those. The due date is written when the invoice is marked invoiced.</p>
           </div>
           <details class="option-group" x-show="settingsShow.vat">
             <summary>VAT</summary>

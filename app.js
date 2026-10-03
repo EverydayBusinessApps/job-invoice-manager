@@ -403,7 +403,7 @@ function accountantCsvFromRows(rows) {
   return lines.join("\n") + "\n";
 }
 
-function whatsAppInvoiceText(code, amount, payUrl) {
+function whatsAppInvoiceText(code, amount, payUrl, overdueLine) {
   const lines = [
     "Invoice " + String(code || "invoice").trim(),
     "Amount due " + String(amount || "").trim()
@@ -411,7 +411,18 @@ function whatsAppInvoiceText(code, amount, payUrl) {
   const link = String(payUrl || "").trim();
   if (link) lines.push(link);
   lines.push("PDF downloaded, attach it");
+  if (overdueLine) lines.push(String(overdueLine));
   return lines.join("\n");
+}
+
+function invoiceIsOverdue(row, asOf) {
+  if (!row) return false;
+  const kind = row.kind || kindForStatus(row.status);
+  if (kind !== "due") return false;
+  if (row.overdue === true) return true;
+  const due = String(row.dueDate || "");
+  const today = String(asOf || "");
+  return !!(due && today && due < today);
 }
 
 function whatsAppLink(text) {
@@ -713,11 +724,12 @@ window.Alpine.data('appState', () => ({
   vatSwitchLabel: "Off",
   settingsShow: {
     rate: true, yearEnd: true, currency: true, name: true, address: true, email: true,
-    website: true, phone: true, bank: true, iban: true, vat: true, vatApplied: true, vatRate: true
+    website: true, phone: true, bank: true, iban: true, vat: true, vatApplied: true, vatRate: true,
+    paymentTerms: true
   },
   settingsForm: {
     rate: "", yearEnd: "", currency: "", name: "", address: "", email: "",
-    website: "", phone: "", bank: "", iban: "", vatApplied: "N", vatRate: ""
+    website: "", phone: "", bank: "", iban: "", vatApplied: "N", vatRate: "", paymentTerms: "14"
   },
   asOf: "",
   openSendAmount: "€0.00",
@@ -732,6 +744,8 @@ window.Alpine.data('appState', () => ({
   openDoneCount: "0 invoices",
   openDoneHas: false,
   openDoneEmpty: true,
+  openOverdueAmount: "€0.00",
+  openOverdueCount: "0 invoices",
   activeLabel: "",
   activeHours: "0",
   activeShifts: "0 shifts",
@@ -779,6 +793,7 @@ window.Alpine.data('appState', () => ({
   emailOpen: false,
   emailToggleLabel: "Email",
   detailShowPay: false,
+  detailOverdue: false,
   detailPayUrl: "",
   payCopied: false,
   payPollMs: 6000,
@@ -1665,11 +1680,12 @@ window.Alpine.data('appState', () => ({
     if (this.listScope === "period") rows = rows.filter((row) => row[flag]);
     const filter = this.invoiceFilter;
     if (filter === "due") rows = rows.filter((row) => row.kind === "due");
+    else if (filter === "overdue") rows = rows.filter((row) => invoiceIsOverdue(row, this.asOf));
     else if (filter === "send" || filter === "draft") rows = rows.filter((row) => row.kind === "draft");
     else if (filter === "done") rows = rows.filter((row) => row.kind === "paid" || row.kind === "writtenoff");
     const showStatus = filter === "send" || filter === "draft" || filter === "done";
     this.listShowsSend = filter === "send" || filter === "draft";
-    this.listShowsCollect = filter === "due";
+    this.listShowsCollect = filter === "due" || filter === "overdue";
     this.listShowsDone = filter === "done";
     this.visibleInvoices = rows.map((row) => {
       const code = row.code || row.id;
@@ -1687,7 +1703,7 @@ window.Alpine.data('appState', () => ({
       };
     });
     this.listEmpty = this.visibleInvoices.length === 0;
-    this.listEmptyLabel = "Nothing waiting here.";
+    this.listEmptyLabel = filter === "overdue" ? "Nothing is overdue." : "Nothing waiting here.";
     this.listShowsHint = !this.listEmpty && !!this.listHint;
   },
   applyDashboard(res, keepEmail) {
@@ -1882,6 +1898,7 @@ window.Alpine.data('appState', () => ({
     this.listScope = periodScoped ? "period" : "open";
     const titles = {
       due: "Invoices to collect",
+      overdue: "Overdue",
       send: "Invoices to send",
       draft: "Invoices to send",
       done: "Finished invoices"
@@ -1889,6 +1906,7 @@ window.Alpine.data('appState', () => ({
     this.listTitle = (titles[kind] || "Invoices") + (periodScoped && this.activeLabel ? " · " + this.activeLabel : "");
     const hints = {
       due: "Tap an invoice to check it, or mark it paid.",
+      overdue: "These invoices are past the due date. Open one to remind the client.",
       send: "Tap an invoice to check it, then mark it invoiced.",
       draft: "Tap an invoice to check it, then mark it invoiced.",
       done: "Tap an invoice to check it. Undo puts it back to collect."
@@ -1899,7 +1917,7 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     this.syncVisibleInvoices();
     this.scrollPage();
-    if (kind === "due" || kind === "send" || kind === "draft") this.startPayWatch();
+    if (kind === "due" || kind === "overdue" || kind === "send" || kind === "draft") this.startPayWatch();
     else this.stopPayWatch();
   },
   showDashHome() {
@@ -2033,11 +2051,15 @@ window.Alpine.data('appState', () => ({
     this.openSendAmount = this.money(sum("draft"));
     this.openSendCount = this.countLabel(ofKind("draft").length, "invoice", "invoices");
     const due = ofKind("due");
-    const overdue = due.filter((row) => row.overdue).length;
+    const overdueRows = due.filter((row) => invoiceIsOverdue(row, this.asOf));
+    const overdue = overdueRows.length;
     let collect = this.countLabel(due.length, "invoice", "invoices");
     if (overdue) collect += " · " + this.countLabel(overdue, "overdue", "overdue");
     this.openCollectAmount = this.money(sum("due"));
     this.openCollectCount = collect;
+    const overdueSum = overdueRows.reduce((total, row) => total + invoicePayable(row).payable, 0);
+    this.openOverdueAmount = this.money(overdueSum);
+    this.openOverdueCount = this.countLabel(overdue, "invoice", "invoices");
     const paid = ofKind("paid");
     const written = ofKind("writtenoff");
     const doneBits = [];
@@ -2113,6 +2135,7 @@ window.Alpine.data('appState', () => ({
     this.detailCanFinish = row.kind === "due";
     this.detailCanUndo = row.kind === "paid" || row.kind === "writtenoff";
     this.detailShowPay = row.kind === "draft" || row.kind === "due";
+    this.detailOverdue = invoiceIsOverdue(row, this.asOf);
     if (!sameInvoice || this.detailMessage === this.detailMessageAuto) {
       this.detailMessage = drafted;
       this.detailMessageAuto = drafted;
@@ -2150,7 +2173,7 @@ window.Alpine.data('appState', () => ({
     if (this.previewMode || this.currentTab !== "dashboard") return false;
     if (this.dashView === "home") return true;
     if (this.dashView === "list") {
-      return this.invoiceFilter === "due" || this.invoiceFilter === "send" || this.invoiceFilter === "draft";
+      return this.invoiceFilter === "due" || this.invoiceFilter === "overdue" || this.invoiceFilter === "send" || this.invoiceFilter === "draft";
     }
     if (this.dashView === "detail") {
       const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
@@ -2513,6 +2536,28 @@ window.Alpine.data('appState', () => ({
     return copied ? "copy" : "";
   },
   async shareOnWhatsApp() {
+    this.whatsAppOverdueLine = "";
+    return this.handInvoiceToWhatsApp();
+  },
+  async remindOnWhatsApp() {
+    if (!this.detailOverdue) return;
+    this.whatsAppOverdueLine = "This invoice is overdue.";
+    return this.handInvoiceToWhatsApp();
+  },
+  openEmailReminder() {
+    if (!this.detailOverdue || this.saving) return;
+    const line = "This invoice is overdue.";
+    const note = String(this.detailMessage || "");
+    if (note.indexOf(line) === -1) this.detailMessage = line + (note ? "\n\n" + note : "");
+    this.emailOpen = true;
+    this.syncEmailToggle();
+    setTimeout(() => {
+      const node = document.querySelector("#email-sheet button");
+      if (!node) return;
+      try { node.scrollIntoView({ block: "nearest" }); } catch (err) {}
+    }, 60);
+  },
+  async handInvoiceToWhatsApp() {
     if (this.saving || this.sharingWhatsApp || !this.detailId || !this.detailShowPay) return;
     this.sharingWhatsApp = true;
     try {
@@ -2534,7 +2579,7 @@ window.Alpine.data('appState', () => ({
         return;
       }
       const row = (this.invoiceRows || []).find((item) => item.id === this.detailId) || {};
-      const text = whatsAppInvoiceText(this.detailCode || this.detailId, this.money(invoicePayable(row).payable), payUrl);
+      const text = whatsAppInvoiceText(this.detailCode || this.detailId, this.money(invoicePayable(row).payable), payUrl, this.whatsAppOverdueLine);
       const how = await this.presentWhatsApp(text, reserved);
       await this.downloadInvoicePdf();
       const lead = how === "copy" ? "Copied the WhatsApp message." : how === "sheet" ? "Opened the share sheet." : how ? "Opened WhatsApp." : "";
@@ -2687,6 +2732,8 @@ window.Alpine.data('appState', () => ({
     this.detailCanFinish = status === "Invoiced";
     this.detailCanUndo = status === "Paid" || status === "Written off";
     this.detailShowPay = this.detailIsDraft || this.detailCanFinish;
+    const openRow = (this.invoiceRows || []).find((item) => item.id === this.detailId);
+    this.detailOverdue = status === "Invoiced" && invoiceIsOverdue(openRow, this.asOf);
     if (!this.detailShowPay) {
       this.detailPayUrl = "";
       this.payCopied = false;
@@ -2764,7 +2811,8 @@ window.Alpine.data('appState', () => ({
         row(11, "Bank Account Name", "Everyday Business"),
         row(12, "IBAN", "IEXX XXXX XXXX XXXX XXXX XX"),
         row(22, "vatApplied", "N"),
-        row(23, "vatRate", "23")
+        row(23, "vatRate", "23"),
+        row(24, "paymentTerms", "14")
       ]
     };
   },
@@ -2782,7 +2830,9 @@ window.Alpine.data('appState', () => ({
       "bank account name": "bank",
       iban: "iban",
       vatapplied: "vatApplied",
-      vatrate: "vatRate"
+      vatrate: "vatRate",
+      "payment terms": "paymentTerms",
+      paymentterms: "paymentTerms"
     };
     if (settings[name]) return { key: settings[name], kind: "setting" };
     return null;
@@ -2805,7 +2855,8 @@ window.Alpine.data('appState', () => ({
     const locked = keep || {};
     const show = {
       rate: false, yearEnd: false, currency: false, name: false, address: false, email: false,
-      website: false, phone: false, bank: false, iban: false, vat: false, vatApplied: false, vatRate: false
+      website: false, phone: false, bank: false, iban: false, vat: false, vatApplied: false, vatRate: false,
+      paymentTerms: true
     };
     const meta = {};
     const extra = [];
@@ -2830,6 +2881,7 @@ window.Alpine.data('appState', () => ({
         this.settingsForm[mapped.key] = row.value == null ? "" : String(row.value);
       }
     });
+    if (!meta.paymentTerms && !locked.paymentTerms) this.settingsForm.paymentTerms = this.settingsForm.paymentTerms || "14";
     this.settingsShow = show;
     this.settingsMeta = meta;
     this.extraSettings = extra;
@@ -2917,6 +2969,9 @@ window.Alpine.data('appState', () => ({
     (this.extraSettings || []).forEach((row) => {
       if (row && row.row && row.label) settings.push({ row: row.row, label: row.label, value: row.value });
     });
+    if (!this.settingsMeta.paymentTerms) {
+      settings.push({ row: 0, label: "paymentTerms", value: this.settingsForm.paymentTerms || "14" });
+    }
     const payload = { settings: settings };
     if (this.logoDirty && this.logoPreview) payload.logo = this.logoPreview;
     return payload;
@@ -2930,6 +2985,8 @@ window.Alpine.data('appState', () => ({
     if (this.settingsShow.yearEnd && yearEnd && !yearEndParts(yearEnd)) return "Financial year end needs a day and month, for example 31 October.";
     const vatRate = (this.settingsForm.vatRate || "").trim();
     if (this.settingsShow.vatRate && vatRate && !/^\d+(\.\d+)?$/.test(vatRate)) return "VAT rate must be a number, for example 23.";
+    const terms = (this.settingsForm.paymentTerms || "").trim();
+    if (terms && !/^\d+$/.test(terms)) return "Payment terms need a whole number of days, for example 14.";
     return "";
   },
   toggleVat() {
