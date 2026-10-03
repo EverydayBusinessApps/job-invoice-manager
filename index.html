@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=30">
+  <link rel="stylesheet" href="style.css?v=31">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=44"></script>
+  <script defer src="app.js?v=45"></script>
 </head>
 <body>
 
@@ -350,27 +350,69 @@
             <textarea x-model="form.jobDetails" rows="2" placeholder="What did you do?"></textarea>
           </div>
 
-          <div class="grid-2">
-            <div class="form-group">
-              <label>Start</label>
-              <input type="time" x-model="form.start" @change="syncOvernight" @input="syncOvernight" step="60">
+          <details id="price-group" class="option-group">
+            <summary x-text="priceSummary"></summary>
+            <div class="grid-3">
+              <button type="button" id="price-hourly" class="seg" :class="priceHourlyOn ? 'seg-on' : ''" data-action="setPriceMode" data-id="hourly">Hourly</button>
+              <button type="button" id="price-daily" class="seg" :class="priceDailyOn ? 'seg-on' : ''" data-action="setPriceMode" data-id="daily">Daily</button>
+              <button type="button" id="price-job" class="seg" :class="priceJobOn ? 'seg-on' : ''" data-action="setPriceMode" data-id="job">Job price</button>
             </div>
+            <p class="vat-note">Hourly uses the start and finish times. Daily is days × the length of the day × the hourly rate. Job price is one amount.</p>
+          </details>
+
+          <div x-show="showHourlyFields">
+            <div class="grid-2">
+              <div class="form-group">
+                <label>Start</label>
+                <input id="job-start" type="time" x-model="form.start" @change="syncOvernight" @input="syncOvernight" step="60">
+              </div>
+              <div class="form-group">
+                <label>Finish</label>
+                <input id="job-finish" type="time" x-model="form.finish" @change="syncOvernight" @input="syncOvernight" step="60">
+              </div>
+            </div>
+            <p class="shift-note" x-show="overnight" x-text="overnightLabel"></p>
             <div class="form-group">
-              <label>Finish</label>
-              <input type="time" x-model="form.finish" @change="syncOvernight" @input="syncOvernight" step="60">
+              <label>Break</label>
+              <select id="job-break" x-model="form.lunch">
+                <option value="na">None</option>
+                <option value="half hour">30 mins</option>
+                <option value="hour">1 hr</option>
+                <option value="hour and half">1.5 hrs</option>
+                <option value="two hours">2 hrs</option>
+              </select>
             </div>
           </div>
-          <p class="shift-note" x-show="overnight" x-text="overnightLabel"></p>
 
-          <div class="form-group">
-            <label>Break</label>
-            <select x-model="form.lunch">
-              <option value="na">None</option>
-              <option value="half hour">30 mins</option>
-              <option value="hour">1 hr</option>
-              <option value="hour and half">1.5 hrs</option>
-              <option value="two hours">2 hrs</option>
-            </select>
+          <div x-show="showDailyFields">
+            <div class="form-group">
+              <label>Days</label>
+              <input id="daily-days" type="text" inputmode="decimal" x-model="form.days" @input="syncPricePreview" placeholder="2">
+            </div>
+            <div class="form-group">
+              <label>Day length</label>
+              <select id="daily-length" x-model="form.dayLength" @change="syncPricePreview">
+                <option value="8">8 hours</option>
+                <option value="10">10 hours</option>
+                <option value="12">12 hours</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Hourly rate</label>
+              <input id="daily-rate" type="text" inputmode="decimal" x-model="form.dailyRate" @input="syncPricePreview" placeholder="40">
+            </div>
+          </div>
+
+          <div x-show="showJobFields">
+            <div class="form-group">
+              <label>Job price</label>
+              <input id="job-price" type="text" inputmode="decimal" x-model="form.jobPrice" @input="syncPricePreview" placeholder="500">
+            </div>
+          </div>
+
+          <div x-show="showPricePreview">
+            <p id="price-preview" class="shift-note" x-text="pricePreviewLabel"></p>
+            <p id="price-amount" class="metric-value" x-text="pricePreviewAmount"></p>
           </div>
 
           <div class="form-group">

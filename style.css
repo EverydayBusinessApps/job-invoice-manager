@@ -95,6 +95,7 @@ textarea.email-preview { min-height: 4.25rem; line-height: 1.4; white-space: pre
 .invoice-line-amt { flex: 0 0 auto; font-weight: 700; color: #00263B; }
 .invoice-totals { margin-top: 0.35rem; }
 .option-group { border: 1px solid #e2e8f0; border-radius: 0.85rem; padding: 0.35rem 0.9rem 0.9rem; background: #ffffff; }
+.option-group:not([open]) > :not(summary) { display: none; }
 .option-group summary { cursor: pointer; font-weight: 700; color: #00263B; padding: 0.6rem 0; }
 .option-group[open] summary { margin-bottom: 0.15rem; }
 .vat-note { margin: 0 0 0.85rem; color: #64748b; font-size: 0.85rem; font-weight: 600; line-height: 1.4; }
