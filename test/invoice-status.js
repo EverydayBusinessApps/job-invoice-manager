@@ -1316,11 +1316,11 @@ function seedConfig(workbook) {
     [18, "hour", new Date(Date.UTC(1899, 11, 30, 1, 0, 0))],
     [19, "hour and half", "01:30"],
     [20, "two hours", "02:00"],
-    [26, "Invoice status", ""],
-    [27, "Draft", ""],
-    [28, "Invoiced", ""],
-    [29, "Written off", ""],
-    [30, "Paid", ""]
+    [28, "Invoice status", ""],
+    [29, "Draft", ""],
+    [30, "Invoiced", ""],
+    [31, "Written off", ""],
+    [32, "Paid", ""]
   ];
   pairs.forEach(function (pair) {
     config.getRange(pair[0], 1).setValue(pair[1]);
@@ -1334,10 +1334,16 @@ test("settings read the Config sheet and leave status rows alone", function (api
   const config = seedConfig(workbook);
   const read = api.fetchSettings();
   assert(read.success, read.error);
-  assert(read.settings.length === 11, JSON.stringify(read.settings));
+  assert(read.settings.length === 13, JSON.stringify(read.settings));
   const termsRow = read.settings.filter(function (item) { return item.label === "paymentTerms"; })[0];
   assert(termsRow && termsRow.value === "14" && termsRow.row === 24, JSON.stringify(termsRow));
-  assert(config.getRange(26, 1).getValue() === "Invoice status", "payment terms shifted the status rows");
+  const loadedRow = read.settings.filter(function (item) { return item.label === "Loaded hourly cost"; })[0];
+  const mileageRow = read.settings.filter(function (item) { return item.label === "Mileage rate"; })[0];
+  assert(loadedRow && loadedRow.value === "0" && loadedRow.row === 25, JSON.stringify(loadedRow));
+  assert(mileageRow && mileageRow.value === "0" && mileageRow.row === 26, JSON.stringify(mileageRow));
+  assert(config.getRange(28, 1).getValue() === "Invoice status", "payment terms shifted the status rows");
+  assert(config.getRange(22, 1).getValue() === "" && config.getRange(22, 2).getValue() === "", "cost settings wrote over VAT applied");
+  assert(config.getRange(23, 1).getValue() === "" && config.getRange(23, 2).getValue() === "", "cost settings wrote over the VAT rate");
   assert(config.getRange(22, 2).getValue() === "", "payment terms wrote over the VAT row");
   assert(read.settings[0].label === "Default Hourly Rate" && read.settings[0].value === "65", read.settings[0].value);
   assert(read.settings[1].label === "Financial Year End" && read.settings[1].value === "31st October" && read.settings[1].row === 3, JSON.stringify(read.settings[1]));
@@ -1380,7 +1386,7 @@ test("settings read the Config sheet and leave status rows alone", function (api
   assert(config.getRange(7, 2).getValue() === "office@everydaybusiness.ie", "email");
   assert(config.getRange(9, 2).getValue() === "00353 123 45678", "phone lost its text");
   assert(config.getRange(17, 2).getFormula() === "=TIME(0,45,0)", config.getRange(17, 2).getFormula());
-  assert(config.getRange(27, 1).getValue() === "Draft", "Draft status row changed");
+  assert(config.getRange(29, 1).getValue() === "Draft", "Draft status row changed");
   assert(api.businessProfile_(workbook).name === "Harbour Lane", "business name no longer comes from B5");
 
   const badRate = api.saveSettings_({ settings: [{ row: 2, label: "Default Hourly Rate", value: "-5" }] });
@@ -2552,6 +2558,181 @@ test("the accountant CSV is the stored InvoiceList, including VAT columns", func
   assert(clear && /,N,,,$/.test(clear), clear);
   assert(exported.csv.indexOf("999") === -1, "a blank invoice id was included");
   assert(exported.csv.indexOf("=") === -1, "a formula was written into the CSV");
+});
+
+function timeRowSnapshot(sheet, row) {
+  const values = [];
+  const formulas = [];
+  for (let col = 1; col <= 19; col++) {
+    values.push(sheet.getRange(row, col).getValue());
+    formulas.push(sheet.getRange(row, col).getFormula());
+  }
+  return JSON.stringify({ values: values, formulas: formulas });
+}
+
+test("logging a job stamps costs, and a later settings change leaves that row as it was", function (api, workbook) {
+  const config = seedConfig(workbook);
+  config.getRange(22, 1).setValue("vatApplied");
+  config.getRange(22, 2).setValue("Y");
+  config.getRange(23, 1).setValue("vatRate");
+  config.getRange(23, 2).setValue(23);
+  config.getRange(25, 1).setValue("Loaded hourly cost");
+  config.getRange(25, 2).setValue(10);
+  config.getRange(26, 1).setValue("Mileage rate");
+  config.getRange(26, 2).setValue(0.25);
+  const time = workbook.sheets["Time&Attendance"];
+  const invoices = workbook.sheets.InvoiceList;
+  time.getRange("K2").setFormula("=1+1");
+
+  const rejected = api.executeTimeLog(shift({ materials: "abc" }));
+  assert(!rejected.success && /number/.test(rejected.error), rejected.error);
+  assert(time.getRange(2, 4).getValue() === "", "a bad cost still logged the job");
+
+  const logged = api.executeTimeLog(shift({ materials: "30", hired: "12", mileageKm: "50" }));
+  assert(logged.success, logged.error);
+  assert(time.getRange(1, 4).getValue() === "ClientID", "client column moved");
+  assert(time.getRange(1, 14).getValue() === "", "billed rate header was overwritten");
+  assert(time.getRange(1, 15).getValue() === "Materials", time.getRange(1, 15).getValue());
+  assert(time.getRange(1, 16).getValue() === "Hired equipment", time.getRange(1, 16).getValue());
+  assert(time.getRange(1, 17).getValue() === "Mileage km", time.getRange(1, 17).getValue());
+  assert(time.getRange(1, 18).getValue() === "Mileage rate", time.getRange(1, 18).getValue());
+  assert(time.getRange(1, 19).getValue() === "Loaded hourly cost", time.getRange(1, 19).getValue());
+  assert(time.getRange(2, 15).getValue() === 30, "materials " + time.getRange(2, 15).getValue());
+  assert(time.getRange(2, 16).getValue() === 12, "hired " + time.getRange(2, 16).getValue());
+  assert(time.getRange(2, 17).getValue() === 50, "km " + time.getRange(2, 17).getValue());
+  assert(time.getRange(2, 18).getValue() === 0.25, "mileage rate " + time.getRange(2, 18).getValue());
+  assert(time.getRange(2, 19).getValue() === 10, "loaded cost " + time.getRange(2, 19).getValue());
+  for (let col = 15; col <= 19; col++) {
+    assert(time.getRange(2, col).getFormula() === "", "cost column " + col + " stored a formula");
+  }
+  assert(time.getRange("K2").getFormula() === "=1+1", "the rate formula was replaced");
+  const startFormula = time.getRange(2, 7).getFormula();
+  const finishFormula = time.getRange(2, 9).getFormula();
+  assert(/^=TIME\(8,0,0\)$/.test(startFormula), startFormula);
+  assert(/^=TIME\(16,30,0\)$/.test(finishFormula), finishFormula);
+
+  time.getRange(2, 10).setValue(4);
+  time.getRange(2, 12).setValue(200);
+  const invoiceRow = invoices.getLastRow();
+  invoices.getRange(invoiceRow, 7).setValue(200);
+  api.refreshStampedInvoiceVat_(workbook, logged.invoiceId);
+  assert(invoices.getRange(invoiceRow, 10).getValue() === "Y", "VAT Applied");
+  assert(invoices.getRange(invoiceRow, 13).getValue() === 246, "gross " + invoices.getRange(invoiceRow, 13).getValue());
+  assert(invoices.getRange(invoiceRow, 14).getValue() === "", "profit used InvoiceList column N");
+
+  const before = timeRowSnapshot(time, 2);
+  const saved = api.saveSettings_({
+    settings: [
+      { row: 25, label: "Loaded hourly cost", value: "18" },
+      { row: 26, label: "Mileage rate", value: "0.40" }
+    ]
+  });
+  assert(saved.success, saved.error);
+  assert(config.getRange(25, 2).getValue() === 18, "loaded cost was not saved");
+  assert(config.getRange(26, 2).getValue() === 0.4, "mileage rate was not saved");
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved");
+  assert(config.getRange(28, 1).getValue() === "Invoice status", "settings shifted the status block");
+  assert(timeRowSnapshot(time, 2) === before, "changing settings rewrote the logged job");
+
+  const report = api.fetchDashboard();
+  assert(report.success, report.error);
+  const invoice = (report.invoices || []).filter(function (item) { return item.vatApplied === "Y"; })[0];
+  assert(invoice && invoice.payable === 246 && invoice.gross === 246, JSON.stringify(invoice && { payable: invoice.payable, gross: invoice.gross, total: invoice.total }));
+  assert(invoice.profit === 151.5, "profit " + invoice.profit);
+  assert(invoice.lines.length === 1, "line count " + invoice.lines.length);
+  const line = invoice.lines[0];
+  assert(line.materials === 30 && line.hired === 12 && line.mileageKm === 50, JSON.stringify(line));
+  assert(line.mileageRate === 0.25 && line.loadedHourly === 10, JSON.stringify(line));
+  assert(line.mileageMoney === 12.5 && line.loadedMoney === 40 && line.costs === 94.5, JSON.stringify(line));
+  assert(line.amountDue === 246 && line.profit === 151.5, JSON.stringify(line));
+
+  api.writeJobCosts_(time, 2, { materials: 40, hired: 8, km: 60 }, workbook);
+  assert(time.getRange(2, 15).getValue() === 40 && time.getRange(2, 16).getValue() === 8 && time.getRange(2, 17).getValue() === 60, "the job costs were not updated");
+  assert(time.getRange(2, 18).getValue() === 0.25 && time.getRange(2, 19).getValue() === 10, "a later edit replaced the stamped rates");
+  assert(time.getRange(2, 7).getFormula() === startFormula && time.getRange(2, 9).getFormula() === finishFormula, "a cost edit changed the clock formulas");
+  assert(time.getRange("K2").getFormula() === "=1+1", "a cost edit changed the rate formula");
+  assert(time.getRange(2, 18).getFormula() === "" && time.getRange(2, 19).getFormula() === "", "stamped rates became formulas");
+
+  const revised = api.fetchDashboard();
+  const again = (revised.invoices || []).filter(function (item) { return item.vatApplied === "Y"; })[0];
+  assert(again && again.lines[0].mileageRate === 0.25 && again.lines[0].loadedHourly === 10, JSON.stringify(again && again.lines[0]));
+  assert(again.lines[0].costs === 103 && again.profit === 143, JSON.stringify({ costs: again.lines[0].costs, profit: again.profit }));
+  assert(config.getRange(25, 2).getValue() === 18 && time.getRange(2, 19).getValue() === 10, "the job picked up today's loaded cost");
+});
+
+test("blank job costs and blank settings stamp zero, and several jobs share the stamped VAT", function (api, workbook) {
+  const config = seedConfig(workbook);
+  config.getRange(22, 1).setValue("vatApplied");
+  config.getRange(22, 2).setValue("Y");
+  config.getRange(23, 1).setValue("vatRate");
+  config.getRange(23, 2).setValue(23);
+  const time = workbook.sheets["Time&Attendance"];
+  const invoices = workbook.sheets.InvoiceList;
+
+  const blank = api.executeTimeLog(shift({ clientName: "Plain Co", materials: "", hired: "", mileageKm: "" }));
+  assert(blank.success, blank.error);
+  assert(time.getRange(2, 15).getValue() === 0 && time.getRange(2, 18).getValue() === 0 && time.getRange(2, 19).getValue() === 0, "blank settings stamped a rate");
+  time.getRange(2, 10).setValue(2);
+  time.getRange(2, 12).setValue(80);
+  const plainRow = invoices.getLastRow();
+  invoices.getRange(plainRow, 2).setValue("Plain Co");
+  invoices.getRange(plainRow, 7).setValue(80);
+  invoices.getRange(plainRow, 10).setValue("N");
+  invoices.getRange(plainRow, 12).setValue("");
+  invoices.getRange(plainRow, 13).setValue("");
+
+  config.getRange(25, 1).setValue("Loaded hourly cost");
+  config.getRange(25, 2).setValue(10);
+  config.getRange(26, 1).setValue("Mileage rate");
+  config.getRange(26, 2).setValue(0.25);
+  const first = api.executeTimeLog(shift({ materials: 10, hired: 0, mileageKm: 0 }));
+  assert(first.success, first.error);
+  const second = api.executeTimeLog(shift({
+    invoiceMode: "existing",
+    invoiceId: first.invoiceId,
+    jobDetails: "Follow-up",
+    materials: 0,
+    hired: 5,
+    mileageKm: 10
+  }));
+  assert(second.success, second.error);
+  time.getRange(3, 10).setValue(2);
+  time.getRange(3, 12).setValue(100);
+  time.getRange(4, 10).setValue(1);
+  time.getRange(4, 12).setValue(50);
+  const invoiceRow = invoices.getLastRow();
+  invoices.getRange(invoiceRow, 7).setValue(150);
+  api.refreshStampedInvoiceVat_(workbook, first.invoiceId);
+  assert(invoices.getRange(invoiceRow, 13).getValue() === 184.5, "gross " + invoices.getRange(invoiceRow, 13).getValue());
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved");
+
+  const before = timeRowSnapshot(time, 3) + timeRowSnapshot(time, 4);
+  config.getRange(23, 2).setValue(9);
+  config.getRange(25, 2).setValue(99);
+  config.getRange(26, 2).setValue(0.8);
+  assert(timeRowSnapshot(time, 3) + timeRowSnapshot(time, 4) === before, "live config rewrote existing jobs");
+  assert(time.getRange(3, 19).getValue() === 10 && time.getRange(4, 18).getValue() === 0.25, "stamped rates followed Settings");
+
+  const report = api.fetchDashboard();
+  const grouped = (report.invoices || []).filter(function (item) { return item.lines && item.lines.length === 2; })[0];
+  assert(grouped && grouped.payable === 184.5, JSON.stringify(grouped && { payable: grouped.payable, gross: grouped.gross, lines: grouped.lines }));
+  assert(grouped.lines[0].amountDue === 123 && grouped.lines[1].amountDue === 61.5, JSON.stringify(grouped.lines.map(function (line) { return line.amountDue; })));
+  assert(grouped.lines[0].profit === 93 && grouped.lines[1].profit === 44, JSON.stringify(grouped.lines.map(function (line) { return line.profit; })));
+  assert(grouped.profit === 137, "invoice profit " + grouped.profit);
+  const plain = (report.invoices || []).filter(function (item) { return item.clientName === "Plain Co"; })[0];
+  assert(plain && plain.payable === 80 && plain.profit === 80, JSON.stringify(plain && { payable: plain.payable, profit: plain.profit, vatApplied: plain.vatApplied }));
+
+  const cleared = api.saveSettings_({
+    settings: [
+      { row: 25, label: "Loaded hourly cost", value: "" },
+      { row: 26, label: "Mileage rate", value: "" }
+    ]
+  });
+  assert(cleared.success, cleared.error);
+  assert(config.getRange(25, 2).getValue() === 0 && config.getRange(26, 2).getValue() === 0, "an empty save left the old rate");
+  assert(time.getRange(3, 19).getValue() === 10 && time.getRange(4, 18).getValue() === 0.25, "saving settings rewrote job rows");
+  assert(config.getRange(22, 1).getValue() === "vatApplied" && config.getRange(22, 2).getValue() === "Y", "B22 changed");
+  assert(config.getRange(23, 1).getValue() === "vatRate" && config.getRange(23, 2).getValue() === 9, "B23 moved");
 });
 
 function loadHomeApp() {
