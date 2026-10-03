@@ -81,6 +81,15 @@
               </span>
               <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
             </button>
+            <button type="button" class="pile" data-action="openList" data-id="week">
+              <span class="pile-copy">
+                <span class="metric-title">Due this week</span>
+                <span class="metric-value" x-text="openWeekAmount"></span>
+                <span class="metric-sub" x-text="openWeekCount"></span>
+                <span class="pile-hint">Invoiced and due within 7 days</span>
+              </span>
+              <svg class="pile-chevron" viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path fill="currentColor" d="M0 0l8 6-8 6z"/></svg>
+            </button>
             <button type="button" class="pile" data-action="openList" data-id="done">
               <span class="pile-copy">
                 <span class="metric-title">Finished invoices</span>
@@ -246,9 +255,13 @@
           <p class="page-lead" x-show="detailIsQuote">Turn this quote into an invoice when the client is ready.</p>
           <div class="send-dock">
             <div class="send-dock-inner">
-              <div x-show="detailOverdue">
+              <div x-show="detailRemind">
                 <div class="inv-actions">
                   <button type="button" id="remind-whatsapp" data-action="remindOnWhatsApp" data-disable-when="saving">Remind</button>
+                </div>
+              </div>
+              <div x-show="detailOverdue">
+                <div class="inv-actions">
                   <button type="button" id="email-reminder" class="btn-line" data-action="openEmailReminder" data-disable-when="saving">Email reminder</button>
                 </div>
               </div>
