@@ -153,6 +153,8 @@ function doPost(e) {
       responseData = ensurePaymentLink(requestData.payload);
     } else if (action === "exportInvoicePdf") {
       responseData = exportInvoicePdf(requestData.payload);
+    } else if (action === "exportAccountantCsv") {
+      responseData = exportAccountantCsv();
     } else if (action === "listClients") {
       responseData = listClientRecords();
     } else if (action === "saveClient") {
@@ -1835,6 +1837,60 @@ function buildDashboardReport_(ss, asOfDate) {
     invoicePdf: invoicePdfEngine_(),
     emailCc: true
   };
+}
+
+function exportAccountantCsv() {
+  const ss = workbook_();
+  const sheet = ss.getSheetByName("InvoiceList");
+  if (!sheet) return { success: false, error: "InvoiceList is missing." };
+  const timezone = (ss.getSpreadsheetTimeZone && ss.getSpreadsheetTimeZone()) || "UTC";
+  const width = invoiceListWidth_(sheet);
+  const last = Math.max(sheet.getLastRow(), 1);
+  const values = sheet.getRange(1, 1, last, width).getValues();
+  const headers = accountantCsvHeaders_(values[0], width);
+  const lines = [headers.map(csvField_).join(",")];
+  for (let i = 1; i < values.length; i++) {
+    if (!clientText_(values[i][0])) continue;
+    const cells = [];
+    for (let c = 0; c < width; c++) cells.push(csvField_(accountantCell_(values[i][c], c, timezone)));
+    lines.push(cells.join(","));
+  }
+  const today = Utilities.formatDate(new Date(), timezone, "yyyy-MM-dd");
+  return { success: true, fileName: "InvoiceList-" + today + ".csv", csv: lines.join("\n") + "\n" };
+}
+
+function invoiceListWidth_(sheet) {
+  let width = 13;
+  if (sheet && typeof sheet.getLastColumn === "function") {
+    const found = Number(sheet.getLastColumn()) || 0;
+    if (found > width) width = found;
+  }
+  return Math.min(width, 26);
+}
+
+function accountantCsvHeaders_(row, width) {
+  const defaults = ["Invoice", "Client", "Job", "Period", "Hours", "Rate", "Total Due", "Invoice Date", "Invoice Status", "VAT Applied", "VAT Rate", "VAT Amount", "Gross Total"];
+  const headers = [];
+  for (let i = 0; i < width; i++) {
+    headers.push(clientText_(row && row[i]) || defaults[i] || ("Column " + (i + 1)));
+  }
+  return headers;
+}
+
+function accountantCell_(value, col, timezone) {
+  if (value == null || value === "") return "";
+  if (col === 7 || isDateValue_(value)) {
+    const iso = isoDate_(value, timezone);
+    if (iso) return iso;
+  }
+  if (typeof value === "number") return isFinite(value) ? String(value) : "";
+  return clientText_(value);
+}
+
+function csvField_(value) {
+  const text = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
+  return text;
 }
 
 function linesFromGroup_(shiftRows, timezone) {

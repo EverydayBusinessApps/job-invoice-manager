@@ -2461,6 +2461,34 @@ test("VAT off hides invoice rows 33 to 35 and the pay link stays on Total Due", 
   assert(api.lastEmail.body.indexOf("€80.00") !== -1, api.lastEmail.body);
 });
 
+test("the accountant CSV is the stored InvoiceList, including VAT columns", function (api, workbook) {
+  const sheet = workbook.sheets.InvoiceList;
+  const headers = ["Invoice", "Client", "Job", "Period", "Hours", "Rate", "Total Due", "Invoice Date", "Invoice Status", "VAT Applied", "VAT Rate", "VAT Amount", "Gross Total"];
+  headers.forEach(function (name, index) { sheet.getRange(1, index + 1).setValue(name); });
+  function put(row, values) {
+    values.forEach(function (value, index) { sheet.getRange(row, index + 1).setValue(value); });
+  }
+  put(2, ["INV-EB-002", "Acme, Ltd", "Site visit", "Sep 2026", 4, 50, 200, "2026-09-01", "Invoiced", "Y", 23, 46, 246]);
+  put(3, ["INV-EB-003", "Other Co", "Survey", "Sep 2026", 1, 50, 50, "2026-09-10", "Draft", "Y", 23, 11.5, 61.5]);
+  put(4, ["INV-EB-001", "Acme", "Install", "Aug 2026", 3, 50, 100, "2026-08-01", "Paid", "Y", 23, 23, 123]);
+  put(5, ["INV-EB-004", "Acme", "Repair", "Jul 2026", 2, 40, 80, "2026-07-15", "Written off", "Y", 23, 18.4, 98.4]);
+  put(6, ["INV-EB-005", "Other Co", "Callout", "Sep 2026", 2, 20, 40, "2026-09-20", "Invoiced", "N", "", "", ""]);
+  put(7, ["", "skip me", "", "", "", "", 999, "", "", "Y", 23, 999, 999]);
+  const exported = api.exportAccountantCsv();
+  assert(exported.success && exported.csv, JSON.stringify(exported));
+  const lines = exported.csv.trim().split("\n");
+  assert(lines[0] === headers.join(","), lines[0]);
+  assert(lines.length === 6, "blank invoice rows were exported: " + lines.length);
+  assert(lines[1].indexOf('"Acme, Ltd"') !== -1, lines[1]);
+  assert(/,Y,23,46,246$/.test(lines[1]), lines[1]);
+  assert(lines.some(function (line) { return line.indexOf("INV-EB-003") !== -1 && line.indexOf(",11.5,61.5") !== -1; }), "the draft VAT amount was dropped");
+  assert(lines.some(function (line) { return line.indexOf("INV-EB-004") !== -1 && line.indexOf(",18.4,98.4") !== -1; }), "the written-off VAT amount was dropped");
+  const clear = lines.filter(function (line) { return line.indexOf("INV-EB-005") !== -1; })[0];
+  assert(clear && /,N,,,$/.test(clear), clear);
+  assert(exported.csv.indexOf("999") === -1, "a blank invoice id was included");
+  assert(exported.csv.indexOf("=") === -1, "a formula was written into the CSV");
+});
+
 function loadHomeApp() {
   const documentStub = {
     addEventListener: function () {},

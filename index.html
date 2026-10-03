@@ -8,7 +8,7 @@
   <!-- Link to your clean, external styles and logic engines -->
   <link rel="stylesheet" href="style.css?v=28">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=40"></script>
+  <script defer src="app.js?v=41"></script>
 </head>
 <body>
 
@@ -425,7 +425,14 @@
               <span class="metric-title">Written off</span>
               <span class="metric-value" x-text="summaryWrittenOff"></span>
             </div>
+            <div class="metric-box">
+              <span class="metric-title">VAT on invoiced</span>
+              <span class="metric-value" x-text="summaryVat"></span>
+              <span class="metric-sub">Invoiced and paid this financial year</span>
+            </div>
           </div>
+          <button type="button" class="btn-line" data-action="exportAccountantCsv" data-disable-when="saving">Export for accountant</button>
+          <p class="page-lead">InvoiceList as a CSV, including drafts and the VAT columns stored on each row.</p>
           <div class="form-group">
             <label>Allowable expenses</label>
             <input type="text" inputmode="decimal" x-model="taxExpenses" @input="syncSummary" placeholder="0" data-disable-when="saving">
