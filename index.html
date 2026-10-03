@@ -6,9 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   
   <!-- Link to your clean, external styles and logic engines -->
-  <link rel="stylesheet" href="style.css?v=31">
+  <link rel="stylesheet" href="style.css?v=32">
   <script src="config.js?v=1"></script>
-  <script defer src="app.js?v=45"></script>
+  <script defer src="app.js?v=46"></script>
 </head>
 <body>
 
@@ -184,6 +184,7 @@
                 <h2 class="page-title" x-text="detailCode"></h2>
                 <p class="invoice-client" x-text="detailClient"></p>
                 <p class="invoice-job" x-show="detailJobShow" x-text="detailJob"></p>
+                <p class="invoice-job" id="detail-job-name" x-show="detailJobNameShow" x-text="detailJobName"></p>
               </div>
               <div class="invoice-total-block">
                 <span class="metric-title gold">Total</span>
@@ -226,6 +227,21 @@
                 </div>
               </template>
               <p class="page-lead" x-show="detailLinesEmpty">No lines on this invoice yet.</p>
+            </div>
+            <div id="related-invoices" class="related-invoices" x-show="detailHasRelated">
+              <p class="page-lead" id="related-lead" x-text="detailRelatedLead"></p>
+              <template x-for="inv in detailRelated">
+                <button type="button" class="inv-row" data-action="openInvoice" :data-id="inv.id">
+                  <span class="inv-main">
+                    <span class="inv-title" x-text="inv.code"></span>
+                    <span class="inv-meta" x-text="inv.status"></span>
+                  </span>
+                  <span class="inv-side">
+                    <span class="inv-amt" x-text="inv.amount"></span>
+                    <span class="inv-meta" x-text="inv.payWord"></span>
+                  </span>
+                </button>
+              </template>
             </div>
             <div class="invoice-totals" x-show="detailShowsVat">
               <div class="invoice-total-row">
@@ -349,6 +365,12 @@
             <label>Job</label>
             <textarea x-model="form.jobDetails" rows="2" placeholder="What did you do?"></textarea>
           </div>
+
+          <div class="form-group">
+            <label for="job-name">Job name</label>
+            <input id="job-name" type="text" x-model="form.jobName" placeholder="Cathedral View" autocomplete="off">
+          </div>
+          <p class="page-lead">Optional. The same name on a deposit and a balance keeps both invoices on that job.</p>
 
           <details id="price-group" class="option-group">
             <summary x-text="priceSummary"></summary>

@@ -2991,6 +2991,122 @@ test("a blank price mode stays hourly when settings and a later job are saved", 
   assert(config.getRange(2, 2).getValue() === 70, "the settings save was skipped");
 });
 
+test("two job names share a row value and a different name stays on its own invoice", function (api, workbook) {
+  const config = seedVat(workbook, "Y", 23);
+  const deposit = api.executeTimeLog(shift({
+    priceMode: "job",
+    jobPrice: 500,
+    jobDetails: "Deposit",
+    jobName: "Cathedral View"
+  }));
+  assert(deposit.success, deposit.error);
+  const balance = api.executeTimeLog(shift({
+    priceMode: "job",
+    jobPrice: 700,
+    jobDetails: "Balance",
+    jobName: " cathedral view ",
+    date: "2026-09-23"
+  }));
+  assert(balance.success, balance.error);
+  const other = api.executeTimeLog(shift({
+    priceMode: "job",
+    jobPrice: 90,
+    jobDetails: "Other site",
+    jobName: "Other Site",
+    date: "2026-09-24"
+  }));
+  assert(other.success, other.error);
+  const blank = api.executeTimeLog(shift({
+    priceMode: "job",
+    jobPrice: 40,
+    jobDetails: "Loose end",
+    jobName: "   ",
+    date: "2026-09-25"
+  }));
+  assert(blank.success, blank.error);
+  const unnamed = api.executeTimeLog(shift({
+    priceMode: "job",
+    jobPrice: 25,
+    jobDetails: "No shared name",
+    date: "2026-09-26"
+  }));
+  assert(unnamed.success, unnamed.error);
+
+  assert(deposit.invoiceCode !== balance.invoiceCode, "the two jobs shared one code");
+  assert(deposit.invoiceId !== balance.invoiceId, "the two jobs shared one id");
+  const invoices = workbook.sheets.InvoiceList;
+  const time = workbook.sheets["Time&Attendance"];
+  function invoiceRow(id) {
+    for (let row = 2; row <= invoices.getLastRow(); row++) {
+      if (String(invoices.getRange(row, 1).getValue()) === String(id)) return row;
+    }
+    return 0;
+  }
+  const depositRow = invoiceRow(deposit.invoiceId);
+  const balanceRow = invoiceRow(balance.invoiceId);
+  const otherRow = invoiceRow(other.invoiceId);
+  const blankRow = invoiceRow(blank.invoiceId);
+  const unnamedRow = invoiceRow(unnamed.invoiceId);
+  assert(depositRow && balanceRow && otherRow && blankRow && unnamedRow, "a job missed its invoice row");
+  assert(invoices.getRange(depositRow, 16).getValue() === "Cathedral View", invoices.getRange(depositRow, 16).getValue());
+  assert(invoices.getRange(balanceRow, 16).getValue() === "cathedral view", invoices.getRange(balanceRow, 16).getValue());
+  assert(api.jobNameKey_(invoices.getRange(depositRow, 16).getValue()) === api.jobNameKey_(invoices.getRange(balanceRow, 16).getValue()), "Cathedral View and cathedral view produced different keys");
+  assert(api.jobNameKey_("Cathedral View") === "cathedral view", api.jobNameKey_("Cathedral View"));
+  assert(invoices.getRange(otherRow, 16).getValue() === "Other Site", invoices.getRange(otherRow, 16).getValue());
+  assert(api.jobNameKey_(invoices.getRange(otherRow, 16).getValue()) !== api.jobNameKey_("Cathedral View"), "Other Site shared Cathedral View");
+  assert(invoices.getRange(blankRow, 16).getValue() === "", "a blank job name was stamped");
+  assert(invoices.getRange(unnamedRow, 16).getValue() === "", "a missing job name was stamped");
+  assert(api.jobNameKey_("") === "" && api.jobNameKey_("   ") === "", "a blank name produced a match key");
+  assert(invoices.getRange(1, 16).getValue() === "Job name", invoices.getRange(1, 16).getValue());
+  [depositRow, balanceRow, otherRow].forEach(function (row) {
+    assert(invoices.getRange(row, 16).getFormula() === "", "job name is a formula on row " + row);
+  });
+  assert(invoices.getRange(depositRow, 7).getValue() === 500, "deposit net " + invoices.getRange(depositRow, 7).getValue());
+  assert(invoices.getRange(balanceRow, 7).getValue() === 700, "balance net " + invoices.getRange(balanceRow, 7).getValue());
+  assert(invoices.getRange(depositRow, 10).getValue() === "Y" && invoices.getRange(balanceRow, 10).getValue() === "Y", "VAT applied mark moved");
+  assert(invoices.getRange(depositRow, 11).getValue() === 23 && invoices.getRange(balanceRow, 11).getValue() === 23, "VAT rate moved");
+  assert(invoices.getRange(depositRow, 12).getValue() === 115 && invoices.getRange(depositRow, 13).getValue() === 615, "deposit VAT " + invoices.getRange(depositRow, 12).getValue());
+  assert(invoices.getRange(balanceRow, 12).getValue() === 161 && invoices.getRange(balanceRow, 13).getValue() === 861, "balance VAT " + invoices.getRange(balanceRow, 12).getValue());
+  assert(invoices.getRange(depositRow, 14).getValue() === "" && invoices.getRange(balanceRow, 14).getValue() === "", "due date column was used for the job name");
+  assert(invoices.getRange(depositRow, 15).getValue() === "" && invoices.getRange(balanceRow, 15).getValue() === "", "converted column was used for the job name");
+  assert(time.getRange(2, 26).getValue() === "Cathedral View" && time.getRange(2, 26).getFormula() === "", "time row job name " + time.getRange(2, 26).getValue());
+  assert(time.getRange(3, 26).getValue() === "cathedral view", time.getRange(3, 26).getValue());
+  assert(time.getRange(4, 26).getValue() === "Other Site", time.getRange(4, 26).getValue());
+  assert(time.getRange(5, 26).getValue() === "" && time.getRange(6, 26).getValue() === "", "a blank name landed on the time row");
+  assert(time.getRange(1, 26).getValue() === "Job name", time.getRange(1, 26).getValue());
+  assert(time.getRange(1, 20).getValue() === "Price Mode" && time.getRange(1, 25).getValue() === "Price Total", "price headers moved");
+  assert(time.getRange(1, 15).getValue() === "Materials" && time.getRange(2, 15).getValue() === 0, "cost columns moved");
+  assert(time.getRange(2, 12).getValue() === 500 && time.getRange(3, 12).getValue() === 700, "job totals moved");
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved");
+
+  const quote = api.executeTimeLog(shift({
+    entry: "quote",
+    priceMode: "job",
+    jobPrice: 80,
+    jobDetails: "Quote for the nave",
+    jobName: "Cathedral View",
+    date: "2026-09-27"
+  }));
+  assert(quote.success, quote.error);
+  const quoteSheetRow = invoiceRow(quote.invoiceId);
+  assert(invoices.getRange(quoteSheetRow, 16).getValue() === "Cathedral View", "the quote missed the job name");
+  const turned = api.convertQuoteToInvoice({ invoiceId: quote.invoiceId });
+  assert(turned.success, turned.error);
+  const turnedRow = invoiceRow(turned.invoiceId);
+  assert(turnedRow !== quoteSheetRow, "convert reused the quote row");
+  assert(invoices.getRange(turnedRow, 16).getValue() === "Cathedral View", "the invoice missed the quote job name");
+  assert(invoices.getRange(turnedRow, 16).getFormula() === "", "converted job name is a formula");
+  assert(statusCell(workbook, quoteSheetRow) === "Converted", statusCell(workbook, quoteSheetRow));
+  const live = api.fetchDashboard().invoices.filter(function (item) {
+    return api.jobNameKey_(item.jobName) === "cathedral view";
+  });
+  const liveCodes = live.map(function (item) { return item.code; });
+  assert(liveCodes.indexOf(deposit.invoiceCode) !== -1 && liveCodes.indexOf(balance.invoiceCode) !== -1, liveCodes.join(", "));
+  assert(liveCodes.indexOf(other.invoiceCode) === -1, "Other Site joined Cathedral View");
+  assert(live.every(function (item) { return item.status !== "Converted" && item.status !== "Quote"; }), live.map(function (item) { return item.status; }).join(", "));
+  assert(config.getRange(22, 2).getValue() === "Y" && config.getRange(23, 2).getValue() === 23, "B22/B23 moved after convert");
+});
+
 async function runHomeFeedbackTests() {
   const cold = loadHomeApp();
   let step = 0;

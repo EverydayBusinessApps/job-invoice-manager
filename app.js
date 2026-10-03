@@ -276,7 +276,10 @@ function sampleDashboard() {
       row({ id: "INV-EB-003", code: "INV-EB-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, payUrl: "https://example.com/pay/INV-EB-003", inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-EB-001", code: "INV-EB-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
       row({ id: "INV-EB-004", code: "INV-EB-004", clientName: "Acme", contact: "Ann Acme", status: "Written off", kind: "writtenoff", date: "2026-07-15", dueDate: "2026-07-29", hours: 2, total: 80, email: "acme@example.com", terms: 14, lines: [{ date: "2026-07-16", details: "Repair", start: "09:00", finish: "11:00", hours: 2, amount: 80 }] }),
-      row({ id: "INV-EB-006", code: "INV-EB-006", clientName: "Acme", contact: "Ann Acme", status: "Quote", kind: "quote", date: "2026-09-18", hours: 3, rate: 50, total: 150, email: "acme@example.com", terms: 14, jobDetails: "Boiler service", servicePeriod: "2026-09-18", inMonth: true, lines: [{ date: "2026-09-18", details: "Boiler service", start: "09:00", finish: "12:00", hours: 3, rate: 50, amount: 150 }] })
+      row({ id: "INV-EB-006", code: "INV-EB-006", clientName: "Acme", contact: "Ann Acme", status: "Quote", kind: "quote", date: "2026-09-18", hours: 3, rate: 50, total: 150, email: "acme@example.com", terms: 14, jobDetails: "Boiler service", servicePeriod: "2026-09-18", inMonth: true, lines: [{ date: "2026-09-18", details: "Boiler service", start: "09:00", finish: "12:00", hours: 3, rate: 50, amount: 150 }] }),
+      row({ id: "INV-EB-DEP", code: "INV-EB-DEP", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-18", dueDate: "2026-10-18", hours: 0, total: 500, email: "acme@example.com", terms: 14, payUrl: "https://example.com/pay/INV-EB-DEP", jobName: "Cathedral View", jobDetails: "Deposit", lines: [{ date: "2026-09-18", details: "Deposit", hours: 0, amount: 500, materials: 360 }] }),
+      row({ id: "INV-EB-BAL", code: "INV-EB-BAL", clientName: "Acme", contact: "Ann Acme", status: "Draft", kind: "draft", date: "2026-09-20", dueDate: "2026-10-20", hours: 0, total: 750, email: "acme@example.com", terms: 14, payUrl: "https://example.com/pay/INV-EB-BAL", jobName: "Cathedral View", jobDetails: "Balance", lines: [{ date: "2026-09-20", details: "Balance", hours: 0, amount: 750, materials: 620 }] }),
+      row({ id: "INV-EB-OS", code: "INV-EB-OS", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-19", dueDate: "2026-10-19", hours: 1, total: 90, email: "acme@example.com", terms: 14, payUrl: "https://example.com/pay/INV-EB-OS", jobName: "Other Site", jobDetails: "Other site visit", lines: [{ date: "2026-09-19", details: "Other site visit", hours: 1, amount: 90 }] })
     ],
     businessName: "Everyday Business",
     clients: [{ name: "Acme" }, { name: "Other Co" }],
@@ -486,6 +489,46 @@ function convertQuoteRows(rows, quoteId) {
   return { rows: collapseInvoiceRows(list), stored: list, invoiceId: code, created: true };
 }
 
+// Shared job names match after trim, ignoring case. A blank name matches nothing.
+function jobNameKey(raw) {
+  return String(raw == null ? "" : raw).trim().toLowerCase();
+}
+
+function relatedPayWord(row) {
+  const kind = (row && row.kind) || kindForStatus(row && row.status);
+  if (kind === "paid") return "Paid";
+  if (kind === "writtenoff") return "Written off";
+  if (kind === "draft") return "Not sent";
+  if (kind === "due") return "Unpaid";
+  return "";
+}
+
+function isLiveBill(row) {
+  const kind = (row && row.kind) || kindForStatus(row && row.status);
+  return kind === "draft" || kind === "due" || kind === "paid" || kind === "writtenoff";
+}
+
+function relatedInvoices(rows, current) {
+  const key = jobNameKey(current && current.jobName);
+  if (!key || !isLiveBill(current)) return [];
+  const list = [];
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!row || row === current || !isLiveBill(row)) return;
+    if (jobNameKey(row.jobName) !== key) return;
+    if (sameInvoiceNumber(row, current.id, current.code)) return;
+    const pay = invoicePayable(row);
+    list.push({
+      id: row.id,
+      code: row.code || row.id,
+      status: row.status || "",
+      amount: pay.payable,
+      payWord: relatedPayWord(row),
+      payUrl: String(row.payUrl || "")
+    });
+  });
+  return list;
+}
+
 function invoicePayable(row) {
   const net = Number(row && row.total);
   const netMoney = isFinite(net) ? net : 0;
@@ -622,6 +665,7 @@ function collapseInvoiceRows(rows) {
     next.code = preferInvoiceLabel(winner.code, loser.code) || winner.code;
     next.kind = kindForStatus(next.status);
     if ((!next.lines || !next.lines.length) && loser.lines && loser.lines.length) next.lines = loser.lines;
+    if (!jobNameKey(next.jobName) && jobNameKey(loser.jobName)) next.jobName = loser.jobName;
     merged[key] = next;
   });
   return order.map((key) => merged[key]);
@@ -1032,6 +1076,11 @@ window.Alpine.data('appState', () => ({
   detailLines: [],
   detailLinesRaw: [],
   detailLinesEmpty: true,
+  detailJobName: "",
+  detailJobNameShow: false,
+  detailRelatedLead: "",
+  detailRelated: [],
+  detailHasRelated: false,
   detailProfit: "€0.00",
   detailProfitNote: "",
   profitJobs: [],
@@ -1053,7 +1102,7 @@ window.Alpine.data('appState', () => ({
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     return dd + '/' + mm + '/' + now.getFullYear();
-  })(), jobDetails: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '', materials: '', hired: '', mileageKm: '', priceMode: 'hourly', days: '', dayLength: '8', dailyRate: '', jobPrice: '' },
+  })(), jobDetails: '', jobName: '', start: '08:00', lunch: 'na', finish: '16:30', invoiceMode: 'new', invoiceId: '', materials: '', hired: '', mileageKm: '', priceMode: 'hourly', days: '', dayLength: '8', dailyRate: '', jobPrice: '' },
 
   timeToMinutes(value) {
     if (value == null || value === '') return null;
@@ -1726,6 +1775,7 @@ window.Alpine.data('appState', () => ({
       client: this.form.clientName,
       iso: parts ? parts.iso : "",
       jobDetails: this.form.jobDetails,
+      jobName: String(this.form.jobName || "").trim(),
       start: this.form.start,
       finish: this.form.finish,
       hours: this.jobHours(),
@@ -1783,11 +1833,13 @@ window.Alpine.data('appState', () => ({
         total: snapshot.amount,
         rate: snapshot.rate || 0,
         jobDetails: snapshot.jobDetails || "",
+        jobName: snapshot.jobName || "",
         servicePeriod: snapshot.iso,
         email: snapshot.email || "",
         lines: [line]
       });
     } else if (this.previewMode && Array.isArray(row.lines)) {
+      if (snapshot.jobName && !jobNameKey(row.jobName)) row.jobName = snapshot.jobName;
       row.lines = row.lines.concat([line]);
       row.hours = row.lines.reduce((sum, item) => sum + (Number(item.hours) || 0), 0);
       row.total = row.lines.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
@@ -1806,6 +1858,7 @@ window.Alpine.data('appState', () => ({
     this.form.clientName = client;
     this.form.date = this.todayLabel();
     this.form.jobDetails = "";
+    this.form.jobName = "";
     this.form.start = "08:00";
     this.form.lunch = "na";
     this.form.finish = "16:30";
@@ -1922,6 +1975,7 @@ window.Alpine.data('appState', () => ({
         clientName: this.form.clientName,
         date: jobDate.iso,
         jobDetails: this.form.jobDetails,
+        jobName: String(this.form.jobName || "").trim(),
         start: this.form.start,
         lunch: this.form.lunch,
         finish: this.form.finish,
@@ -2545,6 +2599,18 @@ window.Alpine.data('appState', () => ({
     this.detailProfitNote = this.profitSentence(figured);
     this.detailService = row.servicePeriod || "—";
     this.detailJob = row.jobDetails || "—";
+    this.detailJobName = String(row.jobName || "").trim();
+    this.detailJobNameShow = !!this.detailJobName;
+    const related = relatedInvoices(this.invoiceRows, row);
+    this.detailRelatedLead = this.detailJobName ? ("Same job · " + this.detailJobName) : "";
+    this.detailRelated = related.map((item) => ({
+      id: item.id,
+      code: item.code,
+      status: item.status,
+      amount: this.money(item.amount),
+      payWord: item.payWord
+    }));
+    this.detailHasRelated = this.detailRelated.length > 0;
     const letterRow = this.invoiceLetterRow(row);
     const drafted = this.invoiceEmailDraft(letterRow);
     this.detailEmail = this.invoiceAddress(row);
