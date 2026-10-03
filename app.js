@@ -258,7 +258,7 @@ function sampleDashboard() {
     success: true,
     asOf: "2026-09-22",
     open: {
-      dueAmount: 286, dueCount: 2,
+      dueAmount: 409, dueCount: 3,
       overdueAmount: 246, overdueCount: 1,
       draftAmount: 50, draftCount: 1,
       paidAmount: 100, paidCount: 1,
@@ -272,6 +272,7 @@ function sampleDashboard() {
     },
     invoices: [
       row({ id: "INV-EB-002", code: "INV-EB-002", clientName: "Acme", contact: "Ann Acme", status: "Invoiced", kind: "due", date: "2026-09-01", dueDate: "2026-09-15", overdue: true, daysOverdue: 7, hours: 4, total: 200, vatApplied: "Y", vatRate: 23, vat: 46, gross: 246, email: "acme@example.com", terms: 14, payUrl: "https://example.com/pay/INV-EB-002", jobDetails: "Site visit", inMonth: true, lines: [{ date: "2026-09-02", details: "Site visit", start: "08:00", finish: "12:00", hours: 4, amount: 200, materials: 30, hired: 12, mileageKm: 50, mileageRate: 0.25, loadedHourly: 10 }] }),
+      row({ id: "INV-EB-007", code: "INV-EB-007", clientName: "Harbour Co", contact: "Pat Harbour", status: "Invoiced", kind: "due", date: "2026-09-22", dueDate: "2026-09-25", hours: 2, total: 100, vatApplied: "Y", vatRate: 23, vat: 23, gross: 123, email: "pat@harbour.test", terms: 14, payUrl: "https://example.com/pay/INV-EB-007", jobDetails: "Quay check", inWeek: true, inMonth: true, lines: [{ date: "2026-09-22", details: "Quay check", start: "09:00", finish: "11:00", hours: 2, amount: 100 }] }),
       row({ id: "INV-EB-005", code: "INV-EB-005", clientName: "Other Co", contact: "Owen Other", status: "Invoiced", kind: "due", date: "2026-09-20", dueDate: "2026-10-20", hours: 2, total: 40, terms: 30, payUrl: "https://example.com/pay/INV-EB-005", inWeek: true, inMonth: true, lines: [{ date: "2026-09-21", details: "Callout", start: "09:00", finish: "11:00", hours: 2, amount: 40 }] }),
       row({ id: "INV-EB-003", code: "INV-EB-003", clientName: "Other Co", contact: "Old Contact", status: "Draft", kind: "draft", date: "2026-09-10", dueDate: "2026-10-10", hours: 1, total: 50, email: "stale@other.test", terms: 30, payUrl: "https://example.com/pay/INV-EB-003", inMonth: true, lines: [{ date: "2026-09-12", details: "Survey", start: "09:00", finish: "10:00", hours: 1, amount: 50 }] }),
       row({ id: "INV-EB-001", code: "INV-EB-001", clientName: "Acme", contact: "Ann Acme", status: "Paid", kind: "paid", date: "2026-08-01", dueDate: "2026-08-15", hours: 3, total: 100, email: "acme@example.com", terms: 14, lines: [{ date: "2026-08-02", details: "Install", start: "09:00", finish: "12:00", hours: 3, amount: 100 }] }),
@@ -429,6 +430,31 @@ function invoiceIsOverdue(row, asOf) {
   const due = String(row.dueDate || "");
   const today = String(asOf || "");
   return !!(due && today && due < today);
+}
+
+function shiftIsoDate(iso, days) {
+  const match = String(iso || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "";
+  const dt = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + (Number(days) || 0)));
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dt.getUTCDate()).padStart(2, "0");
+  return y + "-" + m + "-" + d;
+}
+
+function invoiceIsDueThisWeek(row, asOf) {
+  if (!row) return false;
+  const kind = row.kind || kindForStatus(row.status);
+  if (kind !== "due") return false;
+  const due = String(row.dueDate || "");
+  const today = String(asOf || "");
+  if (!due || !today || due < today) return false;
+  const end = shiftIsoDate(today, 7);
+  return !!(end && due <= end);
+}
+
+function invoiceShowsAsOverdue(row, asOf) {
+  return invoiceIsOverdue(row, asOf) && !invoiceIsDueThisWeek(row, asOf);
 }
 
 function whatsAppLink(text) {
@@ -962,6 +988,8 @@ window.Alpine.data('appState', () => ({
   openDoneEmpty: true,
   openOverdueAmount: "€0.00",
   openOverdueCount: "0 invoices",
+  openWeekAmount: "€0.00",
+  openWeekCount: "0 invoices",
   activeLabel: "",
   activeHours: "0",
   activeShifts: "0 shifts",
@@ -1013,6 +1041,8 @@ window.Alpine.data('appState', () => ({
   detailShowEmail: false,
   detailIsQuote: false,
   detailOverdue: false,
+  detailDueWeek: false,
+  detailRemind: false,
   detailPayUrl: "",
   payCopied: false,
   payPollMs: 6000,
@@ -2055,13 +2085,14 @@ window.Alpine.data('appState', () => ({
     if (this.listScope === "period") rows = rows.filter((row) => row[flag]);
     const filter = this.invoiceFilter;
     if (filter === "due") rows = rows.filter((row) => row.kind === "due");
-    else if (filter === "overdue") rows = rows.filter((row) => invoiceIsOverdue(row, this.asOf));
+    else if (filter === "overdue") rows = rows.filter((row) => invoiceShowsAsOverdue(row, this.asOf));
+    else if (filter === "week") rows = rows.filter((row) => invoiceIsDueThisWeek(row, this.asOf));
     else if (filter === "send" || filter === "draft") rows = rows.filter((row) => row.kind === "draft");
     else if (filter === "done") rows = rows.filter((row) => row.kind === "paid" || row.kind === "writtenoff");
     else if (filter === "quote") rows = rows.filter((row) => row.kind === "quote" || row.status === "Quote");
     const showStatus = filter === "send" || filter === "draft" || filter === "done" || filter === "quote";
     this.listShowsSend = filter === "send" || filter === "draft";
-    this.listShowsCollect = filter === "due" || filter === "overdue";
+    this.listShowsCollect = filter === "due" || filter === "overdue" || filter === "week";
     this.listShowsDone = filter === "done";
     this.listShowsQuote = filter === "quote";
     this.visibleInvoices = rows.map((row) => {
@@ -2080,7 +2111,7 @@ window.Alpine.data('appState', () => ({
       };
     });
     this.listEmpty = this.visibleInvoices.length === 0;
-    this.listEmptyLabel = filter === "overdue" ? "Nothing is overdue." : "Nothing waiting here.";
+    this.listEmptyLabel = filter === "overdue" ? "Nothing is overdue." : filter === "week" ? "Nothing is due this week." : "Nothing waiting here.";
     this.listShowsHint = !this.listEmpty && !!this.listHint;
   },
   applyDashboard(res, keepEmail) {
@@ -2283,6 +2314,7 @@ window.Alpine.data('appState', () => ({
     const titles = {
       due: "Invoices to collect",
       overdue: "Overdue",
+      week: "Due this week",
       send: "Invoices to send",
       draft: "Invoices to send",
       done: "Finished invoices",
@@ -2292,6 +2324,7 @@ window.Alpine.data('appState', () => ({
     const hints = {
       due: "Tap an invoice to check it, or mark it paid.",
       overdue: "These invoices are past the due date. Open one to remind the client.",
+      week: "These invoices are due within 7 days. Open one to remind the client.",
       send: "Tap an invoice to check it, then mark it invoiced.",
       draft: "Tap an invoice to check it, then mark it invoiced.",
       done: "Tap an invoice to check it. Undo puts it back to collect.",
@@ -2303,7 +2336,7 @@ window.Alpine.data('appState', () => ({
     this.clearFeedback();
     this.syncVisibleInvoices();
     this.scrollPage();
-    if (kind === "due" || kind === "overdue" || kind === "send" || kind === "draft") this.startPayWatch();
+    if (kind === "due" || kind === "overdue" || kind === "week" || kind === "send" || kind === "draft") this.startPayWatch();
     else this.stopPayWatch();
   },
   openProfitList() {
@@ -2478,7 +2511,8 @@ window.Alpine.data('appState', () => ({
     this.openSendAmount = this.money(sum("draft"));
     this.openSendCount = this.countLabel(ofKind("draft").length, "invoice", "invoices");
     const due = ofKind("due");
-    const overdueRows = due.filter((row) => invoiceIsOverdue(row, this.asOf));
+    const overdueRows = due.filter((row) => invoiceShowsAsOverdue(row, this.asOf));
+    const weekRows = due.filter((row) => invoiceIsDueThisWeek(row, this.asOf));
     const overdue = overdueRows.length;
     let collect = this.countLabel(due.length, "invoice", "invoices");
     if (overdue) collect += " · " + this.countLabel(overdue, "overdue", "overdue");
@@ -2487,6 +2521,9 @@ window.Alpine.data('appState', () => ({
     const overdueSum = overdueRows.reduce((total, row) => total + invoicePayable(row).payable, 0);
     this.openOverdueAmount = this.money(overdueSum);
     this.openOverdueCount = this.countLabel(overdue, "invoice", "invoices");
+    const weekSum = weekRows.reduce((total, row) => total + invoicePayable(row).payable, 0);
+    this.openWeekAmount = this.money(weekSum);
+    this.openWeekCount = this.countLabel(weekRows.length, "invoice", "invoices");
     const quotes = ofKind("quote");
     this.openQuoteAmount = this.money(quotes.reduce((total, row) => total + invoicePayable(row).payable, 0));
     this.openQuoteCount = this.countLabel(quotes.length, "quote", "quotes");
@@ -2564,7 +2601,9 @@ window.Alpine.data('appState', () => ({
     this.detailFrom = this.businessName || "EverydayWork";
     this.detailSubject = this.invoiceEmailSubject(this.detailFrom, this.detailCode);
     this.syncDetailChrome(row.status || "Draft");
-    this.detailOverdue = invoiceIsOverdue(row, this.asOf);
+    this.detailDueWeek = invoiceIsDueThisWeek(row, this.asOf);
+    this.detailOverdue = invoiceShowsAsOverdue(row, this.asOf);
+    this.detailRemind = this.detailDueWeek || this.detailOverdue;
     if (!sameInvoice || this.detailMessage === this.detailMessageAuto) {
       this.detailMessage = drafted;
       this.detailMessageAuto = drafted;
@@ -2605,7 +2644,7 @@ window.Alpine.data('appState', () => ({
     if (this.previewMode || this.currentTab !== "dashboard") return false;
     if (this.dashView === "home") return true;
     if (this.dashView === "list") {
-      return this.invoiceFilter === "due" || this.invoiceFilter === "overdue" || this.invoiceFilter === "send" || this.invoiceFilter === "draft";
+      return this.invoiceFilter === "due" || this.invoiceFilter === "overdue" || this.invoiceFilter === "week" || this.invoiceFilter === "send" || this.invoiceFilter === "draft";
     }
     if (this.dashView === "detail") {
       const row = (this.invoiceRows || []).find((item) => item.id === this.detailId);
@@ -2972,8 +3011,8 @@ window.Alpine.data('appState', () => ({
     return this.handInvoiceToWhatsApp();
   },
   async remindOnWhatsApp() {
-    if (!this.detailOverdue) return;
-    this.whatsAppOverdueLine = "This invoice is overdue.";
+    if (!this.detailRemind) return;
+    this.whatsAppOverdueLine = this.detailDueWeek ? "Due soon." : "This invoice is overdue.";
     return this.handInvoiceToWhatsApp();
   },
   openEmailReminder() {
@@ -3225,7 +3264,9 @@ window.Alpine.data('appState', () => ({
   setDetailPhase(status) {
     this.syncDetailChrome(status);
     const openRow = (this.invoiceRows || []).find((item) => item.id === this.detailId);
-    this.detailOverdue = status === "Invoiced" && invoiceIsOverdue(openRow, this.asOf);
+    this.detailDueWeek = status === "Invoiced" && invoiceIsDueThisWeek(openRow, this.asOf);
+    this.detailOverdue = status === "Invoiced" && invoiceShowsAsOverdue(openRow, this.asOf);
+    this.detailRemind = this.detailDueWeek || this.detailOverdue;
   },
   async markDetailStatus(status) {
     if (this.saving || !this.detailId) return;
