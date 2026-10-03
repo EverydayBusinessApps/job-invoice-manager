@@ -2619,6 +2619,99 @@ function unreachableReply(app) {
   return { success: false, error: app.unreachableMessage(false) };
 }
 
+test("a quote has no pay link and its PDF stays a quote", function (api, workbook) {
+  seedVat(workbook, "Y", 23);
+  api.scriptProperties.STRIPE_SECRET_KEY = "sk_test_example";
+  const created = api.executeTimeLog(shift({ entry: "quote", jobDetails: "Boiler service" }));
+  assert(created.success, created.error);
+  assert(created.message === "Quote logged on INV-EB-001.", created.message);
+  assert(String(created.invoiceId) === "1", created.invoiceId);
+  assert(statusCell(workbook, 2) === "Quote", statusCell(workbook, 2));
+  const invoices = workbook.sheets.InvoiceList;
+  assert(invoices.getRange(2, 10).getValue() === "", "logging a quote stamped VAT");
+  assert(invoices.getRange(2, 12).getValue() === "" && invoices.getRange(2, 13).getValue() === "", "logging a quote wrote VAT amounts");
+  const before = api.fetches.length;
+  const linked = api.ensurePaymentLink({ invoiceId: created.invoiceId });
+  assert(linked.success && !linked.payUrl, JSON.stringify(linked));
+  assert(api.fetches.length === before, "a quote created a pay link");
+  assert(!api.scriptProperties.PAY_LINKS, "a quote stored a pay link");
+  const blocked = api.compileSingleInvoice({ invoiceId: created.invoiceId });
+  assert(!blocked.success, "a quote was marked invoiced");
+  assert(statusCell(workbook, 2) === "Quote", statusCell(workbook, 2));
+
+  const template = createSheet("INV-Template");
+  workbook.sheets["INV-Template"] = template;
+  const originalFetch = api.UrlFetchApp.fetch;
+  let payLine = "";
+  api.UrlFetchApp.fetch = function (url, options) {
+    payLine = template.getRange(2, 1, 35, 1).getValues().map(function (row) { return String(row[0] || ""); }).join("\n");
+    return originalFetch(url, options);
+  };
+  const downloaded = api.exportInvoicePdf({ invoiceId: "INV-EB-001", mode: "download", payUrl: "https://buy.stripe.com/test_quote" });
+  assert(downloaded.success, downloaded.error);
+  assert(downloaded.markedInvoiced === false, "quote PDF marked it invoiced");
+  assert(downloaded.status === "Quote", downloaded.status);
+  assert(statusCell(workbook, 2) === "Quote", statusCell(workbook, 2));
+  assert(/quote PDF/.test(downloaded.message), downloaded.message);
+  assert(!/marked invoiced/i.test(downloaded.message), downloaded.message);
+  assert(payLine.indexOf("Pay online") === -1 && payLine.indexOf("stripe") === -1, payLine);
+  assert(!api.fetches.some(function (item) { return String(item.url).indexOf("api.stripe.com") !== -1; }), "quote PDF called Stripe");
+  const mailed = api.exportInvoicePdf({ invoiceId: created.invoiceId, mode: "email", email: "acme@example.com" });
+  assert(!mailed.success, "a quote email was sent");
+  assert(!api.lastEmail, "quote email left the account");
+  assert(statusCell(workbook, 2) === "Quote", statusCell(workbook, 2));
+});
+
+test("turning a quote into an invoice stamps VAT once and keeps one code", function (api, workbook) {
+  const config = seedVat(workbook, "Y", 9);
+  const created = api.executeTimeLog(shift({ entry: "quote", jobDetails: "Boiler service" }));
+  assert(created.success, created.error);
+  const invoices = workbook.sheets.InvoiceList;
+  assert(invoices.getRange(2, 10).getValue() === "", "the quote stamped VAT at log time");
+  config.getRange(22, 2).setValue("Y");
+  config.getRange(23, 2).setValue(23);
+  invoices.getRange(2, 7).setValue(200);
+  const converted = api.convertQuoteToInvoice({ invoiceId: "INV-EB-001" });
+  assert(converted.success, converted.error);
+  assert(converted.status === "Draft", converted.status);
+  assert(converted.invoiceCode === "INV-EB-002", converted.invoiceCode);
+  assert(String(converted.invoiceId) === "2", converted.invoiceId);
+  assert(statusCell(workbook, 2) === "Converted", statusCell(workbook, 2));
+  assert(invoices.getRange(2, 10).getValue() === "", "the quote row was stamped on convert");
+  assert(invoices.getRange(2, 15).getValue() === "2", "converted link " + invoices.getRange(2, 15).getValue());
+  assert(invoices.getRange(3, 9).getValue() === "Draft", invoices.getRange(3, 9).getValue());
+  assert(invoices.getRange(3, 7).getValue() === 200, "the invoice total was dropped");
+  assert(invoices.getRange(3, 10).getValue() === "Y", "VAT Applied " + invoices.getRange(3, 10).getValue());
+  assert(invoices.getRange(3, 11).getValue() === 23, "VAT Rate " + invoices.getRange(3, 11).getValue());
+  assert(invoices.getRange(3, 12).getValue() === 46, "VAT Amount " + invoices.getRange(3, 12).getValue());
+  assert(invoices.getRange(3, 13).getValue() === 246, "Gross Total " + invoices.getRange(3, 13).getValue());
+  assert(String(timeRows(workbook)[0][0]) === "2", "time stayed on the quote");
+  const report = api.fetchDashboard();
+  assert(report.success, report.error);
+  assert(report.invoices.length === 1, report.invoices.map(function (item) { return item.code + " " + item.status; }).join(", "));
+  assert(report.invoices[0].code === "INV-EB-002" && report.invoices[0].status === "Draft", JSON.stringify(report.invoices[0]));
+  assert(report.invoices[0].vatApplied === "Y" && report.invoices[0].vat === 46 && report.invoices[0].gross === 246 && report.invoices[0].payable === 246, JSON.stringify(report.invoices[0]));
+  assert(report.open.draftCount === 1 && report.open.dueCount === 0, JSON.stringify(report.open));
+  const rowsBefore = invoices.getLastRow();
+  const again = api.convertQuoteToInvoice({ invoiceId: created.invoiceId });
+  assert(again.success && again.already, again.error || JSON.stringify(again));
+  assert(again.invoiceCode === "INV-EB-002" && String(again.invoiceId) === "2", again.invoiceCode + " " + again.invoiceId);
+  assert(invoices.getLastRow() === rowsBefore, "a second convert opened another invoice");
+  assert(statusCell(workbook, 2) === "Converted", statusCell(workbook, 2));
+  assert(invoices.getRange(3, 10).getValue() === "Y" && invoices.getRange(3, 11).getValue() === 23, "a second convert restamped VAT");
+  const live = api.fetchDashboard();
+  assert(live.invoices.length === 1 && live.invoices[0].code === "INV-EB-002", live.invoices.map(function (item) { return item.code; }).join(", "));
+
+  const job = api.executeTimeLog(shift({ jobDetails: "Compared" }));
+  assert(job.success, job.error);
+  const jobRow = invoices.getLastRow();
+  invoices.getRange(jobRow, 7).setValue(200);
+  api.refreshStampedInvoiceVat_(workbook, job.invoiceId);
+  assert(invoices.getRange(jobRow, 10).getValue() === "Y" && invoices.getRange(jobRow, 11).getValue() === 23, "a new invoice stamped differently");
+  assert(invoices.getRange(jobRow, 12).getValue() === 46 && invoices.getRange(jobRow, 13).getValue() === 246, "a new invoice computed VAT differently");
+  assert(statusCell(workbook, 2) === "Converted", "the comparison job changed the quote");
+});
+
 async function runHomeFeedbackTests() {
   const cold = loadHomeApp();
   let step = 0;
