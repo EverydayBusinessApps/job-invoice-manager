@@ -149,6 +149,8 @@ function doPost(e) {
       responseData = fetchInvoiceDetail(requestData.payload);
     } else if (action === "compileInvoice") {
       responseData = compileSingleInvoice(requestData.payload);
+    } else if (action === "convertQuote") {
+      responseData = convertQuoteToInvoice(requestData.payload);
     } else if (action === "createPaymentLink" || action === "ensurePaymentLink") {
       responseData = ensurePaymentLink(requestData.payload);
     } else if (action === "exportInvoicePdf") {
@@ -208,6 +210,8 @@ function invoiceLabel_(id, status, dateStr) {
 /**
  * InvoiceList column I (Invoice Status), in this order:
  * Draft, Invoiced, Paid, Written off.
+ * Quote and Converted sit beside that order. A quote becomes an invoice
+ * through convertQuoteToInvoice, which leaves the quote row Converted.
  * A draft can only become Invoiced. Invoiced can become Paid or Written off.
  * Paid and Written off stay there until Undo puts that invoice back to Invoiced.
  * Older sheet values Unpaid and Bad debt are read as Invoiced and Written off.
@@ -218,6 +222,8 @@ function displayStatus_(status) {
   if (!value) return "Draft";
   const key = value.toLowerCase();
   if (key === "draft") return "Draft";
+  if (key === "quote") return "Quote";
+  if (key === "converted") return "Converted";
   if (key === "invoiced" || key === "unpaid") return "Invoiced";
   if (key === "paid") return "Paid";
   if (key === "written off" || key === "bad debt") return "Written off";
@@ -408,7 +414,7 @@ function appendInvoiceListRow_(invoiceSheet, status, ss) {
   }
   invoiceSheet.getRange(nextInvListRow, 8).setValue(new Date());   // Column H: Invoice Date
   invoiceSheet.getRange(nextInvListRow, 9).setValue(status || "Draft"); // Column I: Invoice Status
-  if (ss) stampNewInvoiceVat_(ss, invoiceSheet, nextInvListRow);
+  if (ss && displayStatus_(status) !== "Quote") stampNewInvoiceVat_(ss, invoiceSheet, nextInvListRow);
   if (ss && displayStatus_(status) === "Invoiced") stampInvoiceDueDate_(ss, invoiceSheet, nextInvListRow);
   return nextInvListRow;
 }
@@ -417,6 +423,148 @@ function createDraftInvoice_(invoiceSheet, ss) {
   const invoiceId = nextInvoiceInt_(invoiceSheet);
   appendInvoiceListRow_(invoiceSheet, "Draft", ss);
   return invoiceId;
+}
+
+function createQuote_(invoiceSheet, ss) {
+  const invoiceId = nextInvoiceInt_(invoiceSheet);
+  appendInvoiceListRow_(invoiceSheet, "Quote", ss);
+  return invoiceId;
+}
+
+function isQuoteEntry_(payload) {
+  const entry = String((payload && payload.entry) || "").trim().toLowerCase();
+  const mode = String((payload && payload.invoiceMode) || "").trim().toLowerCase();
+  return entry === "quote" || mode === "quote";
+}
+
+function invoiceListStatus_(ss, invoiceId) {
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return "";
+  const located = resolveInvoiceListRow_(ss, invoiceId);
+  if (!located.row) return "";
+  return displayStatus_(invoiceSheet.getRange(located.row, 9).getValue());
+}
+
+function replayForEntry_(ss, replay, quoting) {
+  if (!replay) return null;
+  const status = invoiceListStatus_(ss, replay.invoiceId);
+  if (quoting) return status === "Quote" ? replay : null;
+  if (status === "Quote" || status === "Converted") return null;
+  return replay;
+}
+
+/**
+ * Column O remembers the invoice created from a quote.
+ * A second convert reads that cell and keeps the same code.
+ */
+function convertedInvoiceLink_(invoiceSheet, row) {
+  if (!invoiceSheet || !row) return "";
+  return clientText_(invoiceSheet.getRange(row, 15).getValue());
+}
+
+function rememberConvertedInvoice_(invoiceSheet, row, invoiceId) {
+  if (!invoiceSheet || !row) return;
+  if (!clientText_(invoiceSheet.getRange(1, 15).getValue())) {
+    invoiceSheet.getRange(1, 15).setValue("Converted to");
+  }
+  invoiceSheet.getRange(row, 15).setValue(String(invoiceId || ""));
+}
+
+function retargetTimeRows_(ss, fromId, toId) {
+  const sheet = ss.getSheetByName("Time&Attendance");
+  const last = sheet ? timeSheetLastRow_(sheet) : 0;
+  if (!sheet || last < 2) return 0;
+  const from = String(fromId || "").trim();
+  const to = String(toId || "").trim();
+  if (!from || !to || from === to) return 0;
+  const data = sheet.getRange(2, 3, last - 1, 1).getValues();
+  const numeric = Number(to);
+  const stored = String(numeric) === to ? numeric : to;
+  let moved = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() !== from) continue;
+    sheet.getRange(i + 2, 3).setValue(stored);
+    moved++;
+  }
+  return moved;
+}
+
+function copyInvoiceFacts_(invoiceSheet, fromRow, toRow) {
+  if (!invoiceSheet || !fromRow || !toRow || fromRow === toRow) return;
+  const facts = invoiceSheet.getRange(fromRow, 2, 1, 6).getValues()[0];
+  for (let c = 0; c < facts.length; c++) {
+    const value = facts[c];
+    if (value === "" || value == null) continue;
+    const cell = invoiceSheet.getRange(toRow, c + 2);
+    if (cell.getFormula && cell.getFormula()) continue;
+    cell.setValue(value);
+  }
+}
+
+function quoteAlreadyConverted_(ss, invoiceSheet, located) {
+  const linked = convertedInvoiceLink_(invoiceSheet, located.row);
+  if (!linked) {
+    return { success: true, already: true, invoiceId: "", invoiceCode: "", status: "Converted", message: "This quote has an invoice." };
+  }
+  const found = resolveInvoiceListRow_(ss, linked);
+  const code = (found && found.code) || invoicePrintCode_(ss, linked);
+  const status = found && found.row ? displayStatus_(invoiceSheet.getRange(found.row, 9).getValue()) : "Draft";
+  return attachSnapshot_(ss, {
+    success: true,
+    already: true,
+    invoiceId: (found && found.id) || linked,
+    invoiceCode: code,
+    quoteId: located.id,
+    status: status,
+    message: "Invoice " + code + " is ready."
+  });
+}
+
+/**
+ * Turn a Quote row into one Draft invoice.
+ * VAT is stamped from Config B22/B23 at this moment, the same way a new invoice is stamped.
+ * The quote row becomes Converted and stays off the live invoice list.
+ */
+function convertQuoteToInvoice(payload) {
+  const ss = workbook_();
+  const invoiceSheet = ss.getSheetByName("InvoiceList");
+  if (!invoiceSheet) return { success: false, error: "Missing InvoiceList tab." };
+  const invoiceId = String((payload && payload.invoiceId) || "").trim();
+  if (!invoiceId) return { success: false, error: "Choose a quote." };
+
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(15000)) {
+    return { success: false, error: "The quote is busy. Try again in a moment." };
+  }
+  try {
+    const located = resolveInvoiceListRow_(ss, invoiceId);
+    if (!located.row) return { success: false, error: "That quote is not on InvoiceList." };
+    const status = displayStatus_(invoiceSheet.getRange(located.row, 9).getValue());
+    if (status === "Converted") return quoteAlreadyConverted_(ss, invoiceSheet, located);
+    if (status !== "Quote") return { success: false, error: "Open a quote to turn it into an invoice." };
+
+    const newId = createDraftInvoice_(invoiceSheet, ss);
+    const created = resolveInvoiceListRow_(ss, newId);
+    if (!created.row) return { success: false, error: "The invoice could not be opened." };
+    copyInvoiceFacts_(invoiceSheet, located.row, created.row);
+    retargetTimeRows_(ss, located.id, newId);
+    refreshStampedInvoiceVat_(ss, newId);
+    invoiceSheet.getRange(located.row, 9).setValue("Converted");
+    rememberConvertedInvoice_(invoiceSheet, located.row, newId);
+    const code = invoicePrintCode_(ss, newId);
+    const quoteCode = invoiceShownCode_(invoiceId, located);
+    return attachSnapshot_(ss, {
+      success: true,
+      invoiceId: String(newId),
+      invoiceCode: code,
+      quoteId: located.id,
+      quoteCode: quoteCode,
+      status: "Draft",
+      message: "Quote " + quoteCode + " is now invoice " + code + "."
+    });
+  } finally {
+    try { lock.releaseLock(); } catch (err) {}
+  }
 }
 
 /**
@@ -561,7 +709,8 @@ function executeTimeLog(payload) {
 
   const overnight = payload.overnight === true || isOvernightTime(payload.start, payload.finish);
   const invoiceSheet = ss.getSheetByName("InvoiceList");
-  const mode = String(payload.invoiceMode || "new").toLowerCase();
+  const quoting = isQuoteEntry_(payload);
+  const mode = quoting ? "quote" : String(payload.invoiceMode || "new").toLowerCase();
   let invoiceId = "";
 
   // A repeat tap must not skip the draft rule. Check that first, then
@@ -577,12 +726,14 @@ function executeTimeLog(payload) {
     return { success: false, error: "Missing InvoiceList tab." };
   }
 
-  const replay = recentMatchingEntry_(timeSheet, payload);
+  const replay = replayForEntry_(ss, recentMatchingEntry_(timeSheet, payload), quoting);
   if (replay) {
-    return jobSavedResult_(ss, mode, replay.invoiceId, overnight, true, null);
+    return jobSavedResult_(ss, mode, replay.invoiceId, overnight, true, null, quoting);
   }
 
-  if (mode !== "existing") {
+  if (mode === "quote") {
+    invoiceId = createQuote_(invoiceSheet, ss);
+  } else if (mode !== "existing") {
     invoiceId = createDraftInvoice_(invoiceSheet, ss);
   }
 
@@ -600,8 +751,8 @@ function executeTimeLog(payload) {
   timeSheet.getRange(nextRow, 13).setValue(new Date());        // Col M: Updated On Timestamp
 
   const amount = loggedShiftAmount_(timeSheet, nextRow);
-  refreshStampedInvoiceVat_(ss, invoiceId);
-  return jobSavedResult_(ss, mode, invoiceId, overnight, false, amount);
+  if (!quoting) refreshStampedInvoiceVat_(ss, invoiceId);
+  return jobSavedResult_(ss, mode, invoiceId, overnight, false, amount, quoting);
 }
 
 function loggedShiftAmount_(sheet, row) {
@@ -614,10 +765,12 @@ function loggedShiftAmount_(sheet, row) {
   return Math.round(hours * rate * 100) / 100;
 }
 
-function jobSavedResult_(ss, mode, invoiceId, overnight, alreadySaved, amount) {
+function jobSavedResult_(ss, mode, invoiceId, overnight, alreadySaved, amount, quoting) {
   const code = invoicePrintCode_(ss, invoiceId);
   let message;
-  if (String(mode || "").toLowerCase() === "existing") {
+  if (quoting) {
+    message = "Quote logged on " + code + ".";
+  } else if (String(mode || "").toLowerCase() === "existing") {
     message = "Job added to invoice " + code + ".";
   } else if (overnight) {
     message = "Overnight job logged on invoice " + code + ".";
@@ -1037,6 +1190,8 @@ function invoiceKind_(status) {
   if (label === "Paid") return "paid";
   if (label === "Written off") return "writtenoff";
   if (label === "Draft") return "draft";
+  if (label === "Quote") return "quote";
+  if (label === "Converted") return "converted";
   return "due";
 }
 
@@ -1601,6 +1756,7 @@ function statusRank_(status) {
   if (label === "Paid") return 3;
   if (label === "Written off") return 2;
   if (label === "Invoiced") return 1;
+  if (label === "Quote" || label === "Converted") return -1;
   return 0;
 }
 
@@ -1823,7 +1979,9 @@ function buildDashboardReport_(ss, asOfDate) {
       inYear: inIsoRange_(anchor, windows.year.start, windows.year.end),
       lines: lines
     };
+    if (kind === "converted") return;
     invoices.push(invoice);
+    if (kind === "quote") return;
 
     if (kind === "due") {
       open.dueAmount = roundMoney_(open.dueAmount + owed);
@@ -2048,6 +2206,10 @@ function exportInvoicePdf(payload) {
   }
 
   const code = invoicePrintCode_(ss, invoiceId);
+  const quoting = invoiceListStatus_(ss, invoiceId) === "Quote";
+  if (quoting && mode === "email") {
+    return { success: false, error: "Email is ready once this quote is an invoice." };
+  }
   const email = String((payload && payload.email) || "").trim();
   let cc = "";
   if (mode === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -2073,15 +2235,15 @@ function exportInvoicePdf(payload) {
   try {
     widenInvoiceTotals_(sheet);
     sheet.getRange("B1").setValue(code);
-    refreshStampedInvoiceVat_(ss, invoiceId);
-    vatBlock = applyInvoiceVatBlock_(sheet, invoiceVatStamp_(ss, invoiceId));
+    if (!quoting) refreshStampedInvoiceVat_(ss, invoiceId);
+    vatBlock = applyInvoiceVatBlock_(sheet, quoting ? { applied: false } : invoiceVatStamp_(ss, invoiceId));
 
-    let payUrl = acceptedPayUrl_(payload && payload.payUrl);
-    if (mode === "email" && !payUrl && !(payload && payload.skipPayLink)) {
+    let payUrl = quoting ? "" : acceptedPayUrl_(payload && payload.payUrl);
+    if (!quoting && mode === "email" && !payUrl && !(payload && payload.skipPayLink)) {
       const linked = ensureInvoicePaymentLink_(ss, invoiceId);
       payUrl = linked.url || "";
     }
-    payStamp = stampInvoicePayFooter_(sheet, payUrl);
+    if (!quoting) payStamp = stampInvoicePayFooter_(sheet, payUrl);
     SpreadsheetApp.flush();
     Utilities.sleep(2000);
 
@@ -2115,8 +2277,8 @@ function exportInvoicePdf(payload) {
       url = file.getUrl();
     }
 
-    let marked = { changed: false, status: "" };
-    if (mode === "email") {
+    let marked = { changed: false, status: quoting ? "Quote" : "" };
+    if (mode === "email" || quoting) {
       const invoiceSheet = ss.getSheetByName("InvoiceList");
       if (invoiceSheet) {
         let row = findInvoiceListRow_(invoiceSheet, invoiceId);
@@ -2136,7 +2298,9 @@ function exportInvoicePdf(payload) {
         pdfBase64: Utilities.base64Encode(blob.getBytes()),
         markedInvoiced: marked.changed,
         status: marked.status,
-        message: fileName + " is the invoice PDF, ready to download." + issued
+        message: quoting
+          ? fileName + " is the quote PDF, ready to download."
+          : fileName + " is the invoice PDF, ready to download." + issued
       };
     }
 
@@ -2796,6 +2960,8 @@ function createPaymentLink(payload) {
 }
 
 function ensureInvoicePaymentLink_(ss, invoiceId) {
+  var status = invoiceListStatus_(ss, invoiceId);
+  if (status === "Quote" || status === "Converted") return { url: "" };
   return withPayLinkLock_(function () {
     var amount = invoicePayAmount_(ss, invoiceId);
     var links = readPayLinks_();
